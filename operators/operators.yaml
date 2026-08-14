@@ -1,0 +1,1510 @@
+# WorldQuant BRAIN operator seed data
+# Schema per item:
+#   name, category, definition, arguments[{name, position, type, required, window, min?, max?}],
+#   returns, examples[{expr, good, note}], restrictions, compatible_with, avoid_nesting, typical_usage
+# Categories: arithmetic, time_series, cross_section, group, logical, transformational, vector, special
+# Window args (lookback days, e.g. d) use window:true with a min/max band (typical min 2, max 512).
+# group_* operators take a GROUP-typed field as their grouping argument.
+# Signatures verified against WorldQuant BRAIN docs where possible; defaults marked "# unverified".
+
+# ============================================================================
+# ARITHMETIC
+# ============================================================================
+
+- name: abs
+  category: arithmetic
+  definition: Returns the absolute (non-negative) value of the input.
+  arguments:
+    - {name: x, position: 0, type: matrix, required: true, window: false}
+  returns: matrix
+  examples:
+    - {expr: "abs(returns)", good: true, note: "Magnitude of daily return regardless of direction."}
+    - {expr: "abs(abs(close))", good: false, note: "Nesting abs in abs is redundant; the inner result is already non-negative."}
+  restrictions: "Single matrix input; preserves NaN."
+  compatible_with: [signed_power, rank, ts_mean, divide]
+  avoid_nesting: [abs, sqrt]
+  typical_usage: "Convert a signed signal into a magnitude before ranking or scaling."
+
+- name: add
+  category: arithmetic
+  definition: Adds two (or more) inputs element-wise.
+  arguments:
+    - {name: x, position: 0, type: matrix, required: true, window: false}
+    - {name: y, position: 1, type: matrix, required: true, window: false}
+    - {name: filter, position: 2, type: boolean, required: false, window: false}
+  returns: matrix
+  examples:
+    - {expr: "add(close, open)", good: true, note: "Element-wise sum of two fields."}
+    - {expr: "add(close, open, filter=true)", good: true, note: "filter=true replaces NaN inputs with 0 before adding."}
+  restrictions: "Operands must be conformable matrices; alias '+'. filter defaults to false."
+  compatible_with: [subtract, multiply, divide, rank, ts_mean]
+  avoid_nesting: [subtract]
+  typical_usage: "Combine multiple fields or signals into a composite numerator."
+
+- name: subtract
+  category: arithmetic
+  definition: Subtracts the second input from the first element-wise.
+  arguments:
+    - {name: x, position: 0, type: matrix, required: true, window: false}
+    - {name: y, position: 1, type: matrix, required: true, window: false}
+    - {name: filter, position: 2, type: boolean, required: false, window: false}
+  returns: matrix
+  examples:
+    - {expr: "subtract(high, low)", good: true, note: "Intraday range."}
+    - {expr: "subtract(close, ts_mean(close, 20))", good: true, note: "Deviation from a 20-day moving average."}
+  restrictions: "Alias '-'. filter=true replaces NaN with 0 before subtracting."
+  compatible_with: [add, divide, rank, ts_zscore]
+  avoid_nesting: [add]
+  typical_usage: "Build spreads or demeaned signals."
+
+- name: multiply
+  category: arithmetic
+  definition: Multiplies two (or more) inputs element-wise.
+  arguments:
+    - {name: x, position: 0, type: matrix, required: true, window: false}
+    - {name: y, position: 1, type: matrix, required: true, window: false}
+    - {name: filter, position: 2, type: boolean, required: false, window: false}
+  returns: matrix
+  examples:
+    - {expr: "multiply(volume, close)", good: true, note: "Dollar volume proxy."}
+    - {expr: "multiply(sign(returns), abs(returns))", good: false, note: "This just reconstructs returns; redundant composition."}
+  restrictions: "Aliases 'mul' and '*'. filter=true treats NaN as 0."
+  compatible_with: [divide, add, signed_power, rank]
+  avoid_nesting: [divide]
+  typical_usage: "Weight one signal by another or form interaction terms."
+
+- name: divide
+  category: arithmetic
+  definition: Divides the first input by the second element-wise.
+  arguments:
+    - {name: x, position: 0, type: matrix, required: true, window: false}
+    - {name: y, position: 1, type: matrix, required: true, window: false}
+  returns: matrix
+  examples:
+    - {expr: "divide(close, ts_mean(close, 60))", good: true, note: "Price relative to its 60-day mean."}
+    - {expr: "divide(returns, 0)", good: false, note: "Dividing by zero yields inf/NaN; guard the denominator."}
+  restrictions: "Alias '/'. Division by zero produces inf; consider purify or a nonzero denominator."
+  compatible_with: [multiply, subtract, purify, rank]
+  avoid_nesting: [multiply]
+  typical_usage: "Form ratios and normalized fundamentals."
+
+- name: reverse
+  category: arithmetic
+  definition: Negates the input (multiplies by -1).
+  arguments:
+    - {name: x, position: 0, type: matrix, required: true, window: false}
+  returns: matrix
+  examples:
+    - {expr: "reverse(rank(returns))", good: true, note: "Flip a ranked signal to bet on reversal."}
+    - {expr: "reverse(reverse(x))", good: false, note: "Double negation is a no-op."}
+  restrictions: "Single matrix input; equivalent to multiply(x, -1)."
+  compatible_with: [rank, ts_rank, group_rank]
+  avoid_nesting: [reverse]
+  typical_usage: "Invert the sign of a finished signal to switch long/short direction."
+
+- name: inverse
+  category: arithmetic
+  definition: Returns the reciprocal (1/x) of the input element-wise.
+  arguments:
+    - {name: x, position: 0, type: matrix, required: true, window: false}
+  returns: matrix
+  examples:
+    - {expr: "inverse(close)", good: true, note: "Reciprocal of price."}
+    - {expr: "inverse(returns)", good: false, note: "returns is often near zero, so 1/x blows up; avoid on near-zero fields."}
+  restrictions: "Undefined at x=0 (yields inf); not for fields that cross zero."
+  compatible_with: [multiply, purify, rank]
+  avoid_nesting: [inverse]
+  typical_usage: "Invert a strictly-positive field such as price or market cap."
+
+- name: log
+  category: arithmetic
+  definition: Returns the natural logarithm of the input.
+  arguments:
+    - {name: x, position: 0, type: matrix, required: true, window: false}
+  returns: matrix
+  examples:
+    - {expr: "log(cap)", good: true, note: "Compress a heavy-tailed market-cap field."}
+    - {expr: "log(returns)", good: false, note: "returns can be negative or zero; log is undefined there."}
+  restrictions: "Requires strictly positive input; non-positive values give NaN/inf. Use s_log_1p for signed data."
+  compatible_with: [rank, zscore, ts_delta, subtract]
+  avoid_nesting: [exp, log]
+  typical_usage: "Tame skew in positive fundamentals before ranking."
+
+- name: log_diff
+  category: arithmetic
+  definition: Returns the natural-log difference between the current value and the previous day's value.
+  arguments:
+    - {name: x, position: 0, type: matrix, required: true, window: false}
+  returns: matrix
+  examples:
+    - {expr: "log_diff(close)", good: true, note: "Approximate one-day log return."}
+  restrictions: "Input should be strictly positive; equals log(x) - log(ts_delay(x,1))."
+  compatible_with: [ts_mean, ts_std_dev, rank]
+  avoid_nesting: [log]
+  typical_usage: "Build log-return style momentum from a positive level series."
+
+- name: s_log_1p
+  category: arithmetic
+  definition: Sign-preserving log compression, sign(x)*log(1+abs(x)).
+  arguments:
+    - {name: x, position: 0, type: matrix, required: true, window: false}
+  returns: matrix
+  examples:
+    - {expr: "s_log_1p(ts_delta(close, 5))", good: true, note: "Compress large signed moves while keeping direction."}
+    - {expr: "s_log_1p(rank(x))", good: false, note: "rank is already bounded in [0,1]; log compression adds nothing."}
+  restrictions: "Defined for all reals including negatives and zero; preserves sign."
+  compatible_with: [rank, zscore, group_neutralize]
+  avoid_nesting: [log, rank]
+  typical_usage: "Soft-clip heavy-tailed signed signals before normalization."
+
+- name: sign
+  category: arithmetic
+  definition: Returns -1, 0, or 1 according to the sign of the input.
+  arguments:
+    - {name: x, position: 0, type: matrix, required: true, window: false}
+  returns: matrix
+  examples:
+    - {expr: "sign(ts_delta(close, 1))", good: true, note: "Direction of the one-day price change."}
+    - {expr: "sign(rank(x))", good: false, note: "rank is non-negative, so sign collapses almost everything to 1."}
+  restrictions: "Discards magnitude; output in {-1,0,1}."
+  compatible_with: [multiply, signed_power, group_neutralize]
+  avoid_nesting: [sign, abs]
+  typical_usage: "Extract pure direction from a signal."
+
+- name: signed_power
+  category: arithmetic
+  definition: Raises the magnitude of x to power y while preserving the sign, sign(x)*abs(x)^y.
+  arguments:
+    - {name: x, position: 0, type: matrix, required: true, window: false}
+    - {name: y, position: 1, type: float, required: true, window: false}
+  returns: matrix
+  examples:
+    - {expr: "signed_power(zscore(returns), 2)", good: true, note: "Emphasize tails of a signed z-score without losing direction."}
+    - {expr: "signed_power(x, 1)", good: false, note: "Exponent of 1 returns x unchanged; pointless."}
+  restrictions: "y is the exponent (often in [0,3]); sign of x is retained."
+  compatible_with: [zscore, rank, scale]
+  avoid_nesting: [sign, abs]
+  typical_usage: "Sharpen or flatten the response curve of a signed signal."
+
+- name: power
+  category: arithmetic
+  definition: Raises the first input to the power of the second element-wise (x^y).
+  arguments:
+    - {name: x, position: 0, type: matrix, required: true, window: false}
+    - {name: y, position: 1, type: float, required: true, window: false}
+  returns: matrix
+  examples:
+    - {expr: "power(close, 2)", good: true, note: "Square of price."}
+    - {expr: "power(returns, 0.5)", good: false, note: "Fractional power of a possibly-negative field gives NaN; use signed_power."}
+  restrictions: "Negative base with non-integer exponent yields NaN; use signed_power for signed data."
+  compatible_with: [multiply, sqrt, rank]
+  avoid_nesting: [sqrt, signed_power]
+  typical_usage: "Apply polynomial transforms to positive fields."
+
+- name: sqrt
+  category: arithmetic
+  definition: Returns the square root of the input.
+  arguments:
+    - {name: x, position: 0, type: matrix, required: true, window: false}
+  returns: matrix
+  examples:
+    - {expr: "sqrt(ts_std_dev(returns, 20))", good: true, note: "Square root of variance-like quantity."}
+    - {expr: "sqrt(returns)", good: false, note: "returns can be negative, where sqrt is undefined (NaN)."}
+  restrictions: "Requires non-negative input; negatives produce NaN."
+  compatible_with: [power, abs, rank]
+  avoid_nesting: [power, sqrt]
+  typical_usage: "Convert variance to volatility or compress positive magnitudes."
+
+- name: exp
+  category: arithmetic
+  definition: Returns e raised to the power of the input.
+  arguments:
+    - {name: x, position: 0, type: matrix, required: true, window: false}
+  returns: matrix
+  examples:
+    - {expr: "exp(s_log_1p(x))", good: true, note: "Reverse a log-style compression."}
+    - {expr: "exp(close)", good: false, note: "Large inputs overflow to inf; never exponentiate raw price."}
+  restrictions: "Large inputs overflow; pair with bounded/compressed inputs only."
+  compatible_with: [log, s_log_1p]
+  avoid_nesting: [log, exp]
+  typical_usage: "Undo a log transform or build exponential weighting."
+
+- name: max
+  category: arithmetic
+  definition: Element-wise maximum across the provided inputs.
+  arguments:
+    - {name: x, position: 0, type: matrix, required: true, window: false}
+    - {name: y, position: 1, type: matrix, required: true, window: false}
+  returns: matrix
+  examples:
+    - {expr: "max(close, open)", good: true, note: "Higher of close and open each day."}
+    - {expr: "max(x, x)", good: false, note: "Both arguments identical; returns x unchanged."}
+  restrictions: "Cross-sectional/element-wise (not a time-series max); for lookback maxima use ts_max."
+  compatible_with: [min, subtract, divide]
+  avoid_nesting: [max]
+  typical_usage: "Floor or cap one signal by another, element-wise."
+
+- name: min
+  category: arithmetic
+  definition: Element-wise minimum across the provided inputs.
+  arguments:
+    - {name: x, position: 0, type: matrix, required: true, window: false}
+    - {name: y, position: 1, type: matrix, required: true, window: false}
+  returns: matrix
+  examples:
+    - {expr: "min(high, ts_delay(high, 1))", good: true, note: "Lower of today's and yesterday's high."}
+  restrictions: "Element-wise (not a lookback min); use ts_min for windowed minima."
+  compatible_with: [max, subtract, divide]
+  avoid_nesting: [min]
+  typical_usage: "Cap a signal by another series element-wise."
+
+- name: nan_mask
+  category: arithmetic
+  definition: Replaces values of x with NaN where the mask input is negative.
+  arguments:
+    - {name: x, position: 0, type: matrix, required: true, window: false}
+    - {name: mask, position: 1, type: matrix, required: true, window: false}
+  returns: matrix
+  examples:
+    - {expr: "nan_mask(returns, volume - adv20)", good: true, note: "Drop names where volume is below adv20 (mask negative)."}
+  restrictions: "mask is treated as a condition; x is set to NaN wherever mask < 0."
+  compatible_with: [purify, trade_when, to_nan]
+  avoid_nesting: [to_nan]
+  typical_usage: "Mask out instruments that fail a liquidity or quality filter."
+
+- name: to_nan
+  category: arithmetic
+  definition: Converts a specified value (default 0) in the input to NaN, optionally inverting the rule.
+  arguments:
+    - {name: x, position: 0, type: matrix, required: true, window: false}
+    - {name: value, position: 1, type: float, required: false, window: false}
+    - {name: reverse, position: 2, type: boolean, required: false, window: false}
+  returns: matrix
+  examples:
+    - {expr: "to_nan(volume, 0)", good: true, note: "Treat zero-volume entries as missing."}
+  restrictions: "value defaults to 0; reverse=true keeps only matches and NaNs the rest."
+  compatible_with: [purify, nan_mask, ts_backfill]
+  avoid_nesting: [nan_mask]
+  typical_usage: "Clean sentinel zeros out of a raw field before computation."
+
+- name: purify
+  category: arithmetic
+  definition: Removes infinities by converting inf and -inf to NaN.
+  arguments:
+    - {name: x, position: 0, type: matrix, required: true, window: false}
+  returns: matrix
+  examples:
+    - {expr: "purify(divide(a, b))", good: true, note: "Clean inf produced by division before ranking."}
+  restrictions: "Only affects infinite values; leaves finite numbers and existing NaN unchanged."
+  compatible_with: [divide, inverse, rank, zscore]
+  avoid_nesting: [purify]
+  typical_usage: "Sanitize the output of divisions or reciprocals."
+
+- name: fraction
+  category: arithmetic
+  definition: Returns the fractional part of the input (value minus its truncated integer part).
+  arguments:
+    - {name: x, position: 0, type: matrix, required: true, window: false}
+  returns: matrix
+  examples:
+    - {expr: "fraction(close)", good: true, note: "Sub-integer remainder of price."}
+  restrictions: "Sign of the fractional part follows the sign of x."
+  compatible_with: [rank, zscore]
+  avoid_nesting: [fraction]
+  typical_usage: "Isolate the decimal component of a level field."
+
+- name: floor
+  category: arithmetic
+  definition: Rounds each value down to the nearest integer.
+  arguments:
+    - {name: x, position: 0, type: matrix, required: true, window: false}
+  returns: matrix
+  examples:
+    - {expr: "floor(ts_mean(volume, 5))", good: true, note: "Integer floor of a smoothed count."}
+  restrictions: "Returns the largest integer not greater than x."
+  compatible_with: [round, fraction]
+  avoid_nesting: [floor, round]
+  typical_usage: "Discretize a continuous field downward."
+
+- name: round
+  category: arithmetic
+  definition: Rounds each value to the nearest integer.
+  arguments:
+    - {name: x, position: 0, type: matrix, required: true, window: false}
+  returns: matrix
+  examples:
+    - {expr: "round(rank(x) * 10)", good: true, note: "Bucket a rank into 11 integer levels."}
+  restrictions: "Half-way values round to the nearest even/away depending on platform convention."
+  compatible_with: [floor, bucket]
+  avoid_nesting: [floor, round]
+  typical_usage: "Snap a continuous signal to integer levels."
+
+# ============================================================================
+# LOGICAL
+# ============================================================================
+
+- name: and
+  category: logical
+  definition: Logical AND; true only where both boolean inputs are true.
+  arguments:
+    - {name: x, position: 0, type: boolean, required: true, window: false}
+    - {name: y, position: 1, type: boolean, required: true, window: false}
+  returns: boolean
+  examples:
+    - {expr: "and(volume > adv20, close > vwap)", good: true, note: "Both liquidity and trend conditions hold."}
+  restrictions: "Both operands must be boolean/condition expressions."
+  compatible_with: [or, not, if_else, trade_when]
+  avoid_nesting: [and]
+  typical_usage: "Combine multiple gating conditions for trade_when or if_else."
+
+- name: or
+  category: logical
+  definition: Logical OR; true where at least one boolean input is true.
+  arguments:
+    - {name: x, position: 0, type: boolean, required: true, window: false}
+    - {name: y, position: 1, type: boolean, required: true, window: false}
+  returns: boolean
+  examples:
+    - {expr: "or(is_nan(close), is_nan(open))", good: true, note: "True if either price is missing."}
+  restrictions: "Both operands must be boolean/condition expressions."
+  compatible_with: [and, not, if_else, trade_when]
+  avoid_nesting: [or]
+  typical_usage: "Broaden an entry condition to several alternatives."
+
+- name: not
+  category: logical
+  definition: Logical negation of a boolean input.
+  arguments:
+    - {name: x, position: 0, type: boolean, required: true, window: false}
+  returns: boolean
+  examples:
+    - {expr: "not(is_nan(close))", good: true, note: "True where close is present."}
+    - {expr: "not(not(cond))", good: false, note: "Double negation is a no-op."}
+  restrictions: "Operand must be a boolean/condition expression."
+  compatible_with: [and, or, if_else]
+  avoid_nesting: [not]
+  typical_usage: "Invert a condition mask."
+
+- name: less
+  category: logical
+  definition: Element-wise strict less-than comparison (x < y).
+  arguments:
+    - {name: x, position: 0, type: matrix, required: true, window: false}
+    - {name: y, position: 1, type: matrix, required: true, window: false}
+  returns: boolean
+  examples:
+    - {expr: "less(close, ts_mean(close, 50))", good: true, note: "Below the 50-day average."}
+  restrictions: "Alias '<'; returns a boolean mask."
+  compatible_with: [greater, equal, if_else, trade_when, and]
+  avoid_nesting: [greater]
+  typical_usage: "Build threshold conditions for gating."
+
+- name: greater
+  category: logical
+  definition: Element-wise strict greater-than comparison (x > y).
+  arguments:
+    - {name: x, position: 0, type: matrix, required: true, window: false}
+    - {name: y, position: 1, type: matrix, required: true, window: false}
+  returns: boolean
+  examples:
+    - {expr: "greater(volume, adv20)", good: true, note: "Above-average volume condition."}
+  restrictions: "Alias '>'; returns a boolean mask."
+  compatible_with: [less, equal, if_else, trade_when, and]
+  avoid_nesting: [less]
+  typical_usage: "Define breakout or liquidity entry conditions."
+
+- name: equal
+  category: logical
+  definition: Element-wise equality comparison (x == y).
+  arguments:
+    - {name: x, position: 0, type: matrix, required: true, window: false}
+    - {name: y, position: 1, type: matrix, required: true, window: false}
+  returns: boolean
+  examples:
+    - {expr: "equal(sign(returns), 1)", good: true, note: "True where the return was positive."}
+  restrictions: "Alias '=='; floating-point equality can be brittle on computed fields."
+  compatible_with: [not_equal, if_else, and, or]
+  avoid_nesting: [not_equal]
+  typical_usage: "Match a categorical or sign indicator."
+
+- name: not_equal
+  category: logical
+  definition: Element-wise inequality comparison (x != y).
+  arguments:
+    - {name: x, position: 0, type: matrix, required: true, window: false}
+    - {name: y, position: 1, type: matrix, required: true, window: false}
+  returns: boolean
+  examples:
+    - {expr: "not_equal(close, ts_delay(close, 1))", good: true, note: "True on days the price changed."}
+  restrictions: "Alias '!='; returns a boolean mask."
+  compatible_with: [equal, if_else, and]
+  avoid_nesting: [equal]
+  typical_usage: "Detect change between two series."
+
+- name: less_equal
+  category: logical
+  definition: Element-wise less-than-or-equal comparison (x <= y).
+  arguments:
+    - {name: x, position: 0, type: matrix, required: true, window: false}
+    - {name: y, position: 1, type: matrix, required: true, window: false}
+  returns: boolean
+  examples:
+    - {expr: "less_equal(rank(x), 0.1)", good: true, note: "Bottom decile by rank."}
+  restrictions: "Alias '<='; returns a boolean mask."
+  compatible_with: [greater_equal, if_else, and]
+  avoid_nesting: [greater_equal]
+  typical_usage: "Select a bounded tail of a ranked signal."
+
+- name: greater_equal
+  category: logical
+  definition: Element-wise greater-than-or-equal comparison (x >= y).
+  arguments:
+    - {name: x, position: 0, type: matrix, required: true, window: false}
+    - {name: y, position: 1, type: matrix, required: true, window: false}
+  returns: boolean
+  examples:
+    - {expr: "greater_equal(rank(x), 0.9)", good: true, note: "Top decile by rank."}
+  restrictions: "Alias '>='; returns a boolean mask."
+  compatible_with: [less_equal, if_else, and]
+  avoid_nesting: [less_equal]
+  typical_usage: "Select a bounded top tail of a ranked signal."
+
+- name: if_else
+  category: logical
+  definition: Returns the second input where the condition is true, otherwise the third input.
+  arguments:
+    - {name: cond, position: 0, type: boolean, required: true, window: false}
+    - {name: x, position: 1, type: matrix, required: true, window: false}
+    - {name: y, position: 2, type: matrix, required: true, window: false}
+  returns: matrix
+  examples:
+    - {expr: "if_else(returns < 0, ts_std_dev(returns, 20), close)", good: true, note: "Branch a signal on a condition."}
+    - {expr: "if_else(cond, 1, 1)", good: false, note: "Both branches identical; the condition is irrelevant."}
+  restrictions: "First arg must be a boolean/condition; branches must be conformable matrices."
+  compatible_with: [and, or, not, less, greater, trade_when]
+  avoid_nesting: [if_else]
+  typical_usage: "Switch between two signals based on a regime condition."
+
+- name: is_nan
+  category: logical
+  definition: Returns 1 where the input is NaN (missing) and 0 otherwise.
+  arguments:
+    - {name: x, position: 0, type: matrix, required: true, window: false}
+  returns: boolean
+  examples:
+    - {expr: "if_else(is_nan(close), 0, close)", good: true, note: "Fill missing prices with zero."}
+  restrictions: "Returns a boolean mask of missingness."
+  compatible_with: [if_else, or, ts_backfill, to_nan]
+  avoid_nesting: [is_nan]
+  typical_usage: "Detect and handle missing data explicitly."
+
+- name: is_finite
+  category: logical
+  definition: Returns 1 where the input is a finite number and 0 for NaN/inf.
+  arguments:
+    - {name: x, position: 0, type: matrix, required: true, window: false}
+  returns: boolean
+  examples:
+    - {expr: "if_else(is_finite(x), x, 0)", good: true, note: "Keep only finite values."}
+  restrictions: "Treats both NaN and infinities as non-finite."
+  compatible_with: [if_else, purify]
+  avoid_nesting: [is_finite]
+  typical_usage: "Guard a signal against inf/NaN before downstream operators."
+
+# ============================================================================
+# TIME SERIES
+# ============================================================================
+
+- name: ts_mean
+  category: time_series
+  definition: Average of the input over the past d days.
+  arguments:
+    - {name: x, position: 0, type: matrix, required: true, window: false}
+    - {name: d, position: 1, type: int, required: true, window: true, min: 2, max: 512}
+  returns: matrix
+  examples:
+    - {expr: "ts_mean(close, 20)", good: true, note: "20-day moving average of price."}
+    - {expr: "ts_mean(close, 1)", good: false, note: "A 1-day window just returns the input; use d>=2."}
+  restrictions: "d must be a positive int within the window band."
+  compatible_with: [subtract, ts_std_dev, ts_zscore, rank]
+  avoid_nesting: [ts_mean]
+  typical_usage: "Smooth a noisy series or form a moving-average baseline."
+
+- name: ts_sum
+  category: time_series
+  definition: Rolling sum of the input over the past d days.
+  arguments:
+    - {name: x, position: 0, type: matrix, required: true, window: false}
+    - {name: d, position: 1, type: int, required: true, window: true, min: 2, max: 512}
+  returns: matrix
+  examples:
+    - {expr: "ts_sum(volume, 5)", good: true, note: "Five-day cumulative volume."}
+  restrictions: "d must be a positive int within the window band."
+  compatible_with: [divide, ts_mean, rank]
+  avoid_nesting: [ts_sum]
+  typical_usage: "Accumulate flows or counts over a lookback."
+
+- name: ts_std_dev
+  category: time_series
+  definition: Rolling standard deviation of the input over the past d days.
+  arguments:
+    - {name: x, position: 0, type: matrix, required: true, window: false}
+    - {name: d, position: 1, type: int, required: true, window: true, min: 2, max: 512}
+  returns: matrix
+  examples:
+    - {expr: "ts_std_dev(returns, 20)", good: true, note: "20-day realized volatility."}
+    - {expr: "ts_std_dev(close, 2)", good: false, note: "Two points give an unstable std; prefer a longer window."}
+  restrictions: "d>=2 required to define a standard deviation."
+  compatible_with: [divide, ts_zscore, ts_mean, sqrt]
+  avoid_nesting: [ts_std_dev]
+  typical_usage: "Estimate volatility for scaling or gating."
+
+- name: ts_delta
+  category: time_series
+  definition: Difference between the current value and the value d days ago (x - ts_delay(x,d)).
+  arguments:
+    - {name: x, position: 0, type: matrix, required: true, window: false}
+    - {name: d, position: 1, type: int, required: true, window: true, min: 1, max: 512}
+  returns: matrix
+  examples:
+    - {expr: "ts_delta(close, 5)", good: true, note: "Five-day price change (momentum)."}
+  restrictions: "d must be a positive int; d=0 yields all zeros."
+  compatible_with: [sign, rank, s_log_1p, ts_decay_linear]
+  avoid_nesting: [ts_delta]
+  typical_usage: "Measure change/momentum over a horizon."
+
+- name: ts_delay
+  category: time_series
+  definition: Returns the value of the input d days ago.
+  arguments:
+    - {name: x, position: 0, type: matrix, required: true, window: false}
+    - {name: d, position: 1, type: int, required: true, window: true, min: 1, max: 512}
+  returns: matrix
+  examples:
+    - {expr: "ts_delay(close, 1)", good: true, note: "Yesterday's close."}
+  restrictions: "d must be a positive int (lag); larger d shifts further back."
+  compatible_with: [subtract, ts_delta, ts_corr, divide]
+  avoid_nesting: [ts_delay]
+  typical_usage: "Lag a series to build differences or lead/lag relationships."
+
+- name: ts_rank
+  category: time_series
+  definition: Rank of the current value within its own past-d-day distribution, scaled to [0,1].
+  arguments:
+    - {name: x, position: 0, type: matrix, required: true, window: false}
+    - {name: d, position: 1, type: int, required: true, window: true, min: 2, max: 512}
+    - {name: constant, position: 2, type: float, required: false, window: false}
+  returns: matrix
+  examples:
+    - {expr: "ts_rank(volume, 60)", good: true, note: "Where today's volume sits in its 60-day history."}
+    - {expr: "ts_rank(close, 2)", good: false, note: "A 2-day window gives a near-binary rank; use a longer window."}
+  restrictions: "d>=2; output bounded in [0,1]. constant adds an offset (default 0)."
+  compatible_with: [rank, group_rank, reverse, ts_decay_linear]
+  avoid_nesting: [ts_rank, rank]
+  typical_usage: "Self-normalize a series against its own recent range."
+
+- name: ts_corr
+  category: time_series
+  definition: Rolling Pearson correlation between two inputs over the past d days.
+  arguments:
+    - {name: x, position: 0, type: matrix, required: true, window: false}
+    - {name: y, position: 1, type: matrix, required: true, window: false}
+    - {name: d, position: 2, type: int, required: true, window: true, min: 2, max: 512}
+  returns: matrix
+  examples:
+    - {expr: "ts_corr(close, volume, 20)", good: true, note: "20-day price-volume correlation."}
+    - {expr: "ts_corr(close, close, 20)", good: false, note: "Correlation of a series with itself is always 1."}
+  restrictions: "d>=2; output bounded in [-1,1]; sensitive to short windows."
+  compatible_with: [rank, ts_regression, group_neutralize]
+  avoid_nesting: [ts_corr]
+  typical_usage: "Capture co-movement between two series as a signal."
+
+- name: ts_covariance
+  category: time_series
+  definition: Rolling covariance between two inputs over the past d days.
+  arguments:
+    - {name: y, position: 0, type: matrix, required: true, window: false}
+    - {name: x, position: 1, type: matrix, required: true, window: false}
+    - {name: d, position: 2, type: int, required: true, window: true, min: 2, max: 512}
+  returns: matrix
+  examples:
+    - {expr: "ts_covariance(returns, ts_delay(returns, 1), 60)", good: true, note: "Autocovariance of returns at lag 1."}
+  restrictions: "d>=2; unbounded scale (unlike correlation)."
+  compatible_with: [ts_corr, divide, ts_std_dev, rank]
+  avoid_nesting: [ts_covariance]
+  typical_usage: "Measure raw co-variation; often normalized into correlation."
+
+- name: ts_decay_linear
+  category: time_series
+  definition: Linearly-weighted moving average over d days, giving the most recent day the highest weight.
+  arguments:
+    - {name: x, position: 0, type: matrix, required: true, window: false}
+    - {name: d, position: 1, type: int, required: true, window: true, min: 2, max: 512}
+    - {name: dense, position: 2, type: boolean, required: false, window: false}
+  returns: matrix
+  examples:
+    - {expr: "ts_decay_linear(ts_delta(close, 1), 10)", good: true, note: "Smooth a momentum signal with linear decay weights."}
+  restrictions: "d>=2; dense=true treats NaN as 0 instead of skipping (default false)."
+  compatible_with: [ts_delta, rank, ts_rank, group_neutralize]
+  avoid_nesting: [ts_decay_linear, ts_mean]
+  typical_usage: "Reduce turnover by smoothing a raw signal with recency weighting."
+
+- name: ts_decay_exp_window
+  category: time_series
+  definition: Exponentially-weighted moving average over d days with decay controlled by factor.
+  arguments:
+    - {name: x, position: 0, type: matrix, required: true, window: false}
+    - {name: d, position: 1, type: int, required: true, window: true, min: 2, max: 512}
+    - {name: factor, position: 2, type: float, required: false, window: false, min: 0, max: 1}
+    - {name: nan, position: 3, type: boolean, required: false, window: false}
+  returns: matrix
+  examples:
+    - {expr: "ts_decay_exp_window(returns, 20, factor=0.4)", good: true, note: "Exponential decay smoothing with factor 0.4."}
+  restrictions: "d>=2; factor in [0,1] (default 1.0); nan=true keeps NaN handling on."
+  compatible_with: [ts_delta, rank, group_neutralize]
+  avoid_nesting: [ts_decay_exp_window, ts_decay_linear, ts_mean]
+  typical_usage: "Smooth a signal with tunable recency emphasis to cut turnover."
+
+- name: ts_regression
+  category: time_series
+  definition: Rolling linear regression of y on x over d days, returning a chosen component (residual, slope, intercept, prediction, etc.).
+  arguments:
+    - {name: y, position: 0, type: matrix, required: true, window: false}
+    - {name: x, position: 1, type: matrix, required: true, window: false}
+    - {name: d, position: 2, type: int, required: true, window: true, min: 2, max: 512}
+    - {name: lag, position: 3, type: int, required: false, window: false, min: 0, max: 512}
+    - {name: rettype, position: 4, type: int, required: false, window: false, min: 0, max: 7}
+  returns: matrix
+  examples:
+    - {expr: "ts_regression(returns, ts_delay(returns, 1), 252, lag=0, rettype=0)", good: true, note: "Residual of returns regressed on lagged returns over a year."}
+  restrictions: "d>=2; rettype selects the output (0=residual/error, others=slope/intercept/prediction/etc. per BRAIN); lag>=0."
+  compatible_with: [ts_corr, group_neutralize, rank, trade_when]
+  avoid_nesting: [ts_regression]
+  typical_usage: "Extract residual or slope structure for mean-reversion or beta signals."
+
+- name: ts_quantile
+  category: time_series
+  definition: Maps the current value to a quantile of its past-d-day distribution under a chosen driver.
+  arguments:
+    - {name: x, position: 0, type: matrix, required: true, window: false}
+    - {name: d, position: 1, type: int, required: true, window: true, min: 2, max: 512}
+    - {name: driver, position: 2, type: const, required: false, window: false}
+  returns: matrix
+  examples:
+    - {expr: "ts_quantile(close, 120, driver=\"gaussian\")", good: true, note: "Gaussian-shaped quantile of price over 120 days."}
+  restrictions: "d>=2; driver in {gaussian, uniform, cauchy} (default gaussian)."  # unverified: exact driver set
+  compatible_with: [rank, ts_rank, group_neutralize]
+  avoid_nesting: [ts_quantile, ts_rank]
+  typical_usage: "Reshape a series into a bounded distributional score."
+
+- name: ts_scale
+  category: time_series
+  definition: Min-max scales the input to [0,1] using its own past-d-day range.
+  arguments:
+    - {name: x, position: 0, type: matrix, required: true, window: false}
+    - {name: d, position: 1, type: int, required: true, window: true, min: 2, max: 512}
+    - {name: constant, position: 2, type: float, required: false, window: false}
+  returns: matrix
+  examples:
+    - {expr: "ts_scale(close, 60)", good: true, note: "Where price sits between its 60-day min and max."}
+  restrictions: "d>=2; constant (default 0) is added to the scaled output; flat windows yield NaN/0."
+  compatible_with: [rank, ts_rank, group_neutralize]
+  avoid_nesting: [ts_scale, scale]
+  typical_usage: "Normalize a series into a bounded band by its recent range."
+
+- name: ts_zscore
+  category: time_series
+  definition: Standardizes the current value against its past-d-day mean and standard deviation.
+  arguments:
+    - {name: x, position: 0, type: matrix, required: true, window: false}
+    - {name: d, position: 1, type: int, required: true, window: true, min: 2, max: 512}
+  returns: matrix
+  examples:
+    - {expr: "ts_zscore(volume, 60)", good: true, note: "How unusual today's volume is versus its 60-day history."}
+  restrictions: "d>=2; (x - ts_mean)/ts_std_dev; explodes when rolling std is near zero."
+  compatible_with: [rank, group_neutralize, winsorize]
+  avoid_nesting: [ts_zscore, zscore]
+  typical_usage: "Detect statistically extreme values relative to recent history."
+
+- name: ts_av_diff
+  category: time_series
+  definition: Difference between the current value and its past-d-day mean (x - ts_mean(x,d)), ignoring NaN.
+  arguments:
+    - {name: x, position: 0, type: matrix, required: true, window: false}
+    - {name: d, position: 1, type: int, required: true, window: true, min: 2, max: 512}
+  returns: matrix
+  examples:
+    - {expr: "ts_av_diff(close, 20)", good: true, note: "Deviation of price from its 20-day average."}
+  restrictions: "d>=2; equivalent to demeaning by a rolling mean."
+  compatible_with: [rank, ts_zscore, sign]
+  avoid_nesting: [ts_av_diff, ts_mean]
+  typical_usage: "Build a mean-reversion signal from deviation off a moving average."
+
+- name: ts_min
+  category: time_series
+  definition: Minimum value of the input over the past d days.
+  arguments:
+    - {name: x, position: 0, type: matrix, required: true, window: false}
+    - {name: d, position: 1, type: int, required: true, window: true, min: 2, max: 512}
+  returns: matrix
+  examples:
+    - {expr: "ts_min(low, 20)", good: true, note: "20-day lowest low."}
+  restrictions: "d>=2; element-wise minimum across the lookback."
+  compatible_with: [ts_max, subtract, divide]
+  avoid_nesting: [ts_min, min]
+  typical_usage: "Construct support levels or windowed extrema."
+
+- name: ts_max
+  category: time_series
+  definition: Maximum value of the input over the past d days.
+  arguments:
+    - {name: x, position: 0, type: matrix, required: true, window: false}
+    - {name: d, position: 1, type: int, required: true, window: true, min: 2, max: 512}
+  returns: matrix
+  examples:
+    - {expr: "ts_max(high, 20)", good: true, note: "20-day highest high."}
+  restrictions: "d>=2; element-wise maximum across the lookback."
+  compatible_with: [ts_min, subtract, divide]
+  avoid_nesting: [ts_max, max]
+  typical_usage: "Construct resistance levels or windowed extrema."
+
+- name: ts_argmin
+  # BRAIN canonical alias: ts_arg_min
+  category: time_series
+  definition: Number of days since the minimum value occurred within the past d days.
+  arguments:
+    - {name: x, position: 0, type: matrix, required: true, window: false}
+    - {name: d, position: 1, type: int, required: true, window: true, min: 2, max: 512}
+  returns: matrix
+  examples:
+    - {expr: "ts_argmin(low, 20)", good: true, note: "How many days ago the 20-day low printed."}
+  restrictions: "d>=2; output is an integer offset in [0, d-1]."
+  compatible_with: [ts_argmax, rank, sign]
+  avoid_nesting: [ts_argmin]
+  typical_usage: "Time-since-extreme feature for momentum/exhaustion."
+
+- name: ts_argmax
+  # BRAIN canonical alias: ts_arg_max
+  category: time_series
+  definition: Number of days since the maximum value occurred within the past d days.
+  arguments:
+    - {name: x, position: 0, type: matrix, required: true, window: false}
+    - {name: d, position: 1, type: int, required: true, window: true, min: 2, max: 512}
+  returns: matrix
+  examples:
+    - {expr: "ts_argmax(high, 20)", good: true, note: "How many days ago the 20-day high printed."}
+    - {expr: "ts_argmax(close, 1)", good: false, note: "A 1-day window makes the argmax trivially 0."}
+  restrictions: "d>=2; output is an integer offset in [0, d-1]."
+  compatible_with: [ts_argmin, rank, sign]
+  avoid_nesting: [ts_argmax]
+  typical_usage: "Time-since-peak feature for trend/reversal logic."
+
+- name: ts_product
+  category: time_series
+  definition: Product of the input values over the past d days.
+  arguments:
+    - {name: x, position: 0, type: matrix, required: true, window: false}
+    - {name: d, position: 1, type: int, required: true, window: true, min: 2, max: 512}
+  returns: matrix
+  examples:
+    - {expr: "ts_product(1 + returns, 20)", good: true, note: "Compounded 20-day growth factor."}
+  restrictions: "d>=2; magnitudes can grow/shrink quickly, watch for overflow/underflow."
+  compatible_with: [power, log, rank]
+  avoid_nesting: [ts_product]
+  typical_usage: "Compound a multiplicative series over a window."
+
+- name: ts_returns
+  category: time_series
+  definition: Relative change of the input over d days, (x - ts_delay(x,d)) / ts_delay(x,d).
+  arguments:
+    - {name: x, position: 0, type: matrix, required: true, window: false}
+    - {name: d, position: 1, type: int, required: true, window: true, min: 1, max: 512}
+  returns: matrix
+  examples:
+    - {expr: "ts_returns(close, 5)", good: true, note: "Five-day percentage return."}
+  restrictions: "d>=1; undefined where the lagged value is zero."
+  compatible_with: [rank, ts_std_dev, s_log_1p]
+  avoid_nesting: [ts_returns]
+  typical_usage: "Compute horizon returns for momentum/reversal signals."
+
+- name: ts_median
+  category: time_series
+  definition: Median value of the input over the past d days.
+  arguments:
+    - {name: x, position: 0, type: matrix, required: true, window: false}
+    - {name: d, position: 1, type: int, required: true, window: true, min: 2, max: 512}
+  returns: matrix
+  examples:
+    - {expr: "ts_median(close, 20)", good: true, note: "Robust central tendency of price over 20 days."}
+  restrictions: "d>=2; more robust to outliers than ts_mean."
+  compatible_with: [subtract, ts_av_diff, rank]
+  avoid_nesting: [ts_median]
+  typical_usage: "Robust smoothing/baseline less sensitive to spikes."
+
+- name: ts_backfill
+  category: time_series
+  definition: Fills missing (NaN) values with the most recent valid value within the past d days.
+  arguments:
+    - {name: x, position: 0, type: matrix, required: true, window: false}
+    - {name: d, position: 1, type: int, required: true, window: true, min: 2, max: 512}
+    - {name: k, position: 2, type: int, required: false, window: false, min: 1, max: 512}
+  returns: matrix
+  examples:
+    - {expr: "ts_backfill(pe_ratio, 60)", good: true, note: "Carry the last known PE forward over gaps up to 60 days."}
+  restrictions: "d>=2; k (default 1) selects which prior valid value to use."  # unverified: k semantics
+  compatible_with: [is_nan, to_nan, group_backfill, rank]
+  avoid_nesting: [ts_backfill]
+  typical_usage: "Stabilize sparse fundamental data before computation."
+
+- name: ts_count_nans
+  category: time_series
+  definition: Counts the number of NaN values in the input over the past d days.
+  arguments:
+    - {name: x, position: 0, type: matrix, required: true, window: false}
+    - {name: d, position: 1, type: int, required: true, window: true, min: 2, max: 512}
+  returns: matrix
+  examples:
+    - {expr: "ts_count_nans(volume, 20)", good: true, note: "Data-quality measure over the last 20 days."}
+  restrictions: "d>=2; output is an integer count in [0, d]."
+  compatible_with: [is_nan, less, trade_when]
+  avoid_nesting: [ts_count_nans]
+  typical_usage: "Filter instruments with too much recent missing data."
+
+- name: ts_skewness
+  category: time_series
+  definition: Rolling skewness of the input over the past d days.
+  arguments:
+    - {name: x, position: 0, type: matrix, required: true, window: false}
+    - {name: d, position: 1, type: int, required: true, window: true, min: 3, max: 512}
+  returns: matrix
+  examples:
+    - {expr: "ts_skewness(returns, 60)", good: true, note: "Asymmetry of the 60-day return distribution."}
+  restrictions: "d should be reasonably large (>=3) for a stable estimate."
+  compatible_with: [rank, zscore, group_neutralize]
+  avoid_nesting: [ts_skewness]
+  typical_usage: "Capture distributional asymmetry of returns."
+
+- name: ts_kurtosis
+  category: time_series
+  definition: Rolling kurtosis of the input over the past d days.
+  arguments:
+    - {name: x, position: 0, type: matrix, required: true, window: false}
+    - {name: d, position: 1, type: int, required: true, window: true, min: 4, max: 512}
+  returns: matrix
+  examples:
+    - {expr: "ts_kurtosis(returns, 120)", good: true, note: "Tail heaviness of the 120-day return distribution."}
+  restrictions: "d should be large (>=4) for stability."
+  compatible_with: [rank, zscore, group_neutralize]
+  avoid_nesting: [ts_kurtosis]
+  typical_usage: "Detect tail-risk / fat-tailed regimes."
+
+- name: ts_moment
+  category: time_series
+  definition: Rolling k-th central moment of the input over the past d days.
+  arguments:
+    - {name: x, position: 0, type: matrix, required: true, window: false}
+    - {name: d, position: 1, type: int, required: true, window: true, min: 2, max: 512}
+    - {name: k, position: 2, type: int, required: false, window: false, min: 0, max: 4}
+  returns: matrix
+  examples:
+    - {expr: "ts_moment(returns, 60, 2)", good: true, note: "Second central moment (variance) over 60 days."}
+  restrictions: "d>=2; k is the moment order (default 0)."  # unverified: default k value
+  compatible_with: [rank, zscore, divide]
+  avoid_nesting: [ts_moment]
+  typical_usage: "General-purpose distributional moment feature."
+
+- name: ts_entropy
+  category: time_series
+  definition: Rolling Shannon entropy of the input's distribution over the past d days.
+  arguments:
+    - {name: x, position: 0, type: matrix, required: true, window: false}
+    - {name: d, position: 1, type: int, required: true, window: true, min: 2, max: 512}
+    - {name: buckets, position: 2, type: int, required: false, window: false, min: 2, max: 100}
+  returns: matrix
+  examples:
+    - {expr: "ts_entropy(returns, 60)", good: true, note: "Disorder/randomness of the recent return path."}
+  restrictions: "d>=2; buckets controls histogram resolution (default 10)."  # unverified: default buckets value
+  compatible_with: [rank, zscore]
+  avoid_nesting: [ts_entropy]
+  typical_usage: "Quantify predictability/regime of a series."
+
+- name: kth_element
+  category: time_series
+  definition: Returns the k-th most recent value of the input over the past d days, ignoring NaN.
+  arguments:
+    - {name: x, position: 0, type: matrix, required: true, window: false}
+    - {name: d, position: 1, type: int, required: true, window: true, min: 1, max: 512}
+    - {name: k, position: 2, type: int, required: false, window: false, min: 0, max: 512}
+  returns: matrix
+  examples:
+    - {expr: "kth_element(close, 20, k=1)", good: true, note: "Most recent valid close within the last 20 days."}
+  restrictions: "d>=1; k indexes back through valid (non-NaN) values."  # unverified: 0- vs 1-based k
+  compatible_with: [ts_delay, ts_backfill, subtract]
+  avoid_nesting: [kth_element]
+  typical_usage: "Pick a specific recent observation while skipping gaps."
+
+# ============================================================================
+# CROSS SECTION
+# ============================================================================
+
+- name: rank
+  category: cross_section
+  definition: Cross-sectional percentile rank of the input across the universe each day, scaled to [0,1].
+  arguments:
+    - {name: x, position: 0, type: matrix, required: true, window: false}
+    - {name: rate, position: 1, type: int, required: false, window: false, min: 0, max: 10}
+  returns: matrix
+  examples:
+    - {expr: "rank(ts_delta(close, 5))", good: true, note: "Cross-sectional rank of 5-day momentum."}
+    - {expr: "rank(rank(x))", good: false, note: "Ranking an already-uniform rank is redundant."}
+  restrictions: "Output bounded in [0,1]; rate controls precision/ties handling (default 2)."
+  compatible_with: [ts_delta, subtract, group_neutralize, reverse]
+  avoid_nesting: [rank, ts_rank]
+  typical_usage: "Standardize any raw signal into a comparable cross-sectional score."
+
+- name: rank_by_side
+  category: cross_section
+  definition: Ranks long and short sides of the book separately across the universe.
+  arguments:
+    - {name: x, position: 0, type: matrix, required: true, window: false}
+    - {name: rate, position: 1, type: int, required: false, window: false, min: 0, max: 10}
+    - {name: side, position: 2, type: const, required: false, window: false}
+  returns: matrix
+  examples:
+    - {expr: "rank_by_side(signal, rate=2, side=\"all\")", good: true, note: "Rank within each side rather than the whole universe."}
+  restrictions: "side in {long, short, all} (default all); rate default 2."
+  compatible_with: [rank, group_rank, scale]
+  avoid_nesting: [rank, rank_by_side]
+  typical_usage: "Rank a long/short signal so each side is internally comparable."
+
+- name: zscore
+  category: cross_section
+  definition: Cross-sectional standardization to zero mean and unit variance across the universe each day.
+  arguments:
+    - {name: x, position: 0, type: matrix, required: true, window: false}
+  returns: matrix
+  examples:
+    - {expr: "zscore(ts_delta(close, 5))", good: true, note: "Standardized cross-sectional momentum."}
+    - {expr: "zscore(rank(x))", good: false, note: "rank is already uniform; z-scoring it adds little."}
+  restrictions: "Sensitive to outliers; winsorize first for robustness."
+  compatible_with: [winsorize, group_neutralize, signed_power]
+  avoid_nesting: [zscore, ts_zscore]
+  typical_usage: "Put a signal on a standard normal-like scale across names."
+
+- name: normalize
+  category: cross_section
+  definition: Demeans the input across the universe, optionally dividing by the cross-sectional standard deviation.
+  arguments:
+    - {name: x, position: 0, type: matrix, required: true, window: false}
+    - {name: useStd, position: 1, type: boolean, required: false, window: false}
+    - {name: limit, position: 2, type: float, required: false, window: false, min: 0, max: 10}
+  returns: matrix
+  examples:
+    - {expr: "normalize(signal, useStd=true)", good: true, note: "Demean and divide by cross-sectional std."}
+  restrictions: "useStd default false; limit (default 0=off) clips the normalized output."
+  compatible_with: [zscore, winsorize, group_neutralize]
+  avoid_nesting: [normalize, zscore]
+  typical_usage: "Center (and optionally scale) a signal cross-sectionally."
+
+- name: winsorize
+  category: cross_section
+  definition: Clips extreme values to within a number of standard deviations of the cross-sectional mean.
+  arguments:
+    - {name: x, position: 0, type: matrix, required: true, window: false}
+    - {name: std, position: 1, type: float, required: false, window: false, min: 1, max: 10}
+  returns: matrix
+  examples:
+    - {expr: "winsorize(zscore(x), std=4)", good: true, note: "Cap a z-score at +/-4 sigma to tame outliers."}
+  restrictions: "std default 4; clips rather than removes; apply before scaling."
+  compatible_with: [zscore, normalize, scale, signed_power]
+  avoid_nesting: [winsorize]
+  typical_usage: "Robustify a signal against extreme cross-sectional outliers."
+
+- name: quantile
+  category: cross_section
+  definition: Maps the input to cross-sectional quantiles shaped by a chosen distribution driver.
+  arguments:
+    - {name: x, position: 0, type: matrix, required: true, window: false}
+    - {name: driver, position: 1, type: const, required: false, window: false}
+    - {name: sigma, position: 2, type: float, required: false, window: false, min: 0, max: 10}
+  returns: matrix
+  examples:
+    - {expr: "quantile(signal, driver=\"gaussian\", sigma=1.0)", good: true, note: "Reshape ranks into a gaussian-spaced score."}
+  restrictions: "driver in {gaussian, uniform, cauchy} (default gaussian); sigma default 1.0."
+  compatible_with: [rank, scale, group_neutralize]
+  avoid_nesting: [quantile, rank]
+  typical_usage: "Convert a signal into a distribution-shaped cross-sectional score."
+
+- name: scale
+  category: cross_section
+  definition: Rescales the input so the sum of absolute values (book) equals a target, optionally with separate long/short scales.
+  arguments:
+    - {name: x, position: 0, type: matrix, required: true, window: false}
+    - {name: scale, position: 1, type: float, required: false, window: false, min: 0, max: 1000000}
+    - {name: longscale, position: 2, type: float, required: false, window: false, min: 0, max: 1000000}
+    - {name: shortscale, position: 3, type: float, required: false, window: false, min: 0, max: 1000000}
+  returns: matrix
+  examples:
+    - {expr: "scale(signal, scale=1)", good: true, note: "Normalize gross book to 1."}
+    - {expr: "scale(signal, longscale=1, shortscale=1)", good: true, note: "Balance long and short sides separately."}
+  restrictions: "scale default 1; longscale/shortscale default 1 to balance sides; do not double-scale."
+  compatible_with: [rank, zscore, winsorize, group_neutralize]
+  avoid_nesting: [scale, ts_scale]
+  typical_usage: "Final booksizing/normalization of an alpha before submission."
+
+- name: vector_neut
+  category: cross_section
+  definition: Returns the component of x orthogonal to y (removes the projection of x onto y).
+  arguments:
+    - {name: x, position: 0, type: matrix, required: true, window: false}
+    - {name: y, position: 1, type: matrix, required: true, window: false}
+  returns: matrix
+  examples:
+    - {expr: "vector_neut(signal, market_beta)", good: true, note: "Neutralize a signal against a risk vector."}
+  restrictions: "x and y must be conformable; neutralizes against a single vector."
+  compatible_with: [regression_neut, group_neutralize, scale]
+  avoid_nesting: [vector_neut]
+  typical_usage: "Strip out exposure to a known risk factor."
+
+- name: regression_neut
+  category: cross_section
+  definition: Cross-sectional residual of y regressed on x (neutralizes y against x).
+  arguments:
+    - {name: y, position: 0, type: matrix, required: true, window: false}
+    - {name: x, position: 1, type: matrix, required: true, window: false}
+  returns: matrix
+  examples:
+    - {expr: "regression_neut(signal, log(cap))", good: true, note: "Remove size exposure from a signal."}
+  restrictions: "Returns the regression residual; x is the explanatory factor."
+  compatible_with: [vector_neut, group_neutralize, scale]
+  avoid_nesting: [regression_neut]
+  typical_usage: "Neutralize a signal against a continuous risk factor."
+
+- name: one_side
+  category: cross_section
+  definition: Keeps only the long or short side of a signal, zeroing the other side.
+  arguments:
+    - {name: x, position: 0, type: matrix, required: true, window: false}
+    - {name: side, position: 1, type: const, required: false, window: false}
+  returns: matrix
+  examples:
+    - {expr: "one_side(signal, side=\"long\")", good: true, note: "Take only the positive (long) exposures."}
+  restrictions: "side in {long, short} (default long)."
+  compatible_with: [scale, rank, trade_when]
+  avoid_nesting: [one_side]
+  typical_usage: "Build a long-only or short-only variant of an alpha."
+
+# ============================================================================
+# GROUP
+# ============================================================================
+
+- name: group_rank
+  category: group
+  definition: Percentile rank of the input within each group across the universe each day.
+  arguments:
+    - {name: x, position: 0, type: matrix, required: true, window: false}
+    - {name: group, position: 1, type: group, required: true, window: false}
+  returns: matrix
+  examples:
+    - {expr: "group_rank(ts_delta(close, 5), sector)", good: true, note: "Rank momentum within each sector."}
+    - {expr: "group_rank(x, close)", good: false, note: "Second arg must be a GROUP field, not a price."}
+  restrictions: "Second arg must be a GROUP-typed field (e.g. sector, industry, market)."
+  compatible_with: [rank, ts_rank, group_neutralize, scale]
+  avoid_nesting: [group_rank, rank]
+  typical_usage: "Compare instruments only against peers in the same group."
+
+- name: group_zscore
+  category: group
+  definition: Standardizes the input to zero mean and unit variance within each group.
+  arguments:
+    - {name: x, position: 0, type: matrix, required: true, window: false}
+    - {name: group, position: 1, type: group, required: true, window: false}
+  returns: matrix
+  examples:
+    - {expr: "group_zscore(signal, industry)", good: true, note: "Z-score a signal within each industry."}
+  restrictions: "Second arg must be a GROUP-typed field; sensitive to within-group outliers."
+  compatible_with: [zscore, group_neutralize, winsorize]
+  avoid_nesting: [group_zscore, zscore]
+  typical_usage: "Normalize a signal relative to its group's distribution."
+
+- name: group_neutralize
+  category: group
+  definition: Subtracts the group mean from the input so each group nets to zero exposure.
+  arguments:
+    - {name: x, position: 0, type: matrix, required: true, window: false}
+    - {name: group, position: 1, type: group, required: true, window: false}
+  returns: matrix
+  examples:
+    - {expr: "group_neutralize(rank(signal), sector)", good: true, note: "Make the signal sector-neutral."}
+    - {expr: "group_neutralize(x, 5)", good: false, note: "Grouping arg must be a GROUP field, not an integer."}
+  restrictions: "Second arg must be a GROUP-typed field; removes group-level bias."
+  compatible_with: [rank, zscore, scale, regression_neut]
+  avoid_nesting: [group_neutralize]
+  typical_usage: "Remove sector/industry/country exposure from an alpha."
+
+- name: group_scale
+  category: group
+  definition: Rescales the input to [0,1] within each group based on the group's min and max.
+  arguments:
+    - {name: x, position: 0, type: matrix, required: true, window: false}
+    - {name: group, position: 1, type: group, required: true, window: false}
+  returns: matrix
+  examples:
+    - {expr: "group_scale(signal, sector)", good: true, note: "Min-max scale a signal inside each sector."}
+  restrictions: "Second arg must be a GROUP-typed field; flat groups yield NaN/0."
+  compatible_with: [scale, group_rank, group_neutralize]
+  avoid_nesting: [group_scale, scale]
+  typical_usage: "Bound a signal within group ranges for comparability."
+
+- name: group_mean
+  category: group
+  definition: Replaces each value with the (optionally weighted) mean of its group.
+  arguments:
+    - {name: x, position: 0, type: matrix, required: true, window: false}
+    - {name: weight, position: 1, type: matrix, required: true, window: false}
+    - {name: group, position: 2, type: group, required: true, window: false}
+  returns: matrix
+  examples:
+    - {expr: "group_mean(returns, cap, sector)", good: true, note: "Cap-weighted average sector return assigned to each name."}
+    - {expr: "subtract(returns, group_mean(returns, 1, sector))", good: true, note: "Demean returns by their sector mean."}
+  restrictions: "Third arg must be a GROUP-typed field; weight is element-wise (use 1 for equal weight)."
+  compatible_with: [subtract, group_neutralize, divide]
+  avoid_nesting: [group_mean]
+  typical_usage: "Compute group aggregates for neutralization or benchmarking."
+
+- name: group_sum
+  category: group
+  definition: Replaces each value with the sum of its group's values.
+  arguments:
+    - {name: x, position: 0, type: matrix, required: true, window: false}
+    - {name: group, position: 1, type: group, required: true, window: false}
+  returns: matrix
+  examples:
+    - {expr: "divide(volume, group_sum(volume, sector))", good: true, note: "Share of each name in its sector's volume."}
+  restrictions: "Second arg must be a GROUP-typed field."
+  compatible_with: [divide, group_mean, group_count]
+  avoid_nesting: [group_sum]
+  typical_usage: "Aggregate a field over groups to form shares or totals."
+
+- name: group_max
+  category: group
+  definition: Replaces each value with the maximum value of its group.
+  arguments:
+    - {name: x, position: 0, type: matrix, required: true, window: false}
+    - {name: group, position: 1, type: group, required: true, window: false}
+  returns: matrix
+  examples:
+    - {expr: "divide(close, group_max(close, sector))", good: true, note: "Price relative to the sector leader."}
+  restrictions: "Second arg must be a GROUP-typed field."
+  compatible_with: [group_min, divide, subtract]
+  avoid_nesting: [group_max, max]
+  typical_usage: "Benchmark a name against the strongest in its group."
+
+- name: group_min
+  category: group
+  definition: Replaces each value with the minimum value of its group.
+  arguments:
+    - {name: x, position: 0, type: matrix, required: true, window: false}
+    - {name: group, position: 1, type: group, required: true, window: false}
+  returns: matrix
+  examples:
+    - {expr: "subtract(close, group_min(close, sector))", good: true, note: "Distance above the sector's weakest price."}
+  restrictions: "Second arg must be a GROUP-typed field."
+  compatible_with: [group_max, subtract, divide]
+  avoid_nesting: [group_min, min]
+  typical_usage: "Benchmark a name against the weakest in its group."
+
+- name: group_count
+  category: group
+  definition: Replaces each value with the count of valid (non-NaN) members in its group.
+  arguments:
+    - {name: x, position: 0, type: matrix, required: true, window: false}
+    - {name: group, position: 1, type: group, required: true, window: false}
+  returns: matrix
+  examples:
+    - {expr: "group_count(close, sector)", good: true, note: "Number of active names per sector."}
+  restrictions: "Second arg must be a GROUP-typed field; counts non-missing members."
+  compatible_with: [group_sum, divide, greater]
+  avoid_nesting: [group_count]
+  typical_usage: "Weight or filter groups by their membership size."
+
+- name: group_backfill
+  category: group
+  definition: Fills missing values within each group using recent group information over a lookback window.
+  arguments:
+    - {name: x, position: 0, type: matrix, required: true, window: false}
+    - {name: group, position: 1, type: group, required: true, window: false}
+    - {name: d, position: 2, type: int, required: true, window: true, min: 2, max: 512}
+    - {name: std, position: 3, type: float, required: false, window: false, min: 0, max: 10}
+  returns: matrix
+  examples:
+    - {expr: "group_backfill(signal, sector, 20)", good: true, note: "Backfill missing values from sector peers over 20 days."}
+  restrictions: "Second arg must be a GROUP-typed field; d>=2; std (default 4.0) bounds the fill."  # unverified: std default
+  compatible_with: [ts_backfill, is_nan, group_mean]
+  avoid_nesting: [group_backfill]
+  typical_usage: "Densify sparse data using group-level information."
+
+- name: group_median
+  category: group
+  definition: Replaces each value with the median of its group.
+  arguments:
+    - {name: x, position: 0, type: matrix, required: true, window: false}
+    - {name: group, position: 1, type: group, required: true, window: false}
+  returns: matrix
+  examples:
+    - {expr: "subtract(signal, group_median(signal, sector))", good: true, note: "Robust sector demeaning by the median."}
+  restrictions: "Second arg must be a GROUP-typed field; more robust than group_mean."
+  compatible_with: [group_mean, subtract, group_neutralize]
+  avoid_nesting: [group_median]
+  typical_usage: "Robustly center a signal within its group."
+
+- name: group_std_dev
+  category: group
+  definition: Replaces each value with the standard deviation of its group.
+  arguments:
+    - {name: x, position: 0, type: matrix, required: true, window: false}
+    - {name: group, position: 1, type: group, required: true, window: false}
+  returns: matrix
+  examples:
+    - {expr: "divide(ts_av_diff(close, 20), group_std_dev(close, sector))", good: true, note: "Scale a deviation by within-sector dispersion."}
+  restrictions: "Second arg must be a GROUP-typed field."
+  compatible_with: [group_mean, group_zscore, divide]
+  avoid_nesting: [group_std_dev]
+  typical_usage: "Measure or normalize by within-group dispersion."
+
+- name: group_normalize
+  category: group
+  definition: Normalizes the input within each group so each group's values are centered/scaled.
+  arguments:
+    - {name: x, position: 0, type: matrix, required: true, window: false}
+    - {name: group, position: 1, type: group, required: true, window: false}
+  returns: matrix
+  examples:
+    - {expr: "group_normalize(signal, sector)", good: true, note: "Normalize a signal inside each sector."}
+  restrictions: "Second arg must be a GROUP-typed field."
+  compatible_with: [normalize, group_zscore, group_neutralize]
+  avoid_nesting: [group_normalize, normalize]
+  typical_usage: "Put each group's signal on a common normalized scale."
+
+- name: group_vector_neut
+  category: group
+  definition: Neutralizes the input against a risk vector separately within each group.
+  arguments:
+    - {name: x, position: 0, type: matrix, required: true, window: false}
+    - {name: y, position: 1, type: matrix, required: true, window: false}
+    - {name: group, position: 2, type: group, required: true, window: false}
+  returns: matrix
+  examples:
+    - {expr: "group_vector_neut(signal, beta, sector)", good: true, note: "Remove beta exposure within each sector."}
+  restrictions: "Third arg must be a GROUP-typed field; orthogonalizes x against y per group."
+  compatible_with: [vector_neut, group_neutralize, scale]
+  avoid_nesting: [group_vector_neut, vector_neut]
+  typical_usage: "Within-group risk-factor neutralization."
+
+# ============================================================================
+# TRANSFORMATIONAL
+# ============================================================================
+
+- name: trade_when
+  category: transformational
+  definition: Updates the alpha only when the trigger condition is true, and exits positions when the exit condition is true.
+  arguments:
+    - {name: trigger, position: 0, type: boolean, required: true, window: false}
+    - {name: alpha, position: 1, type: matrix, required: true, window: false}
+    - {name: exit, position: 2, type: matrix, required: true, window: false}
+  returns: matrix
+  examples:
+    - {expr: "trade_when(volume > adv20, signal, -1)", good: true, note: "Only trade on high-volume days; exit=-1 holds the prior position."}
+    - {expr: "trade_when(ts_rank(ts_std_dev(returns,22),252) > 0.55, -ts_regression(returns, ts_delay(returns,1), 252), -1)", good: true, note: "Reversion only in high-volatility regimes."}
+  restrictions: "First arg is the entry condition; exit<0 keeps the previous position (no forced exit)."
+  compatible_with: [and, or, greater, less, if_else, ts_decay_linear]
+  avoid_nesting: [trade_when]
+  typical_usage: "Gate trading to specific events/regimes and cut turnover."
+
+- name: bucket
+  category: transformational
+  definition: Discretizes a (usually ranked) input into integer buckets defined by a range or explicit boundaries.
+  arguments:
+    - {name: x, position: 0, type: matrix, required: true, window: false}
+    - {name: range, position: 1, type: const, required: false, window: false}
+    - {name: buckets, position: 2, type: const, required: false, window: false}
+  returns: matrix
+  examples:
+    - {expr: "bucket(rank(close), range=\"0,1,0.1\")", good: true, note: "Split ranks into 10 equal buckets (start,end,step)."}
+    - {expr: "bucket(rank(x), buckets=\"2,5,6,7,10\")", good: true, note: "Custom non-uniform bucket boundaries."}
+  restrictions: "Provide exactly one of range ('start,end,step') or buckets (explicit edges); input usually pre-ranked to [0,1]."
+  compatible_with: [rank, group_mean, if_else]
+  avoid_nesting: [bucket]
+  typical_usage: "Convert a continuous score into discrete regimes/portfolios."
+
+- name: hump
+  category: transformational
+  definition: Limits day-to-day changes in the input, only updating when the change exceeds a threshold (reduces turnover).
+  arguments:
+    - {name: x, position: 0, type: matrix, required: true, window: false}
+    - {name: hump, position: 1, type: float, required: false, window: false, min: 0, max: 1}
+  returns: matrix
+  examples:
+    - {expr: "hump(rank(signal), hump=0.01)", good: true, note: "Suppress small fluctuations to cut turnover."}
+    - {expr: "hump(signal, hump=0)", good: false, note: "A threshold of 0 disables the filter; passes signal through."}
+  restrictions: "hump default 0.01; larger values reduce turnover but add lag."
+  compatible_with: [rank, scale, ts_decay_linear, trade_when]
+  avoid_nesting: [hump, hump_decay]
+  typical_usage: "Tame turnover on a finished signal before booksizing."
+
+- name: hump_decay
+  category: transformational
+  definition: Smooths the input by carrying prior values unless the change exceeds a decay threshold.
+  arguments:
+    - {name: x, position: 0, type: matrix, required: true, window: false}
+    - {name: p, position: 1, type: float, required: false, window: false, min: 0, max: 1}
+  returns: matrix
+  examples:
+    - {expr: "hump_decay(signal, 0.05)", good: true, note: "Decay-based change limiter for turnover control."}
+  restrictions: "p default 0; higher p holds positions longer."  # unverified: default p value
+  compatible_with: [hump, ts_decay_linear, scale]
+  avoid_nesting: [hump_decay, hump]
+  typical_usage: "Alternative turnover smoother with decay behavior."
+
+- name: tail
+  category: transformational
+  definition: Replaces values within a [lower, upper] band with a constant, isolating the tails.
+  arguments:
+    - {name: x, position: 0, type: matrix, required: true, window: false}
+    - {name: lower, position: 1, type: float, required: false, window: false}
+    - {name: upper, position: 2, type: float, required: false, window: false}
+    - {name: newval, position: 3, type: float, required: false, window: false}
+  returns: matrix
+  examples:
+    - {expr: "tail(rank(x), lower=0.2, upper=0.8, newval=0)", good: true, note: "Zero out the middle 60%, keep only the tails."}
+  restrictions: "lower<=upper; values inside the band become newval (default 0)."  # unverified: arg defaults
+  compatible_with: [rank, scale, bucket]
+  avoid_nesting: [tail]
+  typical_usage: "Trade only the extremes of a distribution."
+
+- name: densify
+  category: transformational
+  definition: Compresses a sparse grouping field with many distinct values into a denser set of group ids.
+  arguments:
+    - {name: x, position: 0, type: group, required: true, window: false}
+  returns: group
+  examples:
+    - {expr: "group_neutralize(signal, densify(bucket(rank(cap), range=\"0,1,0.05\")))", good: true, note: "Turn fine buckets into a usable dense grouping for neutralization."}
+  restrictions: "Input is a group/categorical field; output is a compacted group usable by group_* operators."
+  compatible_with: [bucket, group_neutralize, group_rank]
+  avoid_nesting: [densify]
+  typical_usage: "Prepare a custom grouping field for group operators."
+
+# ============================================================================
+# VECTOR
+# ============================================================================
+
+- name: vec_avg
+  category: vector
+  definition: Average of the elements within each instrument's vector field, producing a scalar per instrument.
+  arguments:
+    - {name: x, position: 0, type: vector, required: true, window: false}
+  returns: matrix
+  examples:
+    - {expr: "vec_avg(news_sentiment_vector)", good: true, note: "Mean sentiment across the day's news items."}
+  restrictions: "Input must be a VECTOR-typed field; collapses the vector to one value per instrument."
+  compatible_with: [vec_sum, vec_count, rank, zscore]
+  avoid_nesting: [vec_avg]
+  typical_usage: "Aggregate a per-instrument vector field into a usable signal."
+
+- name: vec_sum
+  category: vector
+  definition: Sum of the elements within each instrument's vector field.
+  arguments:
+    - {name: x, position: 0, type: vector, required: true, window: false}
+  returns: matrix
+  examples:
+    - {expr: "vec_sum(trade_size_vector)", good: true, note: "Total size across the day's trades."}
+  restrictions: "Input must be a VECTOR-typed field."
+  compatible_with: [vec_avg, vec_count, divide, rank]
+  avoid_nesting: [vec_sum]
+  typical_usage: "Total a per-instrument vector field into a scalar signal."
+
+- name: vec_max
+  category: vector
+  definition: Maximum element within each instrument's vector field.
+  arguments:
+    - {name: x, position: 0, type: vector, required: true, window: false}
+  returns: matrix
+  examples:
+    - {expr: "vec_max(bid_size_vector)", good: true, note: "Largest bid size in the vector."}
+  restrictions: "Input must be a VECTOR-typed field."
+  compatible_with: [vec_min, vec_avg, rank]
+  avoid_nesting: [vec_max, max]
+  typical_usage: "Extract the peak element of a vector field."
+
+- name: vec_min
+  category: vector
+  definition: Minimum element within each instrument's vector field.
+  arguments:
+    - {name: x, position: 0, type: vector, required: true, window: false}
+  returns: matrix
+  examples:
+    - {expr: "vec_min(ask_size_vector)", good: true, note: "Smallest ask size in the vector."}
+  restrictions: "Input must be a VECTOR-typed field."
+  compatible_with: [vec_max, vec_avg, rank]
+  avoid_nesting: [vec_min, min]
+  typical_usage: "Extract the smallest element of a vector field."
+
+- name: vec_count
+  category: vector
+  definition: Number of valid elements within each instrument's vector field.
+  arguments:
+    - {name: x, position: 0, type: vector, required: true, window: false}
+  returns: matrix
+  examples:
+    - {expr: "vec_count(news_vector)", good: true, note: "How many news items the instrument had."}
+  restrictions: "Input must be a VECTOR-typed field; counts non-missing elements."
+  compatible_with: [vec_sum, vec_avg, divide, greater]
+  avoid_nesting: [vec_count]
+  typical_usage: "Gauge activity/coverage from the length of a vector field."
+
+- name: vec_choose
+  category: vector
+  definition: Selects a specific element (by index) from each instrument's vector field.
+  arguments:
+    - {name: x, position: 0, type: vector, required: true, window: false}
+    - {name: nth, position: 1, type: int, required: false, window: false, min: 0, max: 1000}
+  returns: matrix
+  examples:
+    - {expr: "vec_choose(quote_vector, nth=0)", good: true, note: "Pick the first element of the vector."}
+  restrictions: "Input must be a VECTOR-typed field; nth is 0-based (default 0)."  # unverified: indexing base
+  compatible_with: [vec_avg, vec_count, rank]
+  avoid_nesting: [vec_choose]
+  typical_usage: "Pull a single positional element out of a vector field."
+
+# ============================================================================
+# SPECIAL
+# ============================================================================
+
+- name: days_from_last_change
+  category: special
+  definition: Number of days since the input value last changed.
+  arguments:
+    - {name: x, position: 0, type: matrix, required: true, window: false}
+  returns: matrix
+  examples:
+    - {expr: "days_from_last_change(dividend)", good: true, note: "Staleness of a slow-moving field like dividends."}
+  restrictions: "No window argument; counts trading days since the last distinct value."
+  compatible_with: [greater, trade_when, rank]
+  avoid_nesting: [days_from_last_change]
+  typical_usage: "Detect stale fundamentals or time-since-event features."
+
+- name: last_diff_value
+  category: special
+  definition: Returns the most recent value of the input, within the past d days, that differs from the current value.
+  arguments:
+    - {name: x, position: 0, type: matrix, required: true, window: false}
+    - {name: d, position: 1, type: int, required: true, window: true, min: 2, max: 512}
+  returns: matrix
+  examples:
+    - {expr: "subtract(close, last_diff_value(close, 60))", good: true, note: "Change since the last different price within 60 days."}
+  restrictions: "d>=2; returns NaN if no differing value exists in the window."
+  compatible_with: [subtract, days_from_last_change, sign]
+  avoid_nesting: [last_diff_value]
+  typical_usage: "Measure change relative to the previous distinct level of a series."

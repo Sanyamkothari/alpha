@@ -1,0 +1,1023 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Alpha Research Console</title>
+<style>
+/* ─────────────────────────────────────────────────────────────────────────
+   One file, no build, no CDN. Offline is a hard requirement, so the type
+   stack is system-only and every glyph is a plain unicode character.
+
+   COLOUR RULE: the heatmap ramp is the only chromatic scale in the app and it
+   encodes exactly one thing — magnitude. Verdicts are carried by glyph, weight
+   and word, never hue, so nothing competes with the ramp.
+   The ramp is a SINGLE blue hue with monotonically falling lightness
+   (0.905 → 0.338), validated rather than eyeballed. On dark it is deliberately
+   REVERSED so near-zero recedes into the surface; an automatic flip would make
+   the weakest cells the loudest thing on screen.
+   Every cell also prints its number — required relief for the low bins, which
+   sit under 3:1 against the surface by design.
+   ───────────────────────────────────────────────────────────────────────── */
+:root{
+  --font-ui:ui-sans-serif,-apple-system,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;
+  --font-mono:ui-monospace,"SF Mono","Cascadia Mono","JetBrains Mono",Menlo,Consolas,monospace;
+
+  --surface:#fcfcfb; --panel:#ffffff; --sunken:#f4f4f2;
+  --fg:#0b0b0b; --fg-muted:#52514e; --fg-faint:#8c8b85;
+  --border:#e2e1db; --border-strong:#c9c8c0;
+  --accent:#2a78d6;
+
+  --h0:#f1f0ee; --h1:#cde2fb; --h2:#9ec5f4; --h3:#6da7ec;
+  --h4:#3987e5; --h5:#256abf; --h6:#184f95; --h7:#0d366b;
+  --h0-fg:#8c8b85; --h1-fg:#123a52; --h2-fg:#0e3350; --h3-fg:#0b2c47;
+  --h4-fg:#ffffff; --h5-fg:#ffffff; --h6-fg:#ffffff; --h7-fg:#ffffff;
+
+  --s1:4px; --s2:8px; --s3:12px; --s4:16px; --s5:24px; --s6:32px;
+  --r-cell:3px; --r-ctl:4px; --r-card:6px;
+  --shadow-card:0 1px 2px rgba(0,0,0,.06),0 4px 12px rgba(0,0,0,.06);
+  --shadow-overlay:0 16px 48px rgba(0,0,0,.18);
+  --scrim:rgba(9,11,16,.55);
+}
+@media (prefers-color-scheme:dark){
+  :root:not([data-theme="light"]){
+    --surface:#1a1a19; --panel:#212120; --sunken:#161615;
+    --fg:#ffffff; --fg-muted:#c3c2b7; --fg-faint:#8a8980;
+    --border:#33332f; --border-strong:#4a4a44; --accent:#3987e5;
+    --h0:#232322; --h1:#0d366b; --h2:#184f95; --h3:#256abf;
+    --h4:#3987e5; --h5:#6da7ec; --h6:#9ec5f4; --h7:#cde2fb;
+    --h0-fg:#6e6d66; --h1-fg:#cde2fb; --h2-fg:#e8f1fd; --h3-fg:#ffffff;
+    --h4-fg:#ffffff; --h5-fg:#0b2c47; --h6-fg:#0e3350; --h7-fg:#0d366b;
+    --shadow-card:0 1px 2px rgba(0,0,0,.5),0 4px 16px rgba(0,0,0,.4);
+    --shadow-overlay:0 16px 48px rgba(0,0,0,.55);
+  }
+}
+:root[data-theme="dark"]{
+  --surface:#1a1a19; --panel:#212120; --sunken:#161615;
+  --fg:#ffffff; --fg-muted:#c3c2b7; --fg-faint:#8a8980;
+  --border:#33332f; --border-strong:#4a4a44; --accent:#3987e5;
+  --h0:#232322; --h1:#0d366b; --h2:#184f95; --h3:#256abf;
+  --h4:#3987e5; --h5:#6da7ec; --h6:#9ec5f4; --h7:#cde2fb;
+  --h0-fg:#6e6d66; --h1-fg:#cde2fb; --h2-fg:#e8f1fd; --h3-fg:#ffffff;
+  --h4-fg:#ffffff; --h5-fg:#0b2c47; --h6-fg:#0e3350; --h7-fg:#0d366b;
+  --shadow-card:0 1px 2px rgba(0,0,0,.5),0 4px 16px rgba(0,0,0,.4);
+  --shadow-overlay:0 16px 48px rgba(0,0,0,.55);
+}
+
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:var(--font-ui);font-size:14px;line-height:1.6;
+  background:var(--surface);color:var(--fg);
+  -webkit-font-smoothing:antialiased;font-variant-numeric:tabular-nums}
+.mono{font-family:var(--font-mono)}
+.muted{color:var(--fg-muted)} .faint{color:var(--fg-faint)}
+.caps{font-size:11px;line-height:16px;letter-spacing:.04em;text-transform:uppercase;
+  font-weight:500;color:var(--fg-muted)}
+button{font:inherit;color:inherit;background:none;border:0;cursor:pointer}
+.btn{border:1px solid var(--border-strong);border-radius:var(--r-ctl);
+  padding:5px 10px;font-size:12px;background:var(--panel);white-space:nowrap}
+.btn:hover{border-color:var(--fg-muted)}
+.btn kbd{font-family:var(--font-mono);font-size:10px;color:var(--fg-faint);margin-left:5px}
+.btn.primary{background:var(--accent);border-color:var(--accent);color:#fff}
+.btn.primary kbd{color:rgba(255,255,255,.7)}
+.hide{display:none!important}
+.spacer{flex:1}
+
+header{position:sticky;top:0;z-index:40;background:var(--surface);
+  border-bottom:1px solid var(--border)}
+.topbar{height:48px;display:flex;align-items:center;gap:var(--s5);
+  padding:0 var(--s5);max-width:1440px;margin:0 auto}
+.brand{font-weight:600;letter-spacing:-.01em}
+nav{display:flex;gap:2px}
+nav button{padding:5px 10px;border-radius:var(--r-ctl);font-size:13px;color:var(--fg-muted);
+  transition:background .12s ease-out,color .12s ease-out}
+nav button:hover{background:var(--sunken);color:var(--fg)}
+nav button:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
+nav button[aria-current="page"]{background:var(--sunken);color:var(--fg);font-weight:500;
+  box-shadow:inset 0 -2px 0 var(--accent)}
+.stat-strip{display:flex;gap:var(--s1);font-size:12px;color:var(--fg-muted)}
+.stat-strip button{padding:4px 8px;border-radius:var(--r-ctl);color:var(--fg-muted);
+  font-size:12px;white-space:nowrap;transition:background .12s ease-out,color .12s ease-out}
+.stat-strip button:hover{background:var(--sunken);color:var(--fg)}
+.stat-strip button:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
+.stat-strip b{color:var(--fg);font-weight:600}
+
+/* The copy strip. Docked under the topbar and it survives alt-tab, because the
+   operator is physically in another window filling BRAIN's six dropdowns. */
+#armed{display:none;border-bottom:1px solid var(--border);background:var(--sunken)}
+#armed.on{display:block}
+.armed-inner{max-width:1440px;margin:0 auto;padding:var(--s2) var(--s5);
+  display:flex;align-items:center;gap:var(--s3);flex-wrap:wrap}
+.chip{border:1px solid var(--border-strong);border-radius:999px;padding:2px 10px;
+  font-size:12px;background:var(--panel);cursor:pointer;user-select:none}
+.chip.done{opacity:.45;text-decoration:line-through}
+.chip b{font-family:var(--font-mono);font-weight:500}
+
+main{max-width:1440px;margin:0 auto;padding:var(--s5)}
+.cols{display:grid;grid-template-columns:minmax(0,1fr) 320px;gap:var(--s6);align-items:start}
+@media (max-width:1180px){.cols{grid-template-columns:minmax(0,1fr)}}
+.panel{background:var(--panel);border:1px solid var(--border);
+  border-radius:var(--r-card);padding:var(--s4)}
+.panel+.panel{margin-top:var(--s3)}
+.panel h3{font-size:11px;line-height:16px;letter-spacing:.04em;text-transform:uppercase;
+  font-weight:500;color:var(--fg-muted);margin-bottom:var(--s2)}
+
+.verdict{padding:var(--s3) 0 var(--s5)}
+.verdict .big{font-size:32px;line-height:38px;font-weight:600;letter-spacing:-.02em}
+.verdict p{color:var(--fg-muted);margin-top:var(--s1)}
+
+.card{background:var(--panel);border:1px solid var(--border);border-radius:var(--r-card);
+  margin-bottom:var(--s3);position:relative;overflow:hidden}
+.card.focus{border-color:var(--border-strong);box-shadow:var(--shadow-card)}
+.card.focus::before{content:"";position:absolute;left:0;top:0;bottom:0;width:2px;
+  background:var(--accent)}
+.card-body{display:grid;grid-template-columns:auto minmax(0,1fr);gap:var(--s5);padding:var(--s4)}
+@media (max-width:900px){.card-body{grid-template-columns:minmax(0,1fr)}}
+.collapsed{padding:var(--s3) var(--s4);display:flex;gap:var(--s4);align-items:baseline;
+  font-size:13px;cursor:pointer}
+.collapsed .sh{font-family:var(--font-mono);font-weight:600;min-width:44px}
+.collapsed .ex{font-family:var(--font-mono);color:var(--fg-muted);overflow:hidden;
+  text-overflow:ellipsis;white-space:nowrap;flex:1}
+
+.expr{font-family:var(--font-mono);font-size:16px;line-height:24px;
+  background:var(--sunken);border:1px solid var(--border);border-radius:var(--r-ctl);
+  padding:var(--s2) var(--s3);word-break:break-all}
+.settings-line{display:flex;gap:var(--s2);flex-wrap:wrap;margin-top:var(--s2);
+  font-size:12px;color:var(--fg-muted);font-family:var(--font-mono)}
+.settings-line span{background:var(--sunken);border-radius:var(--r-ctl);padding:1px 7px}
+
+.metrics{display:flex;gap:var(--s5);margin-top:var(--s4);flex-wrap:wrap}
+.metric .k{font-size:11px;letter-spacing:.04em;text-transform:uppercase;color:var(--fg-muted)}
+.metric .v{font-family:var(--font-mono);font-size:20px;line-height:28px;font-weight:600}
+/* Sharpe and plateau ratio get identical type size. That equality IS the
+   product's argument made visible: the neighbourhood ratio is not a footnote
+   to Sharpe, it is the co-equal decision variable. */
+.metric.hero .v{font-size:28px;line-height:34px}
+.metric .sub{font-size:11px;color:var(--fg-faint);font-family:var(--font-mono)}
+
+.gates{display:flex;gap:var(--s3);align-items:center;flex-wrap:wrap;
+  margin-top:var(--s4);padding-top:var(--s3);border-top:1px solid var(--border);font-size:12px}
+.gate{color:var(--fg-muted)} .gate.ok{color:var(--fg);font-weight:500}
+.actions{margin-left:auto;display:flex;gap:var(--s2)}
+
+.hm-wrap{position:relative}
+.hm{border-collapse:separate;border-spacing:2px}
+.hm th{font-size:11px;font-weight:500;color:var(--fg-muted);font-family:var(--font-mono);padding:0 2px}
+.hm th.rh{text-align:right;padding-right:6px}
+.hm td{padding:0}
+.cell{width:46px;height:34px;border-radius:var(--r-cell);display:flex;
+  align-items:center;justify-content:center;font-family:var(--font-mono);
+  font-size:13px;font-weight:500;cursor:pointer;position:relative;transition:opacity .12s ease-out}
+.cell.big{width:64px;height:46px;font-size:15px}
+/* A hole in the grid, not a cold value — same box size so nothing reflows as
+   the surface fills in. */
+.cell.hole{background:transparent;border:1px dashed var(--border-strong);
+  color:var(--fg-faint);font-weight:400;cursor:default}
+/* Failed a BRAIN check → corner notch. Shape, not colour, so it survives
+   greyscale, colour-blindness and print. */
+.cell.failed{clip-path:polygon(0 0,calc(100% - 9px) 0,100% 9px,100% 100%,0 100%);
+  font-weight:400;opacity:.85}
+.cell.promoted::after{content:"";position:absolute;left:3px;top:3px;width:5px;height:5px;
+  background:currentColor;border-radius:1px}
+.cell.sel{outline:2px solid var(--fg);outline-offset:2px;z-index:2}
+.cell.nb{outline:1px dashed var(--fg-muted);outline-offset:1px}
+.dim .cell:not(.sel):not(.nb){opacity:.4}
+.hm-cap{font-size:11px;color:var(--fg-faint);font-family:var(--font-mono);margin-bottom:var(--s1)}
+/* The coastline: one stroke enclosing every cell at or above the haircut bar.
+   A connected continent reads as "ridge that clears the bar"; an island reads
+   as a fluke. Two of the three tests collapse into one shape. */
+.coast{position:absolute;inset:0;pointer-events:none;overflow:visible}
+.coast path{fill:none;stroke:var(--fg);stroke-width:2;opacity:.8;stroke-linejoin:round}
+
+.stepper{display:flex;align-items:center;gap:var(--s2);margin-top:var(--s2);
+  font-size:11px;color:var(--fg-muted);font-family:var(--font-mono);flex-wrap:wrap}
+.dots{letter-spacing:1px}
+.legend{display:flex;align-items:center;gap:2px;margin-top:var(--s2);font-size:10px;
+  color:var(--fg-faint);font-family:var(--font-mono);flex-wrap:wrap}
+.legend i{width:15px;height:9px;border-radius:2px;display:inline-block}
+
+details.acc{margin-top:var(--s5);border-top:1px solid var(--border);padding-top:var(--s3)}
+details.acc summary{cursor:pointer;font-size:13px;color:var(--fg-muted);list-style:none;user-select:none}
+details.acc summary::-webkit-details-marker{display:none}
+details.acc summary::before{content:"▸ ";color:var(--fg-faint)}
+details.acc[open] summary::before{content:"▾ "}
+.miss{display:grid;grid-template-columns:56px minmax(0,1fr) auto;gap:var(--s3);
+  align-items:baseline;padding:var(--s2) 0;border-bottom:1px solid var(--border);font-size:12px}
+.miss .sh{font-family:var(--font-mono);font-weight:600;font-size:14px}
+.miss .why{color:var(--fg-muted)}
+.miss .ex{font-family:var(--font-mono);color:var(--fg-faint);font-size:11px;display:block;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+
+.kv{display:flex;justify-content:space-between;gap:8px;font-size:12px;padding:2px 0}
+.kv b{font-family:var(--font-mono);font-weight:500}
+.kv.hero{padding-top:6px;margin-top:4px;border-top:1px solid var(--border)}
+.kv.hero b{font-size:16px}
+.cap{height:4px;background:var(--sunken);border-radius:2px;overflow:hidden;margin:6px 0 2px}
+.cap i{display:block;height:100%;background:var(--fg-muted)}
+.bar{height:6px;background:var(--sunken);border-radius:3px;overflow:hidden;margin:var(--s2) 0}
+.bar i{display:block;height:100%;background:var(--accent);transition:width .3s ease-out}
+.sug{width:100%;text-align:left;padding:var(--s2) 0;border-bottom:1px solid var(--border);
+  font-size:12px;cursor:pointer}
+.sug:last-child{border-bottom:0}
+.sug:hover{background:var(--sunken)}
+.sug{overflow-wrap:anywhere}
+.sug .f{font-family:var(--font-mono);font-weight:500}
+.sug .r{color:var(--fg-faint);font-size:11px;display:block}
+
+.scrim{position:fixed;inset:0;background:var(--scrim);z-index:60;display:none;
+  padding:var(--s5);overflow:auto}
+.scrim.on{display:block}
+.sheet{max-width:1200px;margin:0 auto;background:var(--panel);
+  border:1px solid var(--border-strong);border-radius:var(--r-card);
+  box-shadow:var(--shadow-overlay);padding:var(--s5)}
+.sheet h2{font-size:16px;font-weight:600}
+.wall{display:flex;gap:var(--s2);flex-wrap:wrap;margin:var(--s4) 0}
+.mini{border:1px solid var(--border);border-radius:var(--r-ctl);padding:5px;cursor:pointer;
+  background:var(--sunken)}
+.mini.on{border-color:var(--fg);box-shadow:0 0 0 1px var(--fg)}
+.mini .g{display:grid;grid-template-columns:repeat(6,7px);gap:1px}
+.mini .g i{height:7px;border-radius:1px;display:block}
+.mini .lab{font-size:9px;color:var(--fg-faint);font-family:var(--font-mono);margin-top:3px}
+
+#tip{position:fixed;z-index:80;display:none;pointer-events:none;min-width:230px;
+  background:var(--panel);border:1px solid var(--border-strong);border-radius:var(--r-ctl);
+  box-shadow:var(--shadow-overlay);padding:var(--s2) var(--s3);font-size:12px}
+#tip .r{display:flex;justify-content:space-between;gap:var(--s4)}
+#tip .r b{font-family:var(--font-mono);font-weight:500}
+#tip hr{border:0;border-top:1px solid var(--border);margin:var(--s1) 0}
+
+#toast{position:fixed;left:50%;bottom:24px;transform:translateX(-50%);z-index:90;
+  background:var(--fg);color:var(--surface);padding:var(--s2) var(--s4);
+  border-radius:var(--r-ctl);font-size:13px;display:none;max-width:80vw}
+#toast.on{display:flex;align-items:center;gap:12px}
+.toast-act{border:1px solid currentColor;border-radius:var(--r-ctl);padding:2px 10px;
+  font-size:12px;color:inherit;background:none}
+table.data{width:100%;border-collapse:collapse;font-size:12px}
+table.data th{text-align:left;font-size:11px;letter-spacing:.04em;text-transform:uppercase;
+  color:var(--fg-muted);font-weight:500;padding:var(--s2);border-bottom:1px solid var(--border-strong)}
+table.data td{padding:var(--s2);border-bottom:1px solid var(--border);font-family:var(--font-mono)}
+table.data td.t{font-family:var(--font-ui)}
+</style>
+</head>
+<body>
+
+<header>
+  <div class="topbar">
+    <span class="brand">◆ alpha</span>
+    <nav>
+      <button data-view="morning" aria-current="page">Morning</button>
+      <button data-view="portfolio">Submitted</button>
+      <button data-view="datasets">Datasets</button>
+    </nav>
+    <span class="spacer"></span>
+    <span class="stat-strip" id="stats"></span>
+    <button class="btn" id="themeBtn" title="Theme: follow system">◐ auto</button>
+    <button class="btn" id="helpBtn">?</button>
+  </div>
+  <div id="armed">
+    <div class="armed-inner">
+      <span class="caps">⧉ copied — paste into BRAIN, then press <b>s</b></span>
+      <span id="armedChips" style="display:flex;gap:6px;flex-wrap:wrap"></span>
+      <span class="spacer"></span>
+      <button class="btn" onclick="disarm()">Esc clear</button>
+    </div>
+  </div>
+</header>
+
+<main>
+  <section id="view-morning">
+    <div class="cols">
+      <div>
+        <div class="verdict" id="verdict"><div class="big faint">Loading…</div></div>
+        <div id="queue"></div>
+        <details class="acc" id="missAcc">
+          <summary id="missSummary">Cleared BRAIN's checks but not promoted</summary>
+          <div id="misses"></div>
+        </details>
+      </div>
+      <aside>
+        <div class="panel"><h3>Runs</h3><div id="runs"></div></div>
+        <div class="panel"><h3>Spend</h3><div id="spend"></div></div>
+        <div class="panel">
+          <h3>Next up — allocator</h3>
+          <div id="sugs"></div>
+          <p class="faint" style="font-size:11px;margin-top:8px">
+            Capped at 20% per dataset — concentrating produces correlated alphas,
+            and BRAIN pays only for uncorrelated ones.</p>
+        </div>
+      </aside>
+    </div>
+  </section>
+
+  <section id="view-library" class="hide">
+    <div class="panel">
+      <div style="display:flex;align-items:baseline;gap:12px;margin-bottom:10px">
+        <h3 style="margin:0">Library</h3>
+        <span class="faint" id="libCount" style="font-size:12px"></span>
+        <span class="spacer"></span>
+        <input id="libQ" placeholder="search expression or family…"
+          style="font:inherit;font-size:12px;padding:5px 10px;border:1px solid var(--border-strong);
+                 border-radius:var(--r-ctl);background:var(--panel);color:var(--fg);width:280px">
+      </div>
+      <table class="data" id="libTable"></table>
+    </div>
+  </section>
+
+  <section id="view-portfolio" class="hide">
+    <div class="panel">
+      <h3>What you put forward</h3>
+      <p class="muted" style="font-size:12px;margin-bottom:12px">
+        Submitted alphas, and ones still cleared and waiting. Every submission makes
+        the next one harder — BRAIN pays only for uncorrelated alphas.</p>
+      <table class="data" id="pfTable"></table>
+    </div>
+  </section>
+
+  <section id="view-datasets" class="hide">
+    <div class="panel">
+      <h3>Crowding and hit-rate</h3>
+      <p class="muted" style="font-size:12px;margin-bottom:12px">
+        Uncrowded data is where un-arbitraged signal survives. Price-volume averages
+        ~18,000 users per field; fundamentals ~130.</p>
+      <table class="data" id="dsTable"></table>
+    </div>
+  </section>
+</main>
+
+<div class="scrim" id="surfaceOverlay">
+  <div class="sheet">
+    <div style="display:flex;align-items:baseline;gap:12px">
+      <h2 id="soTitle"></h2><span class="spacer"></span>
+      <button class="btn" onclick="closeSurface()">Esc</button>
+    </div>
+    <div class="wall" id="soWall"></div>
+    <div id="soGrid"></div>
+  </div>
+</div>
+
+<div class="scrim" id="helpOverlay">
+  <div class="sheet" style="max-width:560px">
+    <h2>Keyboard</h2>
+    <table class="data" id="helpTable" style="margin-top:12px"></table>
+    <p class="muted" style="margin-top:16px;font-size:12px">
+      Simulation is automated. <b>Submission is not</b> — nothing here contacts the
+      platform to submit. <b>s</b> records that <em>you</em> did.</p>
+    <div style="margin-top:16px"><button class="btn" onclick="closeHelp()">Close</button></div>
+  </div>
+</div>
+
+<div id="tip"></div>
+<div id="toast"></div>
+
+<script>
+"use strict";
+/* Polling, not sockets — matching the backend's documented decision. A poll of
+   a small JSON payload cannot desynchronise the way a stream can, and at this
+   scale it is not a bottleneck. */
+const S={summary:null,surfaces:{},sugs:[],datasets:[],fams:[],spend:null,portfolio:[],libFilter:{},siOwner:null,seenDone:new Set(),booted:false,
+  i:0,si:0,cell:null,metric:"sharpe",residual:false,dim:true,armed:null,view:"morning"};
+const $=s=>document.querySelector(s);
+async function api(p,o){
+  const res=await fetch("/api"+p,o);
+  const body=await res.json().catch(()=>({}));
+  if(!res.ok){
+    // Previously every POST toasted success regardless of outcome, so a
+    // rejected "mark submitted" looked identical to a recorded one.
+    const msg=body.detail||body.message||`${res.status} ${res.statusText}`;
+    const err=new Error(typeof msg==="string"?msg:JSON.stringify(msg));
+    err.status=res.status; err.body=body; throw err;
+  }
+  return body;
+}
+const fx=(v,n=2)=>(v===null||v===undefined||Number.isNaN(v))?"·":Number(v).toFixed(n);
+
+/* Absolute bins, never per-family normalised: a dead family must not be
+   coloured like a live one, and a surface must look the same tomorrow. */
+const BINS=[0,.35,.70,1.00,1.25,1.60,2.00];
+function bin(v){ if(v===null||v===undefined) return -1;
+  if(v<0) return 0; let i=0; while(i<BINS.length&&v>=BINS[i]) i++; return Math.min(i,7); }
+
+async function boot(){
+  const f=await api("/ui/families");
+  S.fams=(f.families||[]).map(x=>x.family_key);
+  await Promise.all(S.fams.map(async k=>{
+    S.surfaces[k]=await api("/ui/surfaces?family="+encodeURIComponent(k));}));
+  await load();
+  await poll();          // seed seenDone with pre-existing jobs
+  S.booted=true;
+  setInterval(poll,2500);
+}
+async function load(){
+  try{
+    const [sum,sug,sp]=await Promise.all([api("/ui/summary"),api("/ui/suggestions?n=6"),api("/ui/spend")]);
+    S.summary=sum; S.sugs=sug.suggestions||[]; S.spend=sp;
+    attachFamilies(); render();
+  }catch(err){
+    // Silence here used to render as an empty page with no explanation.
+    $("#verdict").innerHTML=`<div class="big">Can't reach the backend.</div>
+      <p>${String(err).slice(0,160)}<br>Is the server still running?
+      <code>python -m uvicorn app.main:app</code></p>`;
+  }
+}
+function attachFamilies(){
+  const all=(S.summary.shortlist||[]).concat(S.summary.near_misses||[]);
+  all.forEach(r=>{ if(r._family) return;
+    r._family=S.fams.find(k=>(S.surfaces[k]?.surfaces||[]).some(
+      s=>Object.values(s.cells).some(c=>c.alpha_id===r.alpha_id)));});
+}
+async function poll(){
+  let runs; try{ runs=await api("/ui/runs"); }catch{ return; }
+  const active=(runs.jobs||[]).some(j=>j.status==="running"||j.status==="queued");
+  // A run takes 15+ minutes; the operator is elsewhere. Announce completion
+  // rather than making them notice a bar stopped moving.
+  (runs.jobs||[]).forEach(j=>{
+    if(S.seenDone.has(j.id)||j.status==="running"||j.status==="queued") return;
+    S.seenDone.add(j.id);
+    if(!S.booted) return;               // don't replay history on first load
+    if(j.status==="done"){
+      const r=j.result||{};
+      toast(`${j.label} finished — ${r.simulated??r.passed_all_checks??0} simulated`
+        +(r.passed_all_checks?`, ${r.passed_all_checks} cleared every check`:""));
+      document.title="✓ run finished — Alpha Console";
+      setTimeout(()=>document.title="Alpha Research Console",8000);
+      load();
+    } else if(j.status==="failed") toast(`${j.label} failed — ${j.error||""}`.slice(0,140));
+  });
+  if(S.summary){ S.summary.jobs=runs.jobs; renderRuns(); }
+  if(!active) return;
+  // run_batch commits each result as it lands, so re-pulling shows the ridge
+  // forming — and shows exactly what is committed, nothing speculative.
+  for(const k of S.fams) S.surfaces[k]=await api("/ui/surfaces?family="+encodeURIComponent(k));
+  S.spend=await api("/ui/spend"); renderSpend();
+  renderQueue();
+}
+
+function render(){renderStats();renderVerdict();renderQueue();renderMisses();renderRuns();renderSugs();renderSpend();}
+
+/* Each counter is a destination. They read as navigation, so they behave as
+   navigation — a number that invites a click and does nothing is worse than no
+   number at all. */
+const STATS=[
+  ["alphas",   c=>c.alphas,               ()=>goLibrary({}),                 "every candidate ever built"],
+  ["simulated",c=>c.simulated,            ()=>goLibrary({simulated:1}),      "candidates with a BRAIN result"],
+  ["pass checks",c=>c.passing,            ()=>goLibrary({passed:1}),         "cleared every BRAIN check"],
+  ["promoted", ()=>S.summary.shortlist_total ?? S.summary.shortlist.length, ()=>go("morning"),            "survived the plateau filter"],
+  ["submitted",c=>c.submitted,            ()=>go("portfolio"),               "you sent these to BRAIN"],
+];
+function renderStats(){
+  const c=S.summary.counts, el=$("#stats"); el.innerHTML="";
+  STATS.forEach(([label,val,act,title],i)=>{
+    const b=document.createElement("button");
+    b.innerHTML=`<b>${val(c)}</b> ${label}`;
+    b.title=title; b.onclick=act;
+    el.appendChild(b);
+  });
+}
+function renderVerdict(){
+  const n=S.summary.shortlist_total ?? S.summary.shortlist.length, c=S.summary.counts;
+  const bar=S.summary.shortlist[0]?.haircut_bar??S.summary.near_misses[0]?.haircut_bar;
+  if(n===0 && c.simulated===0){
+    // A first-time operator has not failed — they have not started. Telling them
+    // "nothing survived" is simply false, and it is the first thing they'd see.
+    $("#verdict").innerHTML=`<div class="big">Nothing simulated yet.</div>
+      <p>${c.alphas} candidates are built and waiting. Pick a field from
+      <b>Next up</b> on the right, or press <b>n</b>, to run the first batch.</p>`;
+    $("#queue").innerHTML=""; return;
+  }
+  if(n===0){
+    // The zero-survivor morning is statistically the normal one, so it gets a
+    // real layout and auto-expands the near-misses rather than showing a void.
+    $("#verdict").innerHTML=`<div class="big">Nothing survived the filter.</div>
+      <p>${c.simulated} simulated · ${c.passing} cleared BRAIN's checks · 0 sat on a plateau${
+        bar?` · bar was ${fx(bar)}`:""}.<br>That is the normal outcome for most batches.</p>`;
+    $("#missAcc").open=true;
+  }else{
+    $("#verdict").innerHTML=`<div class="big">${n} survived.</div>
+      <p>From ${c.simulated} simulated across ${c.families} famil${c.families===1?"y":"ies"}${
+        bar?`. Bar was ${fx(bar)} after the multiple-testing haircut`:""}.</p>`;
+  }
+}
+function cur(){return S.summary?.shortlist?.[S.i];}
+function packOf(r){return r?S.surfaces[r._family]:null;}
+function surfaceFor(r){
+  const p=packOf(r); if(!p||!p.surfaces.length) return null;
+  const owner=p.surfaces.findIndex(s=>Object.values(s.cells).some(c=>c.alpha_id===r.alpha_id));
+  // The surface CONTAINING this alpha, not surfaces[0]. Rendering another
+  // structure's grid beside this candidate's metrics is worse than rendering
+  // nothing: it is plateau evidence for a different alpha.
+  if(owner<0) return p.surfaces[Math.min(S.si,p.surfaces.length-1)]||null;
+  if(S.siOwner!==r.alpha_id){ S.si=owner; S.siOwner=r.alpha_id; }
+  return p.surfaces[Math.min(S.si,p.surfaces.length-1)];
+}
+
+function renderQueue(){
+  const q=$("#queue"); q.innerHTML="";
+  const list=S.summary.shortlist||[];
+  if(!list.length) return;
+  list.forEach((row,idx)=>{
+    const card=document.createElement("div");
+    card.className="card"+(idx===S.i?" focus":"");
+    if(idx===S.i) card.appendChild(fullCard(row));
+    else{
+      const c=document.createElement("div"); c.className="collapsed";
+      c.innerHTML=`<span class="sh">${fx(row.sharpe)}</span>
+        <span class="muted" style="font-size:12px">plateau ${fx(row.plateau_ratio)}</span>
+        <span class="ex">${row.expression}</span>`;
+      c.onclick=()=>{S.i=idx;S.cell=null;S.si=0;renderQueue();};
+      card.appendChild(c);
+    }
+    q.appendChild(card);
+  });
+}
+
+function fullCard(row){
+  const wrap=document.createElement("div"); wrap.className="card-body";
+  const pack=packOf(row), surf=surfaceFor(row);
+  const left=document.createElement("div");
+  if(pack&&surf){
+    left.appendChild(heatmap(pack,surf,row,false));
+    const n=pack.surfaces.length, filled=pack.surfaces.filter(s=>s.simulated>0).length;
+    const dots=pack.surfaces.map(s=>s.simulated===0?"○":
+      (Object.values(s.cells).some(c=>c.promoted)?"●":"◐")).join("");
+    const step=document.createElement("div"); step.className="stepper";
+    step.innerHTML=`<button class="btn" onclick="stepSurface(-1)">◂</button>
+      <span>${(S.si%n)+1}/${n}</span><button class="btn" onclick="stepSurface(1)">▸</button>
+      <span class="dots">${dots}</span><span class="faint">${filled}/${n} explored</span>`;
+    left.appendChild(step);
+    left.appendChild(legend(row.haircut_bar));
+  }else{
+    left.innerHTML=`<p class="faint" style="font-size:12px">no surface data</p>`;
+  }
+  const right=document.createElement("div");
+  const s=row.settings||{};
+  right.innerHTML=`
+    <div class="caps" style="margin-bottom:6px">${row._family||"—"} · #${row.alpha_id}${
+      row.status==="submitted"?' · <b>submitted</b>':""}</div>
+    <div class="expr">${row.expression}</div>
+    <div class="settings-line"><span>${s.region}</span><span>${s.universe}</span>
+      <span>delay ${s.delay}</span><span>${s.neutralization||"NONE"}</span>
+      <span>decay ${s.decay??0}</span><span>trunc ${s.truncation??"—"}</span></div>
+    <div class="metrics">
+      <div class="metric hero"><div class="k">Sharpe</div><div class="v">${fx(row.sharpe)}</div></div>
+      <div class="metric hero"><div class="k">Plateau</div><div class="v">${fx(row.plateau_ratio)}</div>
+        <div class="sub">nb ${fx(row.neighbour_median_sharpe)} · ${row.neighbours_simulated ?? "?"}/${
+          row.neighbours_possible ?? "?"} neighbours</div></div>
+      <div class="metric"><div class="k">Fitness</div><div class="v">${fx(row.fitness)}</div></div>
+      <div class="metric"><div class="k">Bar</div><div class="v">${fx(row.haircut_bar)}</div>
+        <div class="sub">multiple-testing</div></div>
+    </div>
+    <div class="gates">
+      <span class="gate ${row.is_plateau?"ok":""}">${row.is_plateau?"✓":"✗"} plateau</span>
+      <span class="gate ${row.clears_bar?"ok":""}">${row.clears_bar?"✓":"✗"} BRAIN checks</span>
+      <span class="gate ${row.sharpe>=row.haircut_bar?"ok":""}">${row.sharpe>=row.haircut_bar?"✓":"✗"} above bar</span>
+      <span class="actions">
+        <button class="btn" onclick="copyRow()">⧉ copy<kbd>c</kbd></button>
+        <button class="btn primary" onclick="mark('submitted')">submitted<kbd>s</kbd></button>
+        <button class="btn" onclick="mark('discarded')">drop<kbd>x</kbd></button></span>
+    </div>`;
+  wrap.append(left,right); return wrap;
+}
+
+function heatmap(pack,surf,row,big){
+  const box=document.createElement("div"); box.className="hm-wrap"+(S.dim?" dim":"");
+  const L=surf.label;
+  const cap=document.createElement("div"); cap.className="hm-cap";
+  cap.textContent=`decay↓ / win→   ${L.ts} · ${L.cs||"none"} · group ${L.group||"none"} · ${L.neutralization}`;
+  box.appendChild(cap);
+  const t=document.createElement("table"); t.className="hm";
+  const head=document.createElement("tr");
+  head.innerHTML="<th></th>"+pack.windows.map(w=>`<th>${w}</th>`).join("");
+  t.appendChild(head);
+  const sel=S.cell||cellOf(surf,row.alpha_id);
+  const nbs=sel?neighbours(sel,pack):[];
+  pack.decays.forEach(d=>{
+    const tr=document.createElement("tr");
+    const th=document.createElement("th"); th.className="rh"; th.textContent=d; tr.appendChild(th);
+    pack.windows.forEach(w=>{
+      const td=document.createElement("td");
+      const c=surf.cells[`${w}:${d}`];
+      const el=document.createElement("div"); el.className="cell"+(big?" big":"");
+      if(!c||!c.simulated){ el.classList.add("hole"); el.textContent="·";
+        if(c) el.title=`window ${w} · decay ${d} — not simulated`; }
+      else{
+        if(S.residual){
+          const r=residual(c,w,d,surf,pack);
+          const b=r===null?0:bin(Math.abs(r)*2);
+          el.style.background=`var(--h${b})`; el.style.color=`var(--h${b}-fg)`;
+          el.textContent=r===null?"·":(r>0?"+":"")+fx(r);
+        }else{
+          const v=c[S.metric]; const b=bin(v);
+          el.style.background=`var(--h${b<0?0:b})`; el.style.color=`var(--h${b<0?0:b}-fg)`;
+          el.textContent=fx(v);
+        }
+        if(!c.passed) el.classList.add("failed");
+        if(c.promoted) el.classList.add("promoted");
+        if(sel&&sel.w===w&&sel.d===d) el.classList.add("sel");
+        else if(nbs.some(n=>n.w===w&&n.d===d)) el.classList.add("nb");
+        el.onmouseenter=e=>showTip(e,c,w,d,surf,pack);
+        el.onmouseleave=hideTip;
+        el.onclick=()=>{S.cell={w,d};renderQueue();};
+      }
+      td.appendChild(el); tr.appendChild(td);
+    });
+    t.appendChild(tr);
+  });
+  box.appendChild(t);
+  requestAnimationFrame(()=>drawCoast(box,t,surf,pack,row.haircut_bar));
+  return box;
+}
+function cellOf(surf,id){for(const k in surf.cells) if(surf.cells[k].alpha_id===id){
+  const [w,d]=k.split(":").map(Number); return {w,d};} return null;}
+function neighbours(sel,pack){
+  const wi=pack.windows.indexOf(sel.w),di=pack.decays.indexOf(sel.d),out=[];
+  [-1,1].forEach(s=>{
+    if(pack.windows[wi+s]!==undefined) out.push({w:pack.windows[wi+s],d:sel.d});
+    if(pack.decays[di+s]!==undefined) out.push({w:sel.w,d:pack.decays[di+s]});});
+  return out;
+}
+function residual(c,w,d,surf,pack){
+  const vs=neighbours({w,d},pack).map(n=>surf.cells[`${n.w}:${n.d}`])
+    .filter(x=>x&&x.simulated&&x[S.metric]!==null).map(x=>x[S.metric]);
+  if(!vs.length||c[S.metric]===null) return null;
+  vs.sort((a,b)=>a-b);
+  const m=vs.length%2?vs[(vs.length-1)/2]:(vs[vs.length/2-1]+vs[vs.length/2])/2;
+  return c[S.metric]-m;
+}
+function drawCoast(box,table,surf,pack,bar){
+  box.querySelectorAll("svg.coast").forEach(n=>n.remove());
+  if(!bar||S.residual||S.metric!=="sharpe") return;
+  const br=box.getBoundingClientRect(); let d="";
+  const on=c=>c&&c.simulated&&c.sharpe!==null&&c.sharpe>=bar;
+  pack.decays.forEach((dy,ri)=>pack.windows.forEach((w,ci)=>{
+    const c=surf.cells[`${w}:${dy}`]; if(!on(c)) return;
+    const el=table.rows[ri+1]?.cells[ci+1]?.firstChild; if(!el) return;
+    const r=el.getBoundingClientRect();
+    const x=r.left-br.left,y=r.top-br.top,W=r.width,H=r.height;
+    if(!on(surf.cells[`${w}:${pack.decays[ri-1]}`])) d+=`M${x} ${y}h${W}`;
+    if(!on(surf.cells[`${w}:${pack.decays[ri+1]}`])) d+=`M${x} ${y+H}h${W}`;
+    if(!on(surf.cells[`${pack.windows[ci-1]}:${dy}`])) d+=`M${x} ${y}v${H}`;
+    if(!on(surf.cells[`${pack.windows[ci+1]}:${dy}`])) d+=`M${x+W} ${y}v${H}`;
+  }));
+  if(!d) return;
+  const svg=document.createElementNS("http://www.w3.org/2000/svg","svg");
+  svg.setAttribute("class","coast");
+  const p=document.createElementNS("http://www.w3.org/2000/svg","path");
+  p.setAttribute("d",d); svg.appendChild(p); box.appendChild(svg);
+}
+function legend(bar){
+  const l=document.createElement("div"); l.className="legend";
+  const labels=["<0","0",".35",".70","1.0","1.25","1.6","2+"];
+  l.innerHTML=labels.map((t,i)=>`<i style="background:var(--h${i})" title="${t}"></i>`).join("")
+    +`<span style="margin-left:6px">${labels.join("  ")}</span>`
+    +(bar?`<span style="margin-left:10px">▲ bar ${fx(bar)} · outlined region clears it</span>`:"");
+  return l;
+}
+function showTip(e,c,w,d,surf,pack){
+  const r=residual(c,w,d,surf,pack);
+  $("#tip").innerHTML=`<div class="faint" style="font-size:11px">window ${w} · decay ${d} · #${c.alpha_id}</div>
+    <div class="r"><span>Sharpe</span><b>${fx(c.sharpe)}</b></div>
+    <div class="r"><span>Fitness</span><b>${fx(c.fitness)}</b></div>
+    <div class="r"><span>Turnover</span><b>${fx(c.turnover)}</b></div><hr>
+    <div class="r"><span>vs neighbours</span><b>${r===null?"·":(r>0?"+":"")+fx(r)}</b></div>
+    <div class="faint" style="font-size:11px">${c.passed?"all BRAIN checks pass":"fails a BRAIN check"}
+      · SELF_CORRELATION pending until submission</div>`;
+  $("#tip").style.display="block"; moveTip(e);
+}
+function moveTip(e){const t=$("#tip");
+  let x=e.clientX+14,y=e.clientY+14;
+  if(x+250>innerWidth) x=e.clientX-256; if(y+170>innerHeight) y=e.clientY-176;
+  t.style.left=x+"px"; t.style.top=y+"px";}
+function hideTip(){$("#tip").style.display="none";}
+addEventListener("mousemove",e=>{if($("#tip").style.display==="block") moveTip(e);});
+
+function renderMisses(){
+  const m=S.summary.near_misses||[];
+  $("#missSummary").textContent=`Cleared BRAIN's checks but not promoted (${S.summary.near_misses_total ?? m.length})`;
+  $("#misses").innerHTML=m.length?m.map((r,i)=>{
+    const holes=missingNeighbours(r);
+    return `<div class="miss"><span class="sh">${fx(r.sharpe)}</span>
+      <span><span class="why">${(r.reasons||[]).join(" · ")}</span>
+        <span class="ex">${r.expression}</span></span>
+      <span>${holes.length?`<button class="btn" onclick="fillIdx(${i})">fill ${holes.length}
+        <kbd>~${Math.max(1,Math.ceil(holes.length/3)*2)}m</kbd></button>`:""}</span></div>`;
+  }).join(""):`<p class="faint" style="font-size:12px;padding:8px 0">none</p>`;
+}
+/* "surface incomplete" is recoverable: those candidates already exist, they
+   just have not been run. Four simulations turns "cannot judge" into a verdict. */
+function missingNeighbours(row){
+  const pack=packOf(row); if(!pack) return [];
+  for(const surf of pack.surfaces){
+    const sel=cellOf(surf,row.alpha_id); if(!sel) continue;
+    return neighbours(sel,pack).map(n=>surf.cells[`${n.w}:${n.d}`])
+      .filter(c=>c&&!c.simulated).map(c=>c.alpha_id);
+  }
+  return [];
+}
+function fillIdx(i){const r=S.summary.near_misses[i]; if(r) fill(missingNeighbours(r));}
+
+function renderRuns(){
+  const jobs=S.summary.jobs||[];
+  $("#runs").innerHTML=(jobs.length?jobs.slice(0,4).map(j=>`
+    <div style="margin-bottom:10px">
+      <div style="display:flex;justify-content:space-between;font-size:12px;gap:8px">
+        <b class="mono" style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${j.label}</b>
+        <span class="faint">${j.status}</span></div>
+      <div class="bar"><i style="width:${j.percent}%"></i></div>
+      <div class="faint" style="font-size:11px">${j.completed}/${j.total||"?"}${
+        j.eta_text?` · <b class="mono">${j.eta_text} left</b>`:""}${
+        j.elapsed_s?` · ${Math.round(j.elapsed_s/60)}m elapsed`:""}<br>${j.message||""}
+        ${j.error?`<br><span style="color:var(--fg)">${j.error}</span>`:""}</div></div>`).join("")
+    :`<p class="faint" style="font-size:12px">idle</p>`)
+    +`<p class="faint" style="font-size:11px;margin-top:4px">cap 3 concurrent — the platform's limit, not an error</p>`;
+}
+const usd=v=>v===null||v===undefined?"—":(v<0.01?"$"+v.toFixed(5):"$"+v.toFixed(2));
+const kfmt=n=>n>=1e6?(n/1e6).toFixed(1)+"M":n>=1e3?(n/1e3).toFixed(1)+"k":String(n);
+function renderSpend(){
+  const s=S.spend; if(!s) return;
+  const L=s.llm, M=s.simulations;
+  $("#spend").innerHTML=`
+    <div class="kv"><span class="muted">LLM total</span><b>${usd(L.total_usd)}</b></div>
+    <div class="kv"><span class="muted">last 24h</span><b>${usd(L.last_24h_usd)}</b></div>
+    <div class="kv"><span class="muted">tokens in / out</span>
+      <b>${kfmt(L.input_tokens)} / ${kfmt(L.output_tokens)}</b></div>
+    <div class="kv"><span class="muted">calls</span><b>${L.calls}</b></div>
+    ${(()=>{const paid=L.by_task.filter(r=>r.cost_usd>0);
+       const free=L.by_task.filter(r=>r.cost_usd<=0).reduce((a,r)=>a+r.calls,0);
+       return paid.slice(0,4).map(r=>`<div class="kv"><span class="faint" style="padding-left:8px">
+         ${r.task} <span style="opacity:.7">${r.model_id.split("/").pop()}</span></span>
+         <span class="faint mono">${usd(r.cost_usd)}</span></div>`).join("")
+       + (free?`<div class="kv"><span class="faint" style="padding-left:8px">
+         ${free} older calls, no cost recorded</span><span class="faint mono">—</span></div>`:"");})()}
+    <div class="kv hero"><span class="muted">per ${s.cost_per_alpha_basis} alpha</span>
+      <b>${usd(s.cost_per_alpha_usd)}</b></div>
+    <div class="kv hero" style="border-top:1px solid var(--border)">
+      <span class="muted">per simulation</span>
+      <b>${M.seconds_per_sim}s</b></div>
+    <div class="kv"><span class="faint" style="font-size:11px">${
+      M.seconds_per_sim_measured
+        ? `median of ${M.timing_sample} measured runs`
+        : "assumed — no timed runs yet"}</span>
+      <span class="faint mono" style="font-size:11px">${M.sims_per_hour}/hour</span></div>
+    <div class="cap" title="share of today's ~${M.daily_capacity.toLocaleString()} simulation capacity">
+      <i style="width:${Math.min(100,M.capacity_used_pct)}%"></i></div>
+    <div class="kv"><span class="faint" style="font-size:11px">BRAIN today</span>
+      <span class="faint mono" style="font-size:11px">${M.last_24h} / ${M.daily_capacity.toLocaleString()} sims
+      (${M.capacity_used_pct}%)</span></div>
+    <p class="faint" style="font-size:11px;margin-top:6px">
+      Simulations cost no money — the budget is the ${M.concurrency_cap}-concurrent cap
+      and ${M.seconds_per_sim}s each. A 384-candidate family is
+      ~${(384*M.seconds_per_sim/M.concurrency_cap/3600).toFixed(1)}h.</p>`;
+}
+function renderSugs(){
+  $("#sugs").innerHTML=S.sugs.map((s,i)=>`<button class="sug" onclick="launch(${i})">
+    <span class="f">${s.field_code}</span>${s.denominator?`<span class="faint"> / ${s.denominator}</span>`:""}
+    <span class="r">${s.reason}</span></button>`).join("")
+    ||`<p class="faint" style="font-size:12px">no suggestions</p>`;
+}
+
+function copyRow(){
+  const r=cur(); if(!r) return; const s=r.settings||{};
+  /* The caveats travel with the paste: if this lands in the operator's own log,
+     the unknowns must be in it too. */
+  const txt=`${r.expression}
+region=${s.region} universe=${s.universe} delay=${s.delay}
+neutralization=${s.neutralization||"NONE"} decay=${s.decay??0} truncation=${s.truncation??""}
+# sharpe=${fx(r.sharpe)} fitness=${fx(r.fitness)} plateau=${fx(r.plateau_ratio)} bar=${fx(r.haircut_bar)}
+# SELF_CORRELATION is not computed at simulation time — check it on submission`;
+  navigator.clipboard.writeText(txt).then(()=>{S.armed=r;renderArmed();
+    toast("copied — paste into BRAIN, then press s");},
+    ()=>toast("clipboard blocked by the browser"));
+}
+function renderArmed(){
+  const r=S.armed,a=$("#armed");
+  if(!r){a.classList.remove("on");return;}
+  const s=r.settings||{};
+  const items=[["Region",s.region],["Universe",s.universe],["Delay",s.delay],
+    ["Neutralization",s.neutralization||"NONE"],["Decay",s.decay??0],["Truncation",s.truncation??"—"]];
+  $("#armedChips").innerHTML=items.map(it=>
+    `<span class="chip" onclick="this.classList.toggle('done')">${it[0]} <b>${it[1]}</b></span>`).join("");
+  a.classList.add("on");
+}
+function disarm(){S.armed=null;renderArmed();}
+async function mark(action){
+  const r=cur(); if(!r) return;
+  // Pinned to the id the operator was looking at. The 2.5s poll can reorder the
+  // shortlist between reading a card and pressing `s`; keyed on list position,
+  // that would record the WRONG alpha as submitted.
+  const id=r.alpha_id; S.lastMarked=id;
+  try{
+    await api(`/ui/alphas/${id}/mark`,{method:"POST",
+      headers:{"content-type":"application/json"},body:JSON.stringify({action})});
+  }catch(err){ toast(`could not record #${id}: ${err.message}`); return; }
+  toast(action==="submitted"?`#${id} recorded — submitted by you`:`#${id} dropped`,
+        {undo:()=>undo(id)});
+  disarm(); S.i=0; S.cell=null; S.siOwner=null; await load();
+}
+async function undo(id){
+  try{
+    const res=await api(`/ui/alphas/${id}/undo`,{method:"POST"});
+    toast(`#${id} restored to ${res.status}`);
+  }catch(err){ toast(`can't undo #${id}: ${err.message}`); }
+  await load();
+}
+async function launch(i){
+  const s=S.sugs[i]; if(!s) return;
+  try{
+    await api("/ui/runs",{method:"POST",headers:{"content-type":"application/json"},
+      body:JSON.stringify({field_code:s.field_code,denominator:s.denominator,simulate:24})});
+    toast(`launched ${s.field_code} — 24 simulations`);
+  }catch(err){ toast(`launch failed: ${err.message}`); }
+  poll();
+}
+async function fill(ids){
+  if(!ids||!ids.length) return;
+  try{
+    await api("/ui/fill",{method:"POST",headers:{"content-type":"application/json"},
+      body:JSON.stringify({alpha_ids:ids})});
+    toast(`filling ${ids.length} cells`);
+  }catch(err){ toast(`fill failed: ${err.message}`); }
+  poll();
+}
+function stepSurface(n){
+  const p=packOf(cur()); if(!p||!p.surfaces.length) return;
+  S.si=(S.si+n+p.surfaces.length)%p.surfaces.length; S.cell=null; renderQueue();
+}
+function toast(m,opts){
+  const t=$("#toast"); t.innerHTML="";
+  t.append(document.createTextNode(m));
+  if(opts&&opts.undo){
+    const b=document.createElement("button");
+    b.textContent="undo"; b.className="toast-act";
+    b.onclick=()=>{t.classList.remove("on");opts.undo();};
+    t.append(b);
+  }
+  t.classList.add("on");
+  clearTimeout(t._h); t._h=setTimeout(()=>t.classList.remove("on"),opts&&opts.undo?7000:2800);
+}
+
+function go(view){
+  const b=document.querySelector(`nav button[data-view="${view}"]`);
+  if(b) b.click();
+  else{ // library has no nav button — it is reached from the counters
+    S.view=view;
+    document.querySelectorAll("nav button").forEach(x=>x.removeAttribute("aria-current"));
+    ["morning","portfolio","datasets","library"].forEach(v=>
+      $("#view-"+v).classList.toggle("hide",v!==view));
+  }
+}
+function goLibrary(filter){ S.libFilter=filter||{}; go("library"); showLibrary(); }
+async function showLibrary(){
+  const f=S.libFilter||{}, q=$("#libQ").value.trim();
+  const p=new URLSearchParams();
+  if(q) p.set("q",q);
+  if(f.simulated) p.set("simulated","true");
+  const d=await api("/ui/library?"+p.toString());
+  let rows=d.alphas;
+  if(f.passed) rows=rows.filter(r=>r.passed);
+  const filtered = q||f.passed||f.simulated;
+  const matched = f.passed ? rows.length : d.matched;
+  $("#libCount").textContent = filtered
+    ? `${rows.length} shown · ${matched} match${matched===1?"":"es"} of ${d.total}`
+      + (f.passed?" · cleared every check":f.simulated?" · simulated":"")
+      + (rows.length<matched?" (capped)":"")
+    : `${rows.length} of ${d.total}` + (rows.length<d.total?" (capped)":"");
+  $("#libTable").innerHTML=`<tr><th>#</th><th>Status</th><th>Sharpe</th><th>Fitness</th>
+    <th>Turnover</th><th>Family</th><th>Expression</th></tr>`+
+    (rows.length?rows.map(r=>`<tr>
+      <td>${r.alpha_id}</td><td class="t">${r.status}${r.passed?" ✓":""}</td>
+      <td>${r.sharpe===null?"—":r.sharpe.toFixed(2)}</td>
+      <td>${r.fitness===null?"—":r.fitness.toFixed(2)}</td>
+      <td>${r.turnover===null?"—":r.turnover.toFixed(3)}</td>
+      <td class="faint" style="font-size:11px">${(r.family_key||"—").split("@")[0]}</td>
+      <td style="max-width:380px;overflow:hidden;text-overflow:ellipsis">${r.expression}</td>
+      </tr>`).join("")
+      :`<tr><td colspan="7" class="t faint">nothing matches</td></tr>`);
+}
+async function showPortfolio(){
+  const d=await api("/ui/portfolio"); S.portfolio=d.portfolio||[];
+  $("#pfTable").innerHTML=`<tr><th>#</th><th>Status</th><th>Sharpe</th><th>Fitness</th>
+    <th>Turnover</th><th>Settings</th><th>Expression</th></tr>`+
+    (S.portfolio.length?S.portfolio.map(r=>`<tr>
+      <td>${r.alpha_id}</td>
+      <td class="t">${r.status==="submitted"?"<b>submitted</b>":"cleared, not sent"}</td>
+      <td>${r.sharpe===null?"—":r.sharpe.toFixed(2)}</td>
+      <td>${r.fitness===null?"—":r.fitness.toFixed(2)}</td>
+      <td>${r.turnover===null?"—":r.turnover.toFixed(3)}</td>
+      <td>${r.neutralization||"NONE"} · decay ${r.decay??0}</td>
+      <td style="max-width:420px;overflow:hidden;text-overflow:ellipsis">${r.expression}</td>
+      </tr>`).join("")
+      :`<tr><td colspan="7" class="t faint">Nothing submitted yet. Press <b>s</b> on a
+        shortlisted alpha after you paste it into BRAIN.</td></tr>`);
+}
+async function showDatasets(){
+  if(!S.datasets.length) S.datasets=(await api("/ui/datasets")).datasets||[];
+  $("#dsTable").innerHTML=`<tr><th>Dataset</th><th>Fields</th><th>Avg users/field</th>
+    <th>Crowding</th><th>Tried</th><th>Passed</th><th>Hit-rate</th></tr>`+
+    S.datasets.map(d=>`<tr><td class="t"><b>${d.dataset_code}</b>
+      <span class="faint"> ${d.name}</span></td><td>${d.field_count}</td>
+      <td>${d.avg_user_count.toLocaleString()}</td><td>${d.crowding_score.toFixed(2)}</td>
+      <td>${d.tried}</td><td>${d.passed}</td>
+      <td>${d.hit_rate===null?"—":(d.hit_rate*100).toFixed(1)+"%"}</td></tr>`).join("");
+}
+
+document.querySelectorAll("nav button").forEach(b=>b.onclick=()=>{
+  S.view=b.dataset.view;
+  document.querySelectorAll("nav button").forEach(x=>x.removeAttribute("aria-current"));
+  b.setAttribute("aria-current","page");
+  $("#view-morning").classList.toggle("hide",S.view!=="morning");
+  $("#view-library").classList.toggle("hide",S.view!=="library");
+  $("#view-portfolio").classList.toggle("hide",S.view!=="portfolio");
+  $("#view-datasets").classList.toggle("hide",S.view!=="datasets");
+  if(S.view==="datasets") showDatasets();
+  if(S.view==="portfolio") showPortfolio();
+});
+$("#themeBtn").onclick=()=>{
+  const c=document.documentElement.getAttribute("data-theme");
+  const next=c==="dark"?"light":c==="light"?null:"dark";
+  if(next) document.documentElement.setAttribute("data-theme",next);
+  else document.documentElement.removeAttribute("data-theme");
+  paintThemeBtn();
+  renderQueue();  // repaint the coastline, which is stroked in var(--fg)
+};
+function paintThemeBtn(){
+  const c=document.documentElement.getAttribute("data-theme");
+  const b=$("#themeBtn");
+  b.textContent = c==="dark"?"☾ dark" : c==="light"?"☀ light" : "◐ auto";
+  b.title = c ? `Theme: ${c}` : "Theme: follow system";
+}
+paintThemeBtn();
+const KEYS=[["j / k","next / previous candidate"],["c","copy expression + settings + caveats"],
+  ["s","record that YOU submitted it"],["x","drop"],["⏎","surface inspector"],
+  ["[ ]","step through the family's surfaces"],["d","residual — own minus neighbour median"],
+  ["g","cycle metric: sharpe → fitness → turnover"],["v","toggle neighbourhood dimming"],
+  ["y","copy a TSV audit row"],["n","launch the top allocator suggestion"],
+  ["u","undo the last mark"],["r","refresh"],["?","this help"]];
+$("#helpTable").innerHTML=KEYS.map(k=>`<tr><td style="width:96px">${k[0]}</td>
+  <td class="t">${k[1]}</td></tr>`).join("");
+$("#helpBtn").onclick=()=>$("#helpOverlay").classList.add("on");
+function closeHelp(){$("#helpOverlay").classList.remove("on");}
+function closeSurface(){$("#surfaceOverlay").classList.remove("on");}
+function openSurface(){
+  const r=cur(),p=packOf(r); if(!p||!p.surfaces.length) return;
+  $("#soTitle").textContent=`${r._family} — ${p.surfaces.length} structures, ${
+    p.surfaces.reduce((a,s)=>a+s.simulated,0)} simulated`;
+  const wall=$("#soWall"); wall.innerHTML="";
+  p.surfaces.forEach((s,i)=>{
+    const m=document.createElement("div"); m.className="mini"+(i===S.si?" on":"");
+    const g=document.createElement("div"); g.className="g";
+    p.decays.forEach(d=>p.windows.forEach(w=>{
+      const c=s.cells[`${w}:${d}`],el=document.createElement("i");
+      if(!c||!c.simulated) el.style.border="1px dashed var(--border-strong)";
+      else el.style.background=`var(--h${Math.max(0,bin(c.sharpe))})`;
+      g.appendChild(el);}));
+    const lab=document.createElement("div"); lab.className="lab";
+    lab.textContent=(s.label.ts||"").replace("ts_","");
+    m.append(g,lab); m.onclick=()=>{S.si=i;openSurface();};
+    wall.appendChild(m);
+  });
+  const grid=$("#soGrid"); grid.innerHTML="";
+  grid.appendChild(heatmap(p,p.surfaces[S.si],r,true));
+  $("#surfaceOverlay").classList.add("on");
+}
+addEventListener("keydown",e=>{
+  if(e.metaKey||e.ctrlKey||e.altKey) return;
+  if(/^(INPUT|TEXTAREA|SELECT)$/.test(e.target.tagName)) return;
+  const k=e.key,n=S.summary?.shortlist?.length||0;
+  // Escape and ? are global; everything else acts on the Morning queue and must
+  // not fire while another view is showing — otherwise j/k move an invisible
+  // selection and Enter pops an overlay over the wrong page.
+  if(k==="Escape"){closeSurface();closeHelp();disarm();return;}
+  if(k==="?"){$("#helpOverlay").classList.add("on");return;}
+  if(S.view!=="morning") return;
+  if(k==="j"){S.i=Math.min(S.i+1,n-1);S.cell=null;S.si=0;renderQueue();}
+  else if(k==="k"){S.i=Math.max(S.i-1,0);S.cell=null;S.si=0;renderQueue();}
+  else if(k==="c") copyRow();
+  else if(k==="s") mark("submitted");
+  else if(k==="x") mark("discarded");
+  else if(k==="Enter") openSurface();
+  else if(k==="[") stepSurface(-1);
+  else if(k==="]") stepSurface(1);
+  else if(k==="d"){S.residual=!S.residual;renderQueue();
+    toast(S.residual?"residual — own minus neighbour median":"absolute values");}
+  else if(k==="g"){S.metric=S.metric==="sharpe"?"fitness":S.metric==="fitness"?"turnover":"sharpe";
+    renderQueue();toast("metric: "+S.metric);}
+  else if(k==="v"){S.dim=!S.dim;renderQueue();}
+  else if(k==="n") launch(0);
+  else if(k==="r") load();
+  else if(k==="u"&&S.lastMarked) undo(S.lastMarked);
+  else if(k==="y") tsv();
+});
+function tsv(){
+  const r=cur(); if(!r) return; const s=r.settings||{};
+  navigator.clipboard.writeText([r.alpha_id,r._family,r.expression,s.region,s.universe,
+    s.delay,s.neutralization||"NONE",s.decay??0,s.truncation??"",fx(r.sharpe),fx(r.fitness),
+    fx(r.plateau_ratio),fx(r.haircut_bar),new Date().toISOString()].join("\t"))
+    .then(()=>toast("TSV audit row copied"));
+}
+let _libT; document.addEventListener("input",e=>{
+  if(e.target.id!=="libQ") return;
+  clearTimeout(_libT); _libT=setTimeout(showLibrary,220);
+});
+boot();
+</script>
+</body>
+</html>

@@ -1,0 +1,30 @@
+# OS
+.DS_Store
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# Local data
+database/*.db
+database/*.db-journal
+database/*.db-wal
+database/*.db-shm
+database/*.db.bak.*
+database/archive_*.json
+.playwright_session/
+
+# Secrets
+.env
+.env.local
+
+# Node / Bundles
+node_modules/
+dist/
+build/
