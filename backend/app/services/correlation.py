@@ -120,11 +120,20 @@ def check_portfolio_empirical_correlation(
     return False, None, max_corr
 
 
-def ensure_alpha_pnl(db: Session, alpha_id: int, pnl_store: PnLStore | None = None) -> bool:
-    """Ensure an alpha's daily PnL series is cached in PnLStore, fetching from BRAIN if needed."""
+def ensure_alpha_pnl(
+    db: Session,
+    alpha_id: int,
+    pnl_store: PnLStore | None = None,
+    *,
+    allow_remote_fetch: bool = False,
+) -> bool:
+    """Check if daily PnL vector is stored locally, optionally fetching from BRAIN if missing."""
     store = pnl_store or get_pnl_store()
     if store.load_pnl(alpha_id) is not None:
         return True
+
+    if not allow_remote_fetch:
+        return False
 
     # Try to find a known remote brain_id from simulation_imports
     from app.models.results import SimulationImport
