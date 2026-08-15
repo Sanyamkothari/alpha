@@ -17,14 +17,28 @@ database/*.db-journal
 database/*.db-wal
 database/*.db-shm
 database/*.db.bak.*
+database/*.db.backup-*
 database/archive_*.json
+database/jobs.json
+database/pnl/
+database/pnl.backup-*/
 .playwright_session/
+
+# Coverage
+.coverage
+*.coverage
+.coverage.*
+backend/.coverage
+coverage/
 
 # Secrets
 .env
+.env.*
 .env.local
 
 # Node / Bundles
 node_modules/
 dist/
 build/
+backend/dist/
+backend/build/
