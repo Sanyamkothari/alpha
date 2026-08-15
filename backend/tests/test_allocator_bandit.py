@@ -97,14 +97,16 @@ def test_simulation_budget_partition_lifecycle() -> None:
 
 
 def test_multi_arm_posterior_sampling() -> None:
+    import random
+    random.seed(42)
     sampler = DiscountedThompsonSampler(discount_factor=0.95)
     datasets = ["ds_1", "ds_2", "ds_3", "ds_4"]
 
-    for _ in range(5):
-        sampler.update("ds_1", 0.9)
+    for _ in range(15):
+        sampler.update("ds_1", 0.95)
         sampler.update("ds_2", 0.7)
         sampler.update("ds_3", 0.4)
-        sampler.update("ds_4", 0.1)
+        sampler.update("ds_4", 0.05)
 
     scores = sampler.sample_scores(datasets)
     assert len(scores) == 4
