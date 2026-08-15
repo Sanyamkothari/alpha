@@ -31,55 +31,54 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.types import JSONType
 from app.models._common import Base, IdMixin, TimestampMixin, enum_check
-from app.models.enums import AlphaStatus, MutationType, OutcomeSource, PlatformOutcome
+from app.models.enums import (
+    AlphaStatus,
+    MutationType,
+    OutcomeSource,
+    PlatformOutcome,
+    ProductionStatus,
+    SubmissionResult,
+)
 
 
 class Alpha(IdMixin, TimestampMixin, Base):
+    """Core Alpha model."""
+
     __tablename__ = "alphas"
 
+    # ---- Identity & Expression ----
     expression: Mapped[str] = mapped_column(Text, nullable=False)
     normalized_expression: Mapped[str | None] = mapped_column(Text)
-    # Hash of the normalized expression + settings — exact-dedup key. The
-    # UniqueConstraint below already creates the backing index (no index=True).
-    expression_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    expression_hash: Mapped[str] = mapped_column(String(64), nullable=False, unique=True, index=True)
 
-    # Grid provenance: which family this variant came from. The per-axis
-    # coordinates (window, decay, neutralization, ...) live in ``feature_json``
-    # under "grid"; this column exists so plateau queries can GROUP BY cheaply.
-    family_key: Mapped[str | None] = mapped_column(String(128), index=True)
+    # ---- Lifecycle & Lineage ----
+    status: Mapped[str] = mapped_column(String(16), default=AlphaStatus.UNTESTED.value, nullable=False)
+    family_key: Mapped[str | None] = mapped_column(String(256), index=True)
+    parent_id: Mapped[int | None] = mapped_column(ForeignKey("alphas.id", ondelete="SET NULL"))
+    generation: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    mutation_type: Mapped[str | None] = mapped_column(String(32))
+    source: Mapped[str] = mapped_column(String(32), default="user", nullable=False)
 
-    status: Mapped[str] = mapped_column(String(16), nullable=False, default=AlphaStatus.UNTESTED)
-    source: Mapped[str] = mapped_column(String(32), default="ai")  # ai | user | evolution
-
-    # ---- BRAIN simulation settings block ----
-    region: Mapped[str] = mapped_column(String(16), default="USA")
-    universe: Mapped[str] = mapped_column(String(32), default="TOP3000")
-    delay: Mapped[int] = mapped_column(Integer, default=1)
-    neutralization: Mapped[str | None] = mapped_column(String(32))  # NONE/MARKET/SECTOR/...
+    # ---- Settings ----
+    region: Mapped[str] = mapped_column(String(16), default="USA", nullable=False)
+    universe: Mapped[str] = mapped_column(String(32), default="TOP3000", nullable=False)
+    delay: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
+    neutralization: Mapped[str | None] = mapped_column(String(32))
     decay: Mapped[int | None] = mapped_column(Integer)
     truncation: Mapped[float | None] = mapped_column(Float)
-    settings_extra: Mapped[dict | None] = mapped_column(JSONType)
 
-    # ---- Validation result (the gate) ----
-    is_valid: Mapped[bool] = mapped_column(Boolean, default=False)
-    validation_errors: Mapped[list | None] = mapped_column(JSONType)
-    validation_warnings: Mapped[list | None] = mapped_column(JSONType)
-
-    # ---- Deterministic AST feature score (computed Phase 2; columns reserved in P0) ----
-    # Queryable scalar for ranking/sorting; the per-feature breakdown lives in JSON
-    # (depth, op_count, n_windows -> turnover proxy, interpretability, novelty).
+    # ---- Validation Cache ----
+    is_valid: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    validation_errors: Mapped[list[str] | None] = mapped_column(JSONType)
+    validation_warnings: Mapped[list[str] | None] = mapped_column(JSONType)
     complexity_score: Mapped[float | None] = mapped_column(Float)
     feature_json: Mapped[dict | None] = mapped_column(JSONType)
 
-    # ---- Genealogy ----
-    parent_id: Mapped[int | None] = mapped_column(ForeignKey("alphas.id"))
-    generation: Mapped[int] = mapped_column(Integer, default=0)
-    mutation_type: Mapped[str | None] = mapped_column(String(32))
-
+    # ---- Notes ----
     comments: Mapped[str | None] = mapped_column(Text)
 
-    # ---- Platform Outcome (post-submission review) ----
-    platform_outcome: Mapped[str | None] = mapped_column(String(16))
+    # ---- Platform Outcome (Derived from submission_attempts) ----
+    platform_outcome: Mapped[str | None] = mapped_column(String(16), index=True)
     outcome_date: Mapped[date | None] = mapped_column(Date)
     outcome_note: Mapped[str | None] = mapped_column(Text)
     outcome_source: Mapped[str | None] = mapped_column(String(16))
@@ -91,6 +90,12 @@ class Alpha(IdMixin, TimestampMixin, Base):
     )
     field_snapshots: Mapped[list[AlphaFieldSnapshot]] = relationship(
         back_populates="alpha", cascade="all, delete-orphan"
+    )
+    attempts: Mapped[list[SubmissionAttempt]] = relationship(
+        back_populates="alpha", cascade="all, delete-orphan", order_by="SubmissionAttempt.attempted_at.desc()"
+    )
+    production_snapshots: Mapped[list[AlphaProductionSnapshot]] = relationship(
+        back_populates="alpha", cascade="all, delete-orphan", order_by="AlphaProductionSnapshot.as_of_date.desc()"
     )
 
     __table_args__ = (
@@ -149,3 +154,95 @@ class AlphaFieldSnapshot(IdMixin, TimestampMixin, Base):
     __table_args__ = (
         UniqueConstraint("alpha_id", "field_code", name="alpha_field_unique"),
     )
+
+
+class SubmissionAttempt(IdMixin, TimestampMixin, Base):
+    """Record of an attempt to submit an alpha to BRAIN."""
+
+    __tablename__ = "submission_attempts"
+
+    alpha_id: Mapped[int] = mapped_column(
+        ForeignKey("alphas.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    attempted_at: Mapped[datetime] = mapped_column(
+        DateTime, server_default=func.now(), nullable=False
+    )
+    result: Mapped[str | None] = mapped_column(String(16), nullable=True)  # 'submitted' | 'rejected' | NULL
+    failed_check: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    check_detail: Mapped[str | None] = mapped_column(Text, nullable=True)
+    notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+    is_recalled: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+
+    alpha: Mapped[Alpha] = relationship(back_populates="attempts")
+
+    __table_args__ = (
+        enum_check("result", SubmissionResult),
+    )
+
+
+class AlphaProductionSnapshot(IdMixin, TimestampMixin, Base):
+    """Time-series production performance and payment snapshot for submitted alphas."""
+
+    __tablename__ = "alpha_production_snapshots"
+
+    alpha_id: Mapped[int] = mapped_column(
+        ForeignKey("alphas.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    as_of_date: Mapped[date] = mapped_column(Date, nullable=False, index=True)
+    status: Mapped[str] = mapped_column(String(32), nullable=False)  # 'in_production' | 'decommissioned'
+    pnl: Mapped[float | None] = mapped_column(Float, nullable=True)
+    sharpe: Mapped[float | None] = mapped_column(Float, nullable=True)
+    returns: Mapped[float | None] = mapped_column(Float, nullable=True)
+    payment_amount: Mapped[float | None] = mapped_column(Float, nullable=True)
+    note: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    alpha: Mapped[Alpha] = relationship(back_populates="production_snapshots")
+
+    __table_args__ = (
+        UniqueConstraint("alpha_id", "as_of_date", name="uq_alpha_production_as_of"),
+        enum_check("status", ProductionStatus),
+    )
+
+
+def sync_alpha_platform_outcome(db, alpha_id: int) -> str | None:
+    """Derive and refresh the alpha's platform_outcome column from its submission_attempts."""
+    from sqlalchemy import select
+
+    alpha = db.get(Alpha, alpha_id)
+    if alpha is None:
+        return None
+
+    attempts = db.execute(
+        select(SubmissionAttempt)
+        .where(SubmissionAttempt.alpha_id == alpha_id)
+        .order_by(SubmissionAttempt.attempted_at.desc())
+    ).scalars().all()
+
+    outcome = None
+    outcome_dt = None
+    outcome_note = None
+    outcome_src = None
+
+    if any(a.result == SubmissionResult.SUBMITTED.value for a in attempts):
+        outcome = PlatformOutcome.ACCEPTED.value
+        sub_attempt = next(a for a in attempts if a.result == SubmissionResult.SUBMITTED.value)
+        outcome_dt = sub_attempt.attempted_at.date() if sub_attempt.attempted_at else None
+        outcome_note = sub_attempt.notes
+        outcome_src = OutcomeSource.MANUAL.value
+        if alpha.status != AlphaStatus.SUBMITTED.value:
+            alpha.status = AlphaStatus.SUBMITTED.value
+    elif attempts and all(a.result == SubmissionResult.REJECTED.value for a in attempts):
+        outcome = PlatformOutcome.REJECTED.value
+        latest = attempts[0]
+        outcome_dt = latest.attempted_at.date() if latest.attempted_at else None
+        outcome_note = f"{latest.failed_check or 'REJECTED'}: {latest.check_detail or ''}".strip(": ")
+        outcome_src = OutcomeSource.MANUAL.value
+    elif any(a.result is None for a in attempts):
+        outcome = PlatformOutcome.PENDING.value
+
+    alpha.platform_outcome = outcome
+    alpha.outcome_date = outcome_dt
+    alpha.outcome_note = outcome_note
+    alpha.outcome_source = outcome_src
+    db.flush()
+    return outcome

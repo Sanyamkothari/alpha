@@ -35,6 +35,7 @@ def test_all_tables_created(engine) -> None:
     assert sorted(names) == [
         "alpha_field_snapshot",
         "alpha_metrics",
+        "alpha_production_snapshots",
         "alpha_status_history",
         "alphas",
         "brain_fetch_log",
@@ -49,6 +50,7 @@ def test_all_tables_created(engine) -> None:
         "operator_examples",
         "operators",
         "simulation_imports",
+        "submission_attempts",
         "tags",
     ]
 

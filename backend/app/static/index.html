@@ -269,6 +269,7 @@ table.data td.t{font-family:var(--font-ui)}
       <button data-view="datasets">Datasets</button>
     </nav>
     <span class="spacer"></span>
+    <button class="btn" id="unresolvedNavBtn" onclick="openUnresolvedModal()" style="display:inline-flex;align-items:center;gap:4px">Unresolved <span id="unresolvedBadge" style="display:none;background:var(--warn,#fb8c00);color:#fff;padding:1px 6px;border-radius:10px;font-size:11px;font-weight:700">0</span></button>
     <span class="stat-strip" id="stats"></span>
     <button class="btn" id="themeBtn" title="Theme: follow system">◐ auto</button>
     <button class="btn" id="helpBtn">?</button>
@@ -381,6 +382,66 @@ table.data td.t{font-family:var(--font-ui)}
       <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:8px">
         <button type="button" class="btn" onclick="closeOutcome()">Cancel</button>
         <button type="submit" class="btn primary">Save Outcome</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<div class="scrim" id="unresolvedOverlay">
+  <div class="sheet" style="max-width:800px">
+    <div style="display:flex;align-items:baseline;gap:12px">
+      <h2>Unresolved Submission Attempts</h2><span class="spacer"></span>
+      <button class="btn" onclick="closeUnresolvedModal()">Esc</button>
+    </div>
+    <p class="muted" style="font-size:12px;margin:8px 0 14px">
+      Alphas copied to clipboard awaiting submission results on BRAIN.
+      Shortcuts: <b>y</b> = mark submitted, <b>n</b> = record failed check, <b>d</b> = dismiss.
+    </p>
+    <div style="max-height:400px;overflow-y:auto">
+      <table class="data" id="unresolvedTable"></table>
+    </div>
+    <div style="margin-top:16px;display:flex;justify-content:flex-end">
+      <button class="btn" onclick="closeUnresolvedModal()">Close</button>
+    </div>
+  </div>
+</div>
+
+<div class="scrim" id="rejectionModal">
+  <div class="sheet" style="max-width:500px">
+    <div style="display:flex;align-items:baseline;gap:12px">
+      <h2>Record Submission Rejection</h2><span class="spacer"></span>
+      <button class="btn" onclick="closeRejectionModal()">Esc</button>
+    </div>
+    <form id="rejectionForm" onsubmit="submitRejection(event)" style="margin-top:16px;display:flex;flex-direction:column;gap:12px">
+      <input type="hidden" id="rejectionAttemptId">
+      <div>
+        <label style="display:block;font-size:12px;margin-bottom:4px;font-weight:600">Failed Check</label>
+        <select id="rejectionCheck" class="btn" style="width:100%;text-align:left;padding:8px" required>
+          <option value="SELF_CORRELATION">SELF_CORRELATION (Correlation with own alphas &gt; 0.70)</option>
+          <option value="PROD_CORRELATION">PROD_CORRELATION (Correlation with platform alphas &gt; 0.70)</option>
+          <option value="LOW_SHARPE">LOW_SHARPE (Sharpe &lt; 1.25)</option>
+          <option value="HIGH_TURNOVER">HIGH_TURNOVER (Turnover &gt; 70%)</option>
+          <option value="LOW_TURNOVER">LOW_TURNOVER (Turnover &lt; 1%)</option>
+          <option value="LOW_FITNESS">LOW_FITNESS (Fitness &lt; 1.0)</option>
+          <option value="CONCENTRATED_WEIGHT">CONCENTRATED_WEIGHT (Stock weight &gt; 10%)</option>
+          <option value="LOW_SUB_UNIVERSE_SHARPE">LOW_SUB_UNIVERSE_SHARPE (Sub-universe test failure)</option>
+          <option value="MATCHES_COMPETITION">MATCHES_COMPETITION (Competition rule violation)</option>
+          <option value="UNITS">UNITS (Unit / dimension warning or failure)</option>
+          <option value="LADDER_CHECK">LADDER_CHECK (Multi-year inconsistency)</option>
+          <option value="OTHER">OTHER (Custom / Unlisted check)</option>
+        </select>
+      </div>
+      <div>
+        <label style="display:block;font-size:12px;margin-bottom:4px;font-weight:600">Threshold / Detail</label>
+        <input type="text" id="rejectionDetail" class="btn" style="width:100%;text-align:left;padding:8px" placeholder="e.g. 0.74 vs max 0.70 limit">
+      </div>
+      <div>
+        <label style="display:block;font-size:12px;margin-bottom:4px;font-weight:600">Notes / Reason</label>
+        <textarea id="rejectionNotes" style="width:100%;height:70px;background:var(--bg);color:var(--fg);border:1px solid var(--border);border-radius:4px;padding:8px;font-family:inherit;font-size:13px" placeholder="Optional context or error message"></textarea>
+      </div>
+      <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:8px">
+        <button type="button" class="btn" onclick="closeRejectionModal()">Cancel</button>
+        <button type="submit" class="btn primary" style="background:var(--bad,#e53935)">Record Failure</button>
       </div>
     </form>
   </div>
@@ -503,13 +564,21 @@ function renderStats(){
     b.title=title; b.onclick=act;
     el.appendChild(b);
   });
+  const unBadge = $("#unresolvedBadge");
+  const unCount = c?.unresolved_attempts || 0;
+  if(unCount > 0){
+    unBadge.textContent = unCount;
+    unBadge.style.display = "inline-block";
+  } else {
+    unBadge.style.display = "none";
+  }
 }
 function renderVerdict(){
   const n=S.summary.shortlist_total ?? S.summary.shortlist.length, c=S.summary.counts;
   const bar=S.summary.shortlist[0]?.haircut_bar??S.summary.near_misses[0]?.haircut_bar;
   if(n===0 && c.simulated===0){
     // A first-time operator has not failed — they have not started. Telling them
-    // "nothing survived" is simply false, and it is the first thing they'd see.
+    // "nothing simulated yet" is simply false, and it is the first thing they'd see.
     $("#verdict").innerHTML=`<div class="big">Nothing simulated yet.</div>
       <p>${c.alphas} candidates are built and waiting. Pick a field from
       <b>Next up</b> on the right, or press <b>n</b>, to run the first batch.</p>`;
@@ -533,12 +602,17 @@ function packOf(r){return r?S.surfaces[r._family]:null;}
 function surfaceFor(r){
   const p=packOf(r); if(!p||!p.surfaces.length) return null;
   const owner=p.surfaces.findIndex(s=>Object.values(s.cells).some(c=>c.alpha_id===r.alpha_id));
-  // The surface CONTAINING this alpha, not surfaces[0]. Rendering another
-  // structure's grid beside this candidate's metrics is worse than rendering
-  // nothing: it is plateau evidence for a different alpha.
   if(owner<0) return p.surfaces[Math.min(S.si,p.surfaces.length-1)]||null;
   if(S.siOwner!==r.alpha_id){ S.si=owner; S.siOwner=r.alpha_id; }
   return p.surfaces[Math.min(S.si,p.surfaces.length-1)];
+}
+
+function cellOf(surf,alphaId){
+  if(!surf) return null;
+  for(const [k,c] of Object.entries(surf.cells)){
+    if(c.alpha_id===alphaId) return {pos:k,w:c.window,d:c.decay,sharpe:c.sharpe,fitness:c.fitness,turnover:c.turnover};
+  }
+  return null;
 }
 
 function renderQueue(){
@@ -973,23 +1047,122 @@ async function submitOutcome(e){
   const dt = $("#outcomeDate").value;
   const note = $("#outcomeNote").value;
   try {
-    await api(`/alphas/${id}/outcome`, {
+    await api(`/alphas/${id}/attempts`, {
       method: "POST",
+      headers: {"content-type": "application/json"},
       body: JSON.stringify({
-        platform_outcome: outcome,
-        outcome_date: dt || null,
-        outcome_note: note || null,
-        outcome_source: "manual"
+        result: outcome === "accepted" ? "submitted" : "rejected",
+        failed_check: outcome === "rejected" ? (note.split(":")[0] || "OTHER") : null,
+        notes: note || null,
+        attempted_at: dt ? `${dt}T12:00:00` : null
       })
     });
     closeOutcome();
-    toast(`#${id} outcome recorded: ${outcome}`);
+    toast(`#${id} attempt recorded: ${outcome}`);
     if (S.view === "portfolio") showPortfolio();
     else if (S.view === "morning") renderQueue();
+    await load();
   } catch(err) {
     toast(`Failed to record outcome: ${err.message}`);
   }
 }
+
+let unresolvedList = [];
+let unresolvedSelectedIdx = 0;
+
+async function openUnresolvedModal(){
+  $("#unresolvedOverlay").classList.add("on");
+  await refreshUnresolvedTable();
+}
+
+function closeUnresolvedModal(){
+  $("#unresolvedOverlay").classList.remove("on");
+}
+
+async function refreshUnresolvedTable(){
+  try {
+    const d = await api("/ui/attempts/unresolved");
+    unresolvedList = d.unresolved_attempts || [];
+    unresolvedSelectedIdx = Math.min(unresolvedSelectedIdx, Math.max(0, unresolvedList.length - 1));
+    renderUnresolvedTable();
+    if(S.summary?.counts) S.summary.counts.unresolved_attempts = unresolvedList.length;
+    renderStats();
+  } catch(e) {
+    $("#unresolvedTable").innerHTML = `<tr><td class="t faint">Failed to load unresolved attempts: ${e.message}</td></tr>`;
+  }
+}
+
+function renderUnresolvedTable(){
+  if(!unresolvedList.length){
+    $("#unresolvedTable").innerHTML = `<tr><td class="t faint" style="padding:16px;text-align:center">No unresolved attempts. Press <b>c</b> on any candidate to copy and track it here.</td></tr>`;
+    return;
+  }
+  $("#unresolvedTable").innerHTML = `<tr>
+    <th>#</th><th>Alpha</th><th>Settings</th><th>Expression</th><th>Copied At</th><th>Actions</th>
+  </tr>` + unresolvedList.map((a, idx) => `
+    <tr style="${idx === unresolvedSelectedIdx ? 'background:var(--panel-alt, rgba(255,255,255,0.06));' : ''}">
+      <td>${a.id}</td>
+      <td><b>#${a.alpha_id}</b></td>
+      <td style="font-size:11px">${a.region}/${a.universe} · ${a.neutralization||'NONE'} · d${a.delay}</td>
+      <td style="max-width:280px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${a.expression}">${a.expression}</td>
+      <td class="faint" style="font-size:11px">${a.attempted_at.split('.')[0].replace('T', ' ')}</td>
+      <td>
+        <button class="btn" style="padding:2px 6px;font-size:11px;background:var(--ok);color:var(--bg)" onclick="resolveAttemptDirect(${a.id}, 'submitted')"><b>y</b> Submit</button>
+        <button class="btn" style="padding:2px 6px;font-size:11px;background:var(--bad,#e53935);color:#fff" onclick="openRejectionModal(${a.id})"><b>n</b> Reject</button>
+        <button class="btn" style="padding:2px 6px;font-size:11px" onclick="dismissAttemptDirect(${a.id})"><b>d</b></button>
+      </td>
+    </tr>
+  `).join("");
+}
+
+async function resolveAttemptDirect(attemptId, result, failedCheck=null, checkDetail=null, notes=null){
+  try {
+    await api(`/ui/attempts/${attemptId}/resolve`, {
+      method: "POST",
+      headers: {"content-type": "application/json"},
+      body: JSON.stringify({result, failed_check: failedCheck, check_detail: checkDetail, notes})
+    });
+    toast(`Attempt #${attemptId} recorded as ${result}`);
+    await refreshUnresolvedTable();
+    await load();
+  } catch(e) {
+    toast(`Failed to resolve attempt: ${e.message}`);
+  }
+}
+
+async function dismissAttemptDirect(attemptId){
+  try {
+    await api(`/ui/attempts/${attemptId}/dismiss`, {method: "POST"});
+    toast(`Attempt #${attemptId} dismissed`);
+    await refreshUnresolvedTable();
+    await load();
+  } catch(e) {
+    toast(`Failed to dismiss attempt: ${e.message}`);
+  }
+}
+
+function openRejectionModal(attemptId){
+  $("#rejectionAttemptId").value = attemptId;
+  $("#rejectionCheck").value = "SELF_CORRELATION";
+  $("#rejectionDetail").value = "";
+  $("#rejectionNotes").value = "";
+  $("#rejectionModal").classList.add("on");
+}
+
+function closeRejectionModal(){
+  $("#rejectionModal").classList.remove("on");
+}
+
+async function submitRejection(e){
+  e.preventDefault();
+  const attemptId = parseInt($("#rejectionAttemptId").value, 10);
+  const check = $("#rejectionCheck").value;
+  const detail = $("#rejectionDetail").value;
+  const notes = $("#rejectionNotes").value;
+  closeRejectionModal();
+  await resolveAttemptDirect(attemptId, "rejected", check, detail, notes);
+}
+
 async function showDatasets(){
   if(!S.datasets.length) S.datasets=(await api("/ui/datasets")).datasets||[];
   $("#dsTable").innerHTML=`<tr><th>Dataset</th><th>Fields</th><th>Avg users/field</th>
@@ -1027,7 +1200,7 @@ function paintThemeBtn(){
   b.title = c ? `Theme: ${c}` : "Theme: follow system";
 }
 paintThemeBtn();
-const KEYS=[["j / k","next / previous candidate"],["c","copy expression + settings + caveats"],
+const KEYS=[["j / k","next / previous candidate"],["c","copy expression + settings (adds to unresolved attempts)"],
   ["s","record that YOU submitted it"],["o","record platform outcome (accepted/rejected)"],
   ["x","drop"],["⏎","surface inspector"],
   ["[ ]","step through the family's surfaces"],["d","residual — own minus neighbour median"],
@@ -1065,6 +1238,31 @@ addEventListener("keydown",e=>{
   if(e.metaKey||e.ctrlKey||e.altKey) return;
   if(/^(INPUT|TEXTAREA|SELECT)$/.test(e.target.tagName)) return;
   const k=e.key,n=S.summary?.shortlist?.length||0;
+
+  // Modals handle their own keys
+  if($("#rejectionModal").classList.contains("on")){
+    if(k==="Escape"){closeRejectionModal();return;}
+    return;
+  }
+  if($("#unresolvedOverlay").classList.contains("on")){
+    if(k==="Escape"){closeUnresolvedModal();return;}
+    const curAtt = unresolvedList[unresolvedSelectedIdx];
+    if(k==="j"||k==="ArrowDown"){
+      unresolvedSelectedIdx = Math.min(unresolvedSelectedIdx + 1, Math.max(0, unresolvedList.length - 1));
+      renderUnresolvedTable();
+      return;
+    }
+    if(k==="k"||k==="ArrowUp"){
+      unresolvedSelectedIdx = Math.max(unresolvedSelectedIdx - 1, 0);
+      renderUnresolvedTable();
+      return;
+    }
+    if(k==="y" && curAtt){ resolveAttemptDirect(curAtt.id, 'submitted'); return; }
+    if(k==="n" && curAtt){ openRejectionModal(curAtt.id); return; }
+    if(k==="d" && curAtt){ dismissAttemptDirect(curAtt.id); return; }
+    return;
+  }
+
   // Escape and ? are global; everything else acts on the Morning queue and must
   // not fire while another view is showing — otherwise j/k move an invisible
   // selection and Enter pops an overlay over the wrong page.

@@ -12,7 +12,13 @@ disappears from autogenerate, and an unmigrated one silently reappears.
 """
 
 from app.models._common import Base
-from app.models.alphas import Alpha, AlphaFieldSnapshot, AlphaStatusHistory
+from app.models.alphas import (
+    Alpha,
+    AlphaFieldSnapshot,
+    AlphaProductionSnapshot,
+    AlphaStatusHistory,
+    SubmissionAttempt,
+)
 from app.models.brain import BrainFetchLog
 from app.models.fields import Category, DataField, DataFieldSnapshot, Dataset, FieldTag, Tag
 from app.models.operators import (
@@ -42,6 +48,8 @@ __all__ = [
     "Alpha",
     "AlphaStatusHistory",
     "AlphaFieldSnapshot",
+    "SubmissionAttempt",
+    "AlphaProductionSnapshot",
     # results
     "SimulationImport",
     "AlphaMetric",

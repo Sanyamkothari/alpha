@@ -29,10 +29,12 @@ class AlphaStatus(StrEnum):
 
 
 class PlatformOutcome(StrEnum):
-    """Post-submission platform outcome from BRAIN review."""
+    """Post-submission platform outcome from BRAIN review (derived from submission attempts)."""
 
     ACCEPTED = "accepted"
+    SUBMITTED = "submitted"
     REJECTED = "rejected"
+    PENDING = "pending"
     IN_REVIEW = "in_review"
 
 
@@ -41,6 +43,37 @@ class OutcomeSource(StrEnum):
 
     MANUAL = "manual"
     API = "api"
+
+
+class SubmissionResult(StrEnum):
+    """Result of a submission attempt."""
+
+    SUBMITTED = "submitted"
+    REJECTED = "rejected"
+
+
+class ProductionStatus(StrEnum):
+    """Lifecycle status of a submitted alpha in production."""
+
+    IN_PRODUCTION = "in_production"
+    DECOMMISSIONED = "decommissioned"
+
+
+class SubmissionCheckName(StrEnum):
+    """Known WorldQuant BRAIN simulation and submission checks."""
+
+    SELF_CORRELATION = "SELF_CORRELATION"
+    PROD_CORRELATION = "PROD_CORRELATION"
+    LOW_SHARPE = "LOW_SHARPE"
+    HIGH_TURNOVER = "HIGH_TURNOVER"
+    LOW_TURNOVER = "LOW_TURNOVER"
+    LOW_FITNESS = "LOW_FITNESS"
+    CONCENTRATED_WEIGHT = "CONCENTRATED_WEIGHT"
+    LOW_SUB_UNIVERSE_SHARPE = "LOW_SUB_UNIVERSE_SHARPE"
+    MATCHES_COMPETITION = "MATCHES_COMPETITION"
+    UNITS = "UNITS"
+    LADDER_CHECK = "LADDER_CHECK"
+    OTHER = "OTHER"
 
 
 class FieldCategory(StrEnum):

@@ -19,8 +19,14 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.db import get_db
-from app.models.alphas import Alpha
-from app.models.enums import AlphaStatus
+from app.models.alphas import (
+    Alpha,
+    AlphaProductionSnapshot,
+    AlphaStatusHistory,
+    SubmissionAttempt,
+    sync_alpha_platform_outcome,
+)
+from app.models.enums import AlphaStatus, SubmissionResult
 from app.models.results import AlphaMetric
 from app.services.allocator import dataset_stats, suggest
 from app.services.alpha_library import transition_status
@@ -90,6 +96,10 @@ def summary(db: Session = Depends(get_db)) -> dict:
     )
     submitted = (
         db.scalar(select(func.count(Alpha.id)).where(Alpha.status == AlphaStatus.SUBMITTED.value))
+        or 0
+    )
+    unresolved_attempts = (
+        db.scalar(select(func.count(SubmissionAttempt.id)).where(SubmissionAttempt.result.is_(None)))
         or 0
     )
 
@@ -502,55 +512,98 @@ def mark_alpha(alpha_id: int, payload: dict = Body(...), db: Session = Depends(g
         raise HTTPException(status_code=404, detail="no such alpha")
 
     transition_status(db, alpha, mapping[action], note=payload.get("note") or f"ui:{action}")
+    if action == "submitted":
+        attempt = SubmissionAttempt(
+            alpha_id=alpha.id,
+            result="submitted",
+            notes=payload.get("note") or "Marked submitted via UI",
+        )
+        db.add(attempt)
+        db.flush()
+        sync_alpha_platform_outcome(db, alpha.id)
     return {"alpha_id": alpha_id, "status": alpha.status}
 
 
-@router.post("/alphas/{alpha_id}/outcome")
-def set_ui_outcome(alpha_id: int, payload: dict = Body(...), db: Session = Depends(get_db)) -> dict:
-    """Record platform review outcome via UI."""
-    from datetime import date
-    from app.models.alphas import AlphaStatusHistory
-    from app.models.enums import PlatformOutcome
+@router.get("/attempts/unresolved")
+def ui_unresolved_attempts(db: Session = Depends(get_db)) -> dict:
+    """List all pending/unresolved submission attempts for the UI modal/badge."""
+    attempts = db.execute(
+        select(SubmissionAttempt, Alpha)
+        .join(Alpha, SubmissionAttempt.alpha_id == Alpha.id)
+        .where(SubmissionAttempt.result.is_(None))
+        .order_by(SubmissionAttempt.attempted_at.desc())
+    ).all()
+    out = []
+    for att, alpha in attempts:
+        out.append({
+            "id": att.id,
+            "alpha_id": att.alpha_id,
+            "attempted_at": str(att.attempted_at),
+            "expression": alpha.expression,
+            "family_key": alpha.family_key,
+            "region": alpha.region,
+            "universe": alpha.universe,
+            "delay": alpha.delay,
+            "neutralization": alpha.neutralization,
+            "decay": alpha.decay,
+            "notes": att.notes,
+        })
+    return {"unresolved_attempts": out, "count": len(out)}
 
-    outcome = payload.get("outcome") or payload.get("platform_outcome")
-    valid_outcomes = {p.value for p in PlatformOutcome}
-    if outcome not in valid_outcomes:
-        raise HTTPException(
-            status_code=422,
-            detail=f"outcome must be one of {sorted(valid_outcomes)}",
+
+@router.post("/attempts/{attempt_id}/resolve")
+def ui_resolve_attempt(
+    attempt_id: int, payload: dict = Body(...), db: Session = Depends(get_db)
+) -> dict:
+    """Resolve a pending attempt from the UI."""
+    attempt = db.get(SubmissionAttempt, attempt_id)
+    if attempt is None:
+        raise HTTPException(status_code=404, detail="no such attempt")
+
+    res = payload.get("result")
+    if res not in {"submitted", "rejected"}:
+        raise HTTPException(status_code=422, detail="result must be 'submitted' or 'rejected'")
+
+    attempt.result = res
+    attempt.failed_check = payload.get("failed_check")
+    attempt.check_detail = payload.get("check_detail")
+    if payload.get("notes"):
+        attempt.notes = payload.get("notes")
+
+    alpha = db.get(Alpha, attempt.alpha_id)
+    if alpha:
+        sync_alpha_platform_outcome(db, alpha.id)
+        hist_note = f"attempt:{res}" + (f": {attempt.failed_check}" if attempt.failed_check else "") + (f": {attempt.notes}" if attempt.notes else "")
+        db.add(
+            AlphaStatusHistory(
+                alpha_id=alpha.id,
+                from_status=alpha.status,
+                to_status=alpha.status,
+                note=hist_note,
+            )
         )
-
-    alpha = db.get(Alpha, alpha_id)
-    if alpha is None:
-        raise HTTPException(status_code=404, detail="no such alpha")
-
-    note = payload.get("note") or payload.get("outcome_note")
-    source = payload.get("source") or payload.get("outcome_source") or "manual"
-    raw_date = payload.get("date") or payload.get("outcome_date")
-    outcome_dt = date.fromisoformat(raw_date) if raw_date else date.today()
-
-    alpha.platform_outcome = outcome
-    alpha.outcome_date = outcome_dt
-    alpha.outcome_note = note
-    alpha.outcome_source = source
-
-    hist_note = f"outcome:{outcome}" + (f": {note}" if note else "")
-    entry = AlphaStatusHistory(
-        alpha_id=alpha.id,
-        from_status=alpha.status,
-        to_status=alpha.status,
-        note=hist_note,
-    )
-    db.add(entry)
-    db.flush()
+        db.flush()
 
     return {
-        "alpha_id": alpha.id,
-        "platform_outcome": alpha.platform_outcome,
-        "outcome_date": str(alpha.outcome_date),
-        "outcome_note": alpha.outcome_note,
-        "outcome_source": alpha.outcome_source,
+        "id": attempt.id,
+        "alpha_id": attempt.alpha_id,
+        "result": attempt.result,
+        "failed_check": attempt.failed_check,
+        "platform_outcome": alpha.platform_outcome if alpha else None,
     }
+
+
+@router.post("/attempts/{attempt_id}/dismiss")
+def ui_dismiss_attempt(attempt_id: int, db: Session = Depends(get_db)) -> dict:
+    """Dismiss a pending attempt from the UI."""
+    attempt = db.get(SubmissionAttempt, attempt_id)
+    if attempt is None:
+        raise HTTPException(status_code=404, detail="no such attempt")
+    alpha_id = attempt.alpha_id
+    db.delete(attempt)
+    db.flush()
+    sync_alpha_platform_outcome(db, alpha_id)
+    return {"id": attempt_id, "dismissed": True}
 
 
 @router.get("/correlation-matrix")

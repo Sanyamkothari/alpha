@@ -174,7 +174,7 @@ def test_brain_fetch_log_has_get_only_check() -> None:
 
 # Local provenance/result tables that legitimately contain a flagged substring
 # but are NOT write-to-BRAIN action tables (data arrives via paste or read-only GET).
-READ_ONLY_ALLOW = {"simulation_imports"}
+READ_ONLY_ALLOW = {"simulation_imports", "submission_attempts"}
 _SIMULATION_WRITE = re.compile(r"simulat.*(job|queue|run|submit)", re.IGNORECASE)
 
 
