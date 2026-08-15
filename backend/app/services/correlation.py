@@ -179,8 +179,9 @@ def compute_max_self_correlation_with_submitted(
 ) -> tuple[float | None, int | None, str]:
     """Compute max correlation against confirmed submitted alphas (submission_attempts with result='submitted').
 
-    Returns (max_correlation, target_alpha_id, method), where method is 'empirical' or 'structural_proxy'.
-    Never returns blank/unknown if a comparison target exists.
+    Returns (max_correlation, target_alpha_id, method), where method is 'empirical',
+    'structural_proxy', 'unmeasured', or 'none'.
+    Returns None for max_correlation when PnL series is unmeasured (never fabricates synthetic 0.20 or 0.85).
     """
     from app.models.alphas import SubmissionAttempt
 
@@ -244,9 +245,9 @@ def compute_max_self_correlation_with_submitted(
     is_struct_corr, struct_collision = check_structural_proxy(db, alpha_id, portfolio=submitted_alphas)
     target_id = submitted_alphas[0].id if submitted_alphas else None
     if is_struct_corr:
-        # Near-duplicate / same family structural proxy estimate
-        return 0.85, target_id, "structural_proxy"
+        # Near-duplicate / same family structural proxy estimate: correlation magnitude is unmeasured (None)
+        return None, target_id, "structural_proxy"
 
     # When no structural collision is detected and PnL is unmeasured, return (None, None, "unmeasured")
-    # Fabricating a synthetic 0.20 would create a false sense of empirical measurement.
+    # Fabricating a synthetic numeric value (0.20 or 0.85) would distort submission gating.
     return None, None, "unmeasured"
