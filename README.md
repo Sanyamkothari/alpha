@@ -97,10 +97,15 @@ backend/
 │   └── seeds/            Operator knowledge base seeds (102 operators + signatures)
 ├── scripts/              CLI workflows (run_family, report, fetch_catalog, build_desktop)
 ├── migrations/           Alembic database migrations
-└── tests/                120+ unit and integration tests (fast, isolated SQLite)
+└── tests/                190+ unit and integration tests (fast, isolated SQLite)
 fields/                   Field catalog samples and fixtures
 operators/                Operator definitions, signatures, and type constraints
-docs/                     BRAIN API reference, architectural decision records, packaging
+docs/                     Architecture, study validation, operating guides, decision records
+    ├── strategy/         Validation protocol, product strategy, roadmap, business model
+    ├── briefs/           Phase briefs (inventory, phase 0, phase 1)
+    ├── DECISIONS.md      Architectural decision records (D1–D5)
+    ├── PHASE1_OPERATING_GUIDE.md Step-by-step operating runbook
+    └── BRAIN_API.md      Empirical API reference and verified behaviors
 ```
 
 ---
