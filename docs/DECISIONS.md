@@ -61,3 +61,30 @@ If BRAIN's terms, rate limits, or a platform communication indicate that
 automated simulation is unwelcome, the client goes back to human-initiated
 batches. The queue architecture supports that without a rewrite — it is a
 concurrency setting of 0 and a manual trigger.
+
+
+## D2 — Explicit Campaign Resumption (2026-08-16)
+
+**Status:** accepted (resolves review finding F3).
+
+### What changed
+
+Campaign resumption on server boot is no longer triggered automatically on a background daemon thread by default. It is gated behind the configuration setting `AUTO_RESUME_CAMPAIGNS` (default: `false`).
+
+### Why
+
+Auto-resuming queued or interrupted campaigns on server start or during `uvicorn --reload` dev cycles silently consumed the account's simulation quota without operator confirmation. Resuming campaigns now requires an explicit operator action via the UI/API or explicitly setting `AUTO_RESUME_CAMPAIGNS=true` in the environment.
+
+
+## D3 — Campaign Task Failure Isolation & Forfeiture Policy (2026-08-16)
+
+**Status:** accepted (resolves review finding F4).
+
+### What changed
+
+If an individual campaign task fails (e.g. invalid field code or simulation error), the exception is caught, recorded in `CampaignTask.error`, and the task status is marked as `failed`. The campaign runner proceeds to subsequent tasks in the campaign without stalling the loop.
+
+### Why & Budget Policy
+
+A single malformed field or transient simulation failure must not stall an entire overnight campaign. The failed task's simulation budget is forfeited (not reallocated) to preserve the predetermined multi-armed sampling balance across territories without introducing unbounded retries.
+

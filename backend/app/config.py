@@ -60,6 +60,7 @@ class Settings(BaseSettings):
     app_env: str = "dev"
     log_level: str = "INFO"
     log_json: bool = False
+    auto_resume_campaigns: bool = False
 
     # ---- Database ----
     # Blank => default SQLite file under <repo>/database/wq.db (absolute, CWD-independent).

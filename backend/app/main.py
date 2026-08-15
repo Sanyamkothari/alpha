@@ -18,14 +18,14 @@ STATIC_DIR = Path(__file__).resolve().parent / "static"
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # On startup: check for interrupted campaigns
-    try:
-        import threading
-        from app.services.campaign_runner import auto_resume_interrupted_campaigns
-        # Run campaign resume in background thread to avoid blocking server boot
-        threading.Thread(target=auto_resume_interrupted_campaigns, daemon=True).start()
-    except Exception:
-        pass
+    if settings.auto_resume_campaigns:
+        try:
+            import threading
+            from app.services.campaign_runner import auto_resume_interrupted_campaigns
+            threading.Thread(target=auto_resume_interrupted_campaigns, daemon=True).start()
+        except Exception as exc:
+            import structlog
+            structlog.get_logger("main").error("auto_resume_startup_failed", error=str(exc))
     yield
 
 
