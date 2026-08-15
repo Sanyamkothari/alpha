@@ -132,82 +132,97 @@ def execute_campaign(
 
         log.info("campaign_task_started", task_id=task_id, arm=task_arm, field=task_field, op=task_op)
 
-        spec = FamilySpec(
-            field_code=task_field,
-            denominator=task_denom,
-            operator_family=task_op,
-            wrapper_shape=task_wrap,
-            mechanism=f"Campaign Task #{task_id} ({task_arm})",
-            grid_mode="standard",
-        )
-        settings = AlphaSettings(region="USA", universe="TOP3000", delay=1)
-        family_key = spec.family_key(settings)
-
-        # 1. Expand Candidates
-        with session_scope() as db:
-            candidates = expand(
-                db,
-                spec,
-                base_settings=settings,
-                max_candidates=task_budget,
-                arm=task_arm,
-                campaign_task_id=task_id,
+        try:
+            spec = FamilySpec(
+                field_code=task_field,
+                denominator=task_denom,
+                operator_family=task_op,
+                wrapper_shape=task_wrap,
+                mechanism=f"Campaign Task #{task_id} ({task_arm})",
+                grid_mode="standard",
             )
+            settings = AlphaSettings(region="USA", universe="TOP3000", delay=1)
+            family_key = spec.family_key(settings)
 
-        # 2. Save Candidates into Alpha Library
-        created_count = 0
-        with session_scope() as db:
-            for cand in candidates:
-                try:
-                    res = create_alpha(
-                        db,
-                        cand.expression,
-                        cand.settings,
-                        family_key=cand.family_key,
-                        grid=cand.grid,
-                        source="campaign_runner",
-                        arm=task_arm,
-                        campaign_task_id=task_id,
-                    )
-                    if res.created:
-                        created_count += 1
-                except Exception:
-                    pass
+            # 1. Expand Candidates
+            with session_scope() as db:
+                candidates = expand(
+                    db,
+                    spec,
+                    base_settings=settings,
+                    max_candidates=task_budget,
+                    arm=task_arm,
+                    campaign_task_id=task_id,
+                )
 
-        # 3. Simulate Batch on BRAIN
-        sim_count = 0
-        pass_count = 0
-        if simulate:
-            ids = pending_alpha_ids(limit=task_budget, family_key=family_key)
-            if ids:
-                batch_res = run_batch(ids)
-                sim_count = batch_res.simulated
-                with session_scope() as db:
-                    for aid in ids:
-                        m = db.execute(select(AlphaMetric).where(AlphaMetric.alpha_id == aid)).scalars().first()
-                        if m and m.passed_all_checks:
-                            pass_count += 1
+            # 2. Save Candidates into Alpha Library
+            created_count = 0
+            with session_scope() as db:
+                for cand in candidates:
+                    try:
+                        res = create_alpha(
+                            db,
+                            cand.expression,
+                            cand.settings,
+                            family_key=cand.family_key,
+                            grid=cand.grid,
+                            source="campaign_runner",
+                            arm=task_arm,
+                            campaign_task_id=task_id,
+                        )
+                        if res.created:
+                            created_count += 1
+                    except Exception:
+                        pass
 
-        # 4. Checkpoint task and campaign status in SQLite
-        with session_scope() as db:
-            t = db.get(CampaignTask, task_id)
-            if t:
-                t.status = "completed"
-                t.alphas_simulated = sim_count
-                t.alphas_passed = pass_count
-            c = db.get(Campaign, campaign_id)
-            if c:
-                c.budget_completed += sim_count
-            db.commit()
+            # 3. Simulate Batch on BRAIN
+            sim_count = 0
+            pass_count = 0
+            if simulate:
+                ids = pending_alpha_ids(limit=task_budget, family_key=family_key)
+                if ids:
+                    batch_res = run_batch(ids)
+                    sim_count = batch_res.simulated
+                    with session_scope() as db:
+                        for aid in ids:
+                            m = db.execute(select(AlphaMetric).where(AlphaMetric.alpha_id == aid)).scalars().first()
+                            if m and m.passed_all_checks:
+                                pass_count += 1
 
-        total_simulated += sim_count
-        total_passed += pass_count
-        log.info(
-            "campaign_task_completed",
-            task_id=task_id,
-            simulated=sim_count,
-            passed=pass_count,
-        )
+            # 4. Checkpoint task and campaign status in SQLite
+            with session_scope() as db:
+                t = db.get(CampaignTask, task_id)
+                if t:
+                    t.status = "completed"
+                    t.alphas_simulated = sim_count
+                    t.alphas_passed = pass_count
+                c = db.get(Campaign, campaign_id)
+                if c:
+                    c.budget_completed += sim_count
+                db.commit()
+
+            total_simulated += sim_count
+            total_passed += pass_count
+            log.info(
+                "campaign_task_completed",
+                task_id=task_id,
+                simulated=sim_count,
+                passed=pass_count,
+            )
+        except Exception as exc:
+            with session_scope() as db:
+                t = db.get(CampaignTask, task_id)
+                if t:
+                    t.status = "failed"
+                    t.error = f"{type(exc).__name__}: {exc}"
+                    db.commit()
+            log.error(
+                "campaign_task_failed",
+                task_id=task_id,
+                campaign_id=campaign_id,
+                error=str(exc),
+            )
+            continue
 
     # 5. Mark Campaign Complete
     with session_scope() as db:
