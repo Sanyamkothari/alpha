@@ -31,17 +31,17 @@ The README describes intended capability. These are measured numbers. Trust thes
 | Passed BRAIN checks | 28 |
 | Passed DSR | 11 |
 | Promoted | 16 |
-| **Submitted to BRAIN** | **2** (`N1bkwYGw`, `zqNXMEZE` — both from the Stage 3 constructor) |
+| **Submitted to BRAIN** | **4** (`zqNXMEZE`, `N1bkwYGw`, `VkGeJGrM`, `xANpg6OW`) |
 | **Accepted / paid** | **0 known** |
-| Fields touched | 29 of 6,583 (0.44%) |
+| Fields touched | 32 of 6,583 (0.49%) |
 | Operator families used | 1 (`ts_zscore`) before Phase 1 |
 | Throughput | ~13 sims/day against a 200–500/day design target |
 
-**The premise "this system produces good alphas" is unproven.** Two submissions cleared BRAIN's gate, which proves the loop closes. It does not establish a rate.
+**The premise "this system produces good alphas" is unproven.** Four submissions cleared BRAIN's gate, which proves the loop closes. It does not establish a rate.
 
 ### The single-template problem
 
-4,608 of 4,857 alphas share one shape: `rank(ts_zscore(divide(ts_backfill(FIELD,120), cap), W))`. Because BRAIN rejects submissions correlating >0.70 with the user's own alphas, the practical yield is roughly **one submittable alpha per field**, not per alpha generated. Phase 1 exists largely to break this monoculture.
+4,608 of 5,177 alphas share one shape: `rank(ts_zscore(divide(ts_backfill(FIELD,120), cap), W))`. Because BRAIN rejects submissions correlating >0.70 with the user's own alphas, the practical yield is roughly **one submittable alpha per field**, not per alpha generated. Phase 1 exists largely to break this monoculture.
 
 ### The drift incident — why single-source-of-truth matters here
 
@@ -112,6 +112,7 @@ docs/
 - **Run queries; do not infer from code.** If you report a number, show the query.
 - **Report absences as absences.** `NOT PRESENT` and `CANNOT DETERMINE` are acceptable answers. Inventing a plausible number is not.
 - Distinguish *code exists* from *code runs* from *code has been used*. Several modules had full implementations and zero rows of output.
+- **For any new constraint, exclusion, or scoring path: prove it fires on data written by the production writer, not by the test fixture.** Where a test constructs an identifier, it must construct it using the same function production uses.
 - Migrations via Alembic only. Test both upgrade and downgrade.
 - Keep the test suite green and under ~5 seconds (194 tests at last count).
 - If a task is larger than described, or the design looks wrong, **stop and report** rather than improvising.
