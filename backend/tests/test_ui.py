@@ -74,7 +74,9 @@ def test_summary_shape(client: TestClient) -> None:
     body = r.json()
     for key in ("counts", "shortlist", "near_misses", "jobs"):
         assert key in body, key
-    for key in ("alphas", "simulated", "passing", "submitted", "families"):
+    # `unresolved_attempts` feeds the nav badge and is read off `counts`, so a
+    # regression here silently hides pending attempts instead of erroring.
+    for key in ("alphas", "simulated", "passing", "submitted", "families", "unresolved_attempts"):
         assert key in body["counts"], key
 
 

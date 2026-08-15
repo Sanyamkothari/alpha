@@ -10,6 +10,7 @@ settings, so the same formula under different settings is a distinct alpha.
 from __future__ import annotations
 
 import hashlib
+from collections.abc import Iterable
 from dataclasses import asdict, dataclass
 
 from sqlalchemy import select

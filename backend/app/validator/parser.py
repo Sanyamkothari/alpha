@@ -90,7 +90,7 @@ class _Parser:
                 left = OperatorCall(
                     op_name,
                     [left, right],
-                    {},
+                    [],
                     start=left.start,
                     end=right.end,
                 )
@@ -113,7 +113,7 @@ class _Parser:
             return OperatorCall(
                 "multiply",
                 [inner, Number(-1.0, True, start=tok.pos, end=tok.pos + 1)],
-                {},
+                [],
                 start=tok.pos,
                 end=inner.end,
             )

@@ -84,6 +84,13 @@ def test_session_factory(app_db_engine: Engine) -> sessionmaker[Session]:
 
 
 @pytest.fixture(scope="session", autouse=True)
+def _isolate_pnl_store(tmp_path_factory: pytest.TempPathFactory) -> None:
+    from app.services import pnl_storage
+    pnl_dir = tmp_path_factory.mktemp("pnl")
+    pnl_storage._default_store = pnl_storage.PnLStore(base_dir=pnl_dir)
+
+
+@pytest.fixture(scope="session", autouse=True)
 def _seed(test_session_factory: sessionmaker[Session]) -> None:
     """A known corpus (operators WITH arg specs + a few fields) so the validator,
     Alpha Library, and Result Importer endpoints are exercised against real signatures."""

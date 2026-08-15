@@ -86,7 +86,6 @@ class PnLStore:
             log.warning("insufficient_date_overlap", common_days=len(sorted_dates), required=min_overlap)
             return [], [], np.empty((0, 0), dtype=np.float64)
 
-        date_indices: dict[str, int] = {d: i for i, d in enumerate(sorted_dates)}
         aligned_rows: list[np.ndarray] = []
         valid_ids: list[int] = []
 
