@@ -8,7 +8,7 @@ The building is finished. Nothing below is a coding task — it's the part where
 
 ## Before you scale — three blockers
 
-**1. Find your submission quota.** Still unanswered, and it determines whether this plan is feasible. Check your BRAIN account tier and the submission dialog. If it's 3+/week you have room; if it's 1/week, 40 attempts takes ten months and everything below stretches accordingly.
+**1. Submission quota is 4/day (confirmed).** Over 16 weeks that provides ~480 possible submission attempts against the Phase 1 target of 40. Quota has roughly 12× the headroom needed and is **not the binding constraint**. Upstream candidate diversity, coordinate exploration, and avoiding self-correlation collisions are what govern throughput.
 
 **2. Run `record_past_attempts.py`.** Ten minutes. Write down every submission you've attempted and which check killed it. "2 of 2" and "2 of 15" are completely different businesses, and only you know which one you have.
 
