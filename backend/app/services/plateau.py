@@ -271,7 +271,7 @@ def evaluate(
     pnl_store = pnl_store or get_pnl_store()
 
     # Scope DSR activation to slice-level trial count (neighbourhood & multiple testing alignment)
-    by_slice: dict[tuple, list[PlateauPoint]] = defaultdict(list)
+    by_slice: dict[tuple, list[SurfacePoint]] = defaultdict(list)
     for p in surface:
         if p.sharpe is not None:
             by_slice[p.structure].append(p)

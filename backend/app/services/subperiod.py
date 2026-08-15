@@ -109,7 +109,7 @@ def compute_dsr(
 
 
 def evaluate_subperiod_stability(
-    daily_pnl: np.ndarray,
+    daily_pnl: Sequence[float] | np.ndarray,
     min_days: int = 252,
     split_ratio_floor: float = 0.40,
     rolling_pos_floor: float = 0.70,
