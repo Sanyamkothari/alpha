@@ -34,6 +34,7 @@ from collections import defaultdict
 from dataclasses import dataclass
 from dataclasses import field as dc_field
 from statistics import median
+from typing import TYPE_CHECKING
 
 import structlog
 from sqlalchemy import func, select
@@ -42,6 +43,10 @@ from sqlalchemy.orm import Session
 from app.models.alphas import Alpha
 from app.models.enums import AlphaStatus
 from app.models.results import AlphaMetric
+
+if TYPE_CHECKING:
+    # Runtime import stays inside evaluate() to keep the module import graph flat.
+    from app.services.pnl_storage import PnLStore
 
 log = structlog.get_logger("plateau")
 
@@ -270,7 +275,7 @@ def evaluate(
     pnl_store = pnl_store or get_pnl_store()
 
     # Scope DSR activation to slice-level trial count (neighbourhood & multiple testing alignment)
-    by_slice: dict[tuple, list[PlateauPoint]] = defaultdict(list)
+    by_slice: dict[tuple, list[SurfacePoint]] = defaultdict(list)
     for p in surface:
         if p.sharpe is not None:
             by_slice[p.structure].append(p)

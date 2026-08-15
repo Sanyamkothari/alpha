@@ -140,6 +140,9 @@ def summary(db: Session = Depends(get_db)) -> dict:
             "passing": passing,
             "submitted": submitted,
             "families": len(_families(db)),
+            # The nav badge reads this off `counts`; without it the operator is
+            # never told an attempt is still waiting on a resolution.
+            "unresolved_attempts": unresolved_attempts,
         },
         # Counts BEFORE the display cap. Returning len(promoted[:25]) as the
         # "promoted" number turns a 40-survivor morning into "25 survived".

@@ -3,12 +3,18 @@
 from __future__ import annotations
 
 from datetime import datetime
+from typing import TYPE_CHECKING
 
 from sqlalchemy import CheckConstraint, DateTime, ForeignKey, Integer, String, Text, func
 from sqlalchemy.dialects.sqlite import JSON
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.models._common import Base
+
+if TYPE_CHECKING:
+    # Only for the Mapped[] annotation; the relationship resolves "Alpha" through
+    # SQLAlchemy's registry, so importing it at runtime would just add a cycle.
+    from app.models.alphas import Alpha
 
 
 class Campaign(Base):
