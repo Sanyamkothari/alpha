@@ -119,4 +119,30 @@ A proposed 60-second TTL cache on the telemetry and verdict endpoints was reject
 A revisit threshold is established: query caching and surface indexing will only be introduced if evaluation latency exceeds **3.0 seconds** or database size exceeds 25,000 alphas.
 
 
+## D6 — Territory-Level Allocation & Exact Budget Closure (2026-08-16)
 
+**Status:** accepted (resolves review findings W0, W1, W2, W3, W4, R1, R2).
+
+### What changed
+
+The Next-Up allocator was rebuilt to operate at whole-surface territory granularity:
+1. **Territory Identity**: Defined as `(field_code, operator_family, horizon_band)` where lookback windows are partitioned into `short` (1–10d), `medium` (11–63d), and `long` (64d+).
+2. **Exact Budget Arithmetic Closure**: The allocator guarantees $\sum \text{task.target\_simulations} = B$ for all $B \ge 49$, allocating any remainder $+1$ to existing tasks rather than creating stunted sub-30 tasks.
+3. **Minimum Viable Task Size**: `MIN_VIABLE_TERRITORY_SIMS = 30` (aligned with `MIN_TRIALS_FOR_DSR = 30`).
+4. **Saturation Cap**: Replaced the global field blacklist with `MAX_TERRITORIES_PER_FIELD_OP = 3` per `(field_code, operator_family)`.
+5. **Crowding Scoping**: `CROWDED_USER_COUNT = 2000` is scoped strictly to the exploit arm, preserving Q4 sampling in the random stratified calibration arm.
+6. **Reproducible Seeding**: Added nullable `seed` column to `Campaign` via migration `c3d4e5f6a1b2`, ensuring deterministic campaign task generation with `random.Random(seed)`.
+
+
+## D7 — Option A: Empirical Hit-Rate Ranking & Key Normalization (2026-08-16)
+
+**Status:** accepted (resolves review findings F3, F4, F5, FF1).
+
+### What changed
+
+1. **Option A Decision**: The dead `compute_alpha_reward` ladder, `RUNG_*` constants, and `sample_hierarchical_posterior` were deleted. The allocator ranks transparently on measured simulation hit-rate (simulations clearing checks) and uncrowded crowding scores.
+2. **Normalized Territory-Level Self-Correlation Exclusion**: Implemented `parse_territory_signature()` to normalize all writer and reader keys.
+   - Legacy keys (`horizon_band is None`) span all lookback windows and exclude **all three** horizon bands for `(field_code, operator_family)`.
+   - Canonical keys (`horizon_band` set) exclude **specifically** that horizon band.
+   - Fields remain reachable under untried operator families.
+3. **Absences Reported as Absences**: Unmeasured metrics (such as `self_corr_headroom`) return `None` rather than fabricating synthetic proxy numbers.

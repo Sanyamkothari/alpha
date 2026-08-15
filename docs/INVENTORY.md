@@ -12,13 +12,13 @@
 | **Stored daily PnL vectors** | 369 | 369 | 1,236-day `.npy` files in `database/pnl/` |
 | **Submission attempts** | 0 (untracked) | 2 | Recorded in `submission_attempts` table |
 | **Platform outcomes derived** | 0 (schema absent) | 2 (`submitted`) | Single-writer 3-state lifecycle (`alphas.platform_outcome`) |
-| **Test suite (passed / runtime)** | 176 / 1.25s | 198 / ~5.5s | 100% passing within frozen $\le 6.0\text{s}$ ceiling |
+| **Test suite (passed / runtime)** | 176 / 1.25s | 218 / ~2.2s | 100% passing within frozen $\le 6.0\text{s}$ ceiling |
 
 > [!NOTE]
 > **Key Infrastructure Updates since Baseline:**
 > 1. **Point-in-Time Crowding Resolved**: `alpha_field_snapshot` now captures point-in-time `user_count`, `alpha_count`, and `coverage` when each alpha is created, preserving historical crowding for future retrospectives.
 > 2. **Platform Outcome Lifecycle Established**: The `submission_attempts` schema and `sync_alpha_platform_outcome` single-writer function derive honest 3-state outcomes (`submitted`, `accepted`, `rejected`).
-> 3. **Campaign Execution Grounded**: Multi-armed allocator (exploit 50%, random-stratified 30%, plateau-fill 20%) persists task execution with error isolation, whole-surface granularity, and quartile tracking.
+> 3. **Campaign Execution Grounded**: Multi-armed allocator (exploit 50%, random-stratified 30%, plateau-fill 20%) persists task execution with error isolation, whole-surface granularity, seed reproducibility, and quartile tracking.
 
 ---
 
@@ -40,8 +40,7 @@ Per `CLAUDE.md` and Finding F13:
 | **`app/services/plateau.py`** | YES | YES | YES | Evaluates 2D surfaces; 208 candidate alphas pass plateau median filter |
 | **`app/services/subperiod.py`** | YES | YES | YES | Evaluates DSR (11 pass) and subperiod split-half/decay (58 pass) |
 | **`app/services/correlation.py`** | YES | YES | YES | Vectorized correlation matrix across 369 daily PnL vectors in `database/pnl/` |
-| **`app/services/allocator.py`** | YES | YES | YES | Generates 3-arm budget plans in UI / campaign runner |
-| **`app/services/allocator_bandit.py`** | YES | NO (Tests only) | NO (0 rows) | 135 lines Thompson Sampling; uncalled by production routes (staged) |
+| **`app/services/allocator.py`** | YES | YES | YES | Unified allocator with hierarchical bandit, territory coordinates, and exact budget closure |
 | **`app/services/field_crowding.py`** | YES | NO (Tests only) | NO (0 rows) | Uncalled by production routes (staged) |
 | **`app/services/field_triage.py`** | YES | YES (CLI) | YES | `SELECT COUNT(*) FROM llm_runs;` -> 64 rows |
 | **`app/models/alphas.py` (Submissions)** | YES | YES | YES | `SELECT COUNT(*) FROM submission_attempts;` -> 2 rows |
