@@ -181,7 +181,7 @@ def execute_campaign(
             ids = pending_alpha_ids(limit=task_budget, family_key=family_key)
             if ids:
                 batch_res = run_batch(ids)
-                sim_count = len(ids) - len(batch_res.errored)
+                sim_count = batch_res.simulated
                 with session_scope() as db:
                     for aid in ids:
                         m = db.execute(select(AlphaMetric).where(AlphaMetric.alpha_id == aid)).scalars().first()
