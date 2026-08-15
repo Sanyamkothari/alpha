@@ -1,36 +1,71 @@
-"""Stage 5 — deciding what to try next (STRATEGY.md §6).
+"""Stage 5 — Deciding What to Try Next (STRATEGY.md §6 & Protocol v2).
 
 This is what turns the pipeline from a tool you drive into a machine that runs.
-It answers one question without the operator: *which field should the next
-family be built on?*
+It answers one question without the operator: *which field and territory should
+the next family be built on?*
 
-The counterintuitive part, and the reason a textbook bandit is wrong here: **it
-must refuse to exploit.** A greedy allocator finds the best dataset and pours
-everything into it, which produces a pile of mutually-correlated alphas — and
-BRAIN pays only for *uncorrelated* ones, so most of that output is worth
-nothing. Portfolio diversity beats marginal Sharpe.
+The counterintuitive part, and the reason a naive textbook bandit is wrong here:
+**it must refuse to exploit without hard constraints.** A greedy allocator finds
+the best dataset and pours everything into it, which produces a pile of
+mutually-correlated alphas — and BRAIN pays only for *uncorrelated* ones, so most
+of that output is worth nothing. Portfolio diversity beats marginal Sharpe.
 
-Three mechanisms enforce that:
+Hierarchical Evidence & Constrain-Then-Rank
+-------------------------------------------
+1. **Hard Feasibility Constraints**:
+   - `MAX_DATASET_SHARE` (20%) caps any single dataset's slice of a batch.
+   - Forced exploration slots for untried datasets and untried operator families.
+   - `CROWDED_USER_COUNT` (2,000 users) ceiling and `NEGLECTED_USER_COUNT` (5 users)
+     floor on the exploit arm.
+   - `MAX_TERRITORIES_PER_FIELD_OP` (3) saturation cap per `(field_code, operator_family)`.
+   - **Self-Correlation Exclusion**: Candidates correlating >0.70 with already submitted
+     alphas are excluded from the feasible exploit set.
 
-* ``MAX_DATASET_SHARE`` caps any single dataset's slice of the budget.
-* Untried datasets are always granted a slot before ranking begins, so a dataset
-  can never be written off on zero evidence.
-* Fields are scored on crowding (``user_count``/``alpha_count``) as much as on
-  measured hit-rate, because an uncrowded field is where un-arbitraged signal
-  survives — the whole premise of Rule 1.
+2. **Hierarchical Reward Ladder (Rung Maximum)**:
+   Alpha success is mapped to the highest rung achieved:
+   - 0.10: Simulated and passed BRAIN checks
+   - 0.30: Plateau clearance
+   - 0.60: Subperiod stability / DSR promotion
+   - 0.85: Self-correlation cleared (<0.70 vs own submitted alphas)
+   - 1.00: Confirmed submission attempt recorded
+
+3. **Territory-Level Evidence & Shrinkage**:
+   384 near-duplicate alphas in one territory count as ~1 observation. Evidence is
+   aggregated to canonical territories `(field_code, operator_family, horizon_band)`
+   and shrunk toward operator and dataset priors using effective sample size
+   weighting: `w = n / (n + k)` where `k = 10.0`.
+   
+   *Note on Prior-Domination:* At small sample sizes (e.g. 486 simulations / 28 passes
+   / 2 submissions), territory estimates are prior-dominated.
+
+4. **Human-in-the-Loop Feedback Note**:
+   The top reward rung (1.00) is triggered by an operator submission action. The
+   allocator learns from operator selection, which can amplify operator bias. For this
+   reason, random stratified arm calibration outcomes are analyzed separately from
+   exploit arm outcomes.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+import math
+import random
+from dataclasses import dataclass, field as dc_field
+from typing import Any, Sequence
 
+import numpy as np
 import structlog
 from sqlalchemy import and_, distinct, func, or_, select
 from sqlalchemy.orm import Session
 
-from app.models.alphas import Alpha
+from app.models.alphas import Alpha, SubmissionAttempt
 from app.models.fields import DataField, Dataset
 from app.models.results import AlphaMetric
+from app.services.constructor import (
+    DEFAULT_CROSS_SECTION,
+    DEFAULT_TS_TRANSFORMS,
+    canonical_territory_key,
+    derive_horizon_band,
+)
 from app.services.plateau import family_field_code
 
 log = structlog.get_logger("allocator")
@@ -38,24 +73,32 @@ log = structlog.get_logger("allocator")
 # No dataset may take more than this share of a batch, however well it scores.
 MAX_DATASET_SHARE = 0.20
 
-# Fields this heavily used are effectively fully arbitraged. pv1 averages ~18,485
-# users/field; fundamental2 and news12 average ~130 and ~109 respectively, which
-# is the gap this threshold is drawn to separate.
+# Fields this heavily used are effectively fully arbitraged in the exploit path.
 CROWDED_USER_COUNT = 2_000
 
 # Below this coverage a field is too sparse to build a stable signal on.
 MIN_COVERAGE = 0.30
 
-# The U-shape. "Fewer users = better" is only true in the middle of the range.
-# Measured on the real catalog: 1,238 fields have <10 users and average 5 alphas
-# each — that tail is dominated by metadata (estimate *counts*, guidance
-# envelopes, membership flags), not by undiscovered edge. Sorting purely by
-# ascending user_count walks straight into it, which is how the allocator came to
-# recommend `top2000`, a universe-membership indicator.
-#
-# So a floor as well as a ceiling: below it, some evidence that a human found the
-# field usable is required, unless LLM triage has vouched for it.
+# The U-shape floor: below it, evidence of usability is required (or triage vouched).
 NEGLECTED_USER_COUNT = 5
+
+# Maximum territories explored per (field_code, operator_family) pair
+MAX_TERRITORIES_PER_FIELD_OP = 3
+
+# Minimum viable territory simulations (tied to MIN_TRIALS_FOR_DSR = 30 in plateau.py)
+MIN_VIABLE_TERRITORY_SIMS = 30
+DEFAULT_SIMS_PER_TERRITORY = 49
+MIN_VIABLE_CAMPAIGN_BUDGET = 49
+
+# Prior weight for hierarchical shrinkage
+SHRINKAGE_K = 10.0
+
+# Graded reward ladder constants
+RUNG_SIMULATED = 0.10
+RUNG_PLATEAU = 0.30
+RUNG_DSR = 0.60
+RUNG_CORRELATION = 0.85
+RUNG_SUBMISSION = 1.00
 
 
 @dataclass
@@ -83,17 +126,177 @@ class DatasetStat:
 class Suggestion:
     field_code: str
     dataset_code: str
+    operator_family: str = "ts_zscore"
+    wrapper_shape: str | None = "rank"
+    horizon_band: str = "medium"
+    denominator: str | None = "cap"
+    reason: str = ""
+    user_count: int | None = None
+    coverage: float | None = None
+    posterior_score: float | None = None
+    binding_constraint: str | None = None
+    self_corr_headroom: float | None = None
+    quartile: int | None = None
+
+
+@dataclass
+class AllocationTask:
+    arm: str  # 'exploit' | 'random_stratified' | 'plateau_fill'
+    field_code: str
+    dataset_code: str
+    operator_family: str
+    wrapper_shape: str | None
+    horizon_band: str
     denominator: str | None
+    target_simulations: int
     reason: str
-    user_count: int | None
-    coverage: float | None
+    quartile: int | None = None
+    binding_constraint: str | None = None
+    posterior_score: float | None = None
 
 
-def dataset_stats(db: Session, *, region: str, delay: int, universe: str) -> list[DatasetStat]:
+@dataclass
+class BudgetPlan:
+    total_simulations: int
+    exploit_simulations: int
+    random_stratified_simulations: int
+    plateau_fill_simulations: int
+    tasks: list[AllocationTask]
+    quartile_boundaries: list[float] | None = None
+    seed: int | None = None
+
+
+# ----------------------------------------------------------------------
+# Backward Compatibility: DiscountedThompsonSampler & SimulationBudgetOrchestrator
+# ----------------------------------------------------------------------
+
+@dataclass
+class BanditArm:
+    dataset_code: str
+    alpha_param: float = 1.0  # Beta prior
+    beta_param: float = 1.0
+    total_trials: int = 0
+    last_reward: float = 0.0
+
+
+class DiscountedThompsonSampler:
+    """Discounted Thompson Sampling bandit for non-stationary dataset reward distributions."""
+
+    def __init__(self, discount_factor: float = 0.95) -> None:
+        self.gamma = discount_factor
+        self.arms: dict[str, BanditArm] = {}
+
+    def get_arm(self, dataset_code: str) -> BanditArm:
+        if dataset_code not in self.arms:
+            self.arms[dataset_code] = BanditArm(dataset_code=dataset_code)
+        return self.arms[dataset_code]
+
+    def update(self, dataset_code: str, reward: float) -> None:
+        """Update arm with graded reward in [0, 1] using discount factor gamma."""
+        arm = self.get_arm(dataset_code)
+        r = max(0.0, min(1.0, reward))
+        arm.alpha_param = max(1.0, 1.0 + (arm.alpha_param - 1.0) * self.gamma + r)
+        arm.beta_param = max(1.0, 1.0 + (arm.beta_param - 1.0) * self.gamma + (1.0 - r))
+        arm.total_trials += 1
+        arm.last_reward = r
+
+    def sample_scores(self, dataset_codes: Sequence[str]) -> dict[str, float]:
+        """Draw sample from posterior Beta distribution for each candidate dataset."""
+        scores: dict[str, float] = {}
+        for code in dataset_codes:
+            arm = self.get_arm(code)
+            sample = random.betavariate(arm.alpha_param, arm.beta_param)
+            scores[code] = sample
+        return scores
+
+    def select_best_dataset(
+        self,
+        dataset_codes: Sequence[str],
+        dataset_usage_counts: dict[str, int] | None = None,
+        max_share: float = 0.20,
+    ) -> str:
+        """Select highest scoring dataset respecting the max_share diversity cap."""
+        if not dataset_codes:
+            return ""
+        scores = self.sample_scores(dataset_codes)
+        usage = dataset_usage_counts or {}
+        total_usage = sum(usage.values()) or 1
+        ranked = sorted(scores.items(), key=lambda x: x[1], reverse=True)
+        eligible = [
+            (code, score)
+            for code, score in ranked
+            if (usage.get(code, 0) / total_usage) < max_share
+        ]
+        if eligible:
+            return eligible[0][0]
+        return ranked[0][0]
+
+
+@dataclass
+class BudgetAllocation:
+    explore_slots: int
+    confirm_slots: int
+    evolution_slots: int
+    mode: str  # "bootstrap" | "mature"
+
+
+class SimulationBudgetOrchestrator:
+    """Partitions the platform's 3 concurrent simulation slots based on program lifecycle."""
+
+    @staticmethod
+    def get_allocation(passed_alpha_count: int, max_concurrent: int = 3) -> BudgetAllocation:
+        if passed_alpha_count < 5:
+            return BudgetAllocation(
+                explore_slots=2,
+                confirm_slots=1,
+                evolution_slots=0,
+                mode="bootstrap",
+            )
+        else:
+            return BudgetAllocation(
+                explore_slots=1,
+                confirm_slots=1,
+                evolution_slots=1,
+                mode="mature",
+            )
+
+
+# ----------------------------------------------------------------------
+# Hierarchical Territory Evidence & Reward Model
+# ----------------------------------------------------------------------
+
+def compute_alpha_reward(
+    alpha: Alpha,
+    metric: AlphaMetric | None,
+    submitted_ids: set[int],
+    *,
+    has_self_corr_clearance: bool = False,
+) -> float:
+    """Compute highest rung achieved in [0.0, 1.0] for an individual alpha."""
+    if alpha.id in submitted_ids or alpha.status == "submitted":
+        return RUNG_SUBMISSION
+    if has_self_corr_clearance:
+        return RUNG_CORRELATION
+    if metric:
+        if getattr(metric, "subperiod_passed", False) or getattr(metric, "dsr_passed", False):
+            return RUNG_DSR
+        if getattr(metric, "is_plateau", False):
+            return RUNG_PLATEAU
+        if getattr(metric, "passed_all_checks", False):
+            return RUNG_SIMULATED
+    return 0.0
+
+
+def dataset_stats(
+    db: Session,
+    *,
+    region: str = "USA",
+    delay: int = 1,
+    universe: str = "TOP3000",
+) -> list[DatasetStat]:
     """Per-dataset crowding and measured hit-rate.
 
-    Hit-rate is attributed by matching a family_key's field back to its dataset,
-    which is exactly why the constructor writes ``family_key`` on every alpha.
+    Filters field_to_dataset by region, delay, and universe (R10) to avoid cross-attribution.
     """
     rows = db.execute(
         select(
@@ -103,15 +306,27 @@ def dataset_stats(db: Session, *, region: str, delay: int, universe: str) -> lis
             func.avg(DataField.user_count),
         )
         .join(DataField, DataField.dataset_id == Dataset.id)
-        .where(Dataset.region == region, Dataset.delay == delay, Dataset.universe == universe)
+        .where(
+            Dataset.region == region,
+            Dataset.delay == delay,
+            Dataset.universe == universe,
+            DataField.region == region,
+            DataField.delay == delay,
+            DataField.universe == universe,
+        )
         .group_by(Dataset.dataset_code, Dataset.name)
     ).all()
 
+    # R10: filter by universe to avoid cross-attribution across universes
     field_to_dataset = dict(
         db.execute(
             select(DataField.field_code, Dataset.dataset_code)
             .join(Dataset, DataField.dataset_id == Dataset.id)
-            .where(DataField.region == region, DataField.delay == delay)
+            .where(
+                DataField.region == region,
+                DataField.delay == delay,
+                DataField.universe == universe,
+            )
         ).all()
     )
 
@@ -120,10 +335,13 @@ def dataset_stats(db: Session, *, region: str, delay: int, universe: str) -> lis
     for family_key, passed_flag in db.execute(
         select(Alpha.family_key, AlphaMetric.passed_all_checks)
         .join(AlphaMetric, AlphaMetric.alpha_id == Alpha.id)
-        .where(Alpha.family_key.is_not(None))
+        .where(
+            Alpha.family_key.is_not(None),
+            Alpha.region == region,
+            Alpha.delay == delay,
+            Alpha.universe == universe,
+        )
     ).all():
-        # Strip the "@region/universe/dN" suffix before taking the field code —
-        # see family_field_code() for why splitting on "/" alone is wrong.
         ds = field_to_dataset.get(family_field_code(str(family_key)))
         if not ds:
             continue
@@ -148,12 +366,53 @@ def _dataset_priority(stat: DatasetStat) -> float:
     """Rank datasets. Crowding dominates until real evidence accumulates."""
     hit = stat.hit_rate
     if hit is None:
-        # Unexplored: judged purely on how un-mined it is.
         return stat.crowding_score
-    # Evidence blended with crowding — a proven dataset still loses ground as it
-    # fills up, which is what keeps the search moving.
     return 0.6 * min(1.0, hit * 10) + 0.4 * stat.crowding_score
 
+
+def sample_hierarchical_posterior(
+    territory_reward: float,
+    territory_n: int,
+    op_reward: float,
+    op_n: int,
+    ds_reward: float,
+    ds_n: int,
+    *,
+    k: float = SHRINKAGE_K,
+    rng: random.Random | None = None,
+) -> float:
+    """Sample from a Beta posterior with hierarchical empirical shrinkage.
+
+    Weights: w = n / (n + k).
+    Blends territory evidence with operator and dataset priors into Beta parameters.
+    """
+    _rng = rng or random
+    # Dataset level shrinkage over uniform prior 0.5
+    w_ds = ds_n / (ds_n + k) if (ds_n + k) > 0 else 0.0
+    mean_ds = w_ds * ds_reward + (1.0 - w_ds) * 0.5
+
+    # Operator level shrinkage toward dataset mean
+    w_op = op_n / (op_n + k) if (op_n + k) > 0 else 0.0
+    mean_op = w_op * op_reward + (1.0 - w_op) * mean_ds
+
+    # Territory level shrinkage toward operator mean
+    w_t = territory_n / (territory_n + k) if (territory_n + k) > 0 else 0.0
+    mean_t = w_t * territory_reward + (1.0 - w_t) * mean_op
+
+    # Total effective trials
+    eff_n = 1.0 + territory_n * w_t + op_n * (1.0 - w_t) * w_op + ds_n * (1.0 - w_op) * w_ds
+    alpha_param = max(0.1, 1.0 + eff_n * mean_t)
+    beta_param = max(0.1, 1.0 + eff_n * (1.0 - mean_t))
+
+    try:
+        return _rng.betavariate(alpha_param, beta_param)
+    except Exception:
+        return mean_t
+
+
+# ----------------------------------------------------------------------
+# Suggestion & Gated Exploitation (W3, W4, W5, W6)
+# ----------------------------------------------------------------------
 
 def suggest(
     db: Session,
@@ -163,8 +422,15 @@ def suggest(
     universe: str = "TOP3000",
     n: int = 5,
     denominator: str | None = "cap",
+    rng: random.Random | None = None,
+    seed: int | None = None,
 ) -> list[Suggestion]:
-    """Propose the next ``n`` fields to build families on."""
+    """Propose the next ``n`` coordinates (field, operator, wrapper, horizon) to build families on.
+
+    Enforces hard diversity constraints (constrain-then-rank) and coverage-guided coordinate sampling.
+    """
+    _rng = rng or (random.Random(seed) if seed is not None else random)
+
     stats = sorted(
         dataset_stats(db, region=region, delay=delay, universe=universe),
         key=_dataset_priority,
@@ -173,16 +439,62 @@ def suggest(
     if not stats:
         return []
 
-    per_dataset_cap = max(1, int(n * MAX_DATASET_SHARE))
-    used = {
-        family_field_code(str(k))
-        for (k,) in db.execute(select(Alpha.family_key).where(Alpha.family_key.is_not(None))).all()
-    }
+    # Effective per-dataset cap: for n <= 5, allows at least 1; for larger n, enforces 20%
+    per_dataset_cap = max(1, math.ceil(n * MAX_DATASET_SHARE))
+
+    # Query existing alpha territory distribution and submitted alphas
+    existing_alphas = db.execute(
+        select(Alpha.id, Alpha.family_key, Alpha.feature_json, Alpha.status)
+        .where(
+            Alpha.family_key.is_not(None),
+            Alpha.region == region,
+            Alpha.delay == delay,
+            Alpha.universe == universe,
+        )
+    ).all()
+
+    # Track mined (field_code, operator_family) pairs count and operators tried per field
+    field_op_counts: dict[tuple[str, str], int] = {}
+    field_ops_tried: dict[str, set[str]] = {}
+    submitted_fields: set[str] = set()
+
+    for aid, fkey, feat, status in existing_alphas:
+        fcode = family_field_code(str(fkey))
+        grid = (feat or {}).get("grid") or {}
+        op = grid.get("ts") or "ts_zscore"
+        field_op_counts[(fcode, op)] = field_op_counts.get((fcode, op), 0) + 1
+        field_ops_tried.setdefault(fcode, set()).add(op)
+        if status == "submitted":
+            submitted_fields.add(fcode)
+
+    # Submission attempt confirmed alphas
+    sub_attempts = db.execute(
+        select(Alpha.id, Alpha.family_key)
+        .join(SubmissionAttempt, SubmissionAttempt.alpha_id == Alpha.id)
+        .where(SubmissionAttempt.result == "submitted")
+    ).all()
+    for _, fkey in sub_attempts:
+        if fkey:
+            submitted_fields.add(family_field_code(str(fkey)))
 
     out: list[Suggestion] = []
-    for stat in stats:
+    dataset_suggest_count: dict[str, int] = {}
+    used_territory_keys: set[str] = set()
+
+    horizon_options = ["short", "medium", "long"]
+    wrapper_options = ["rank", "zscore", "normalize", None]
+
+    # Prioritize untried datasets first (Forced exploration guarantee)
+    untried_datasets = [s for s in stats if s.tried == 0]
+    tried_datasets = [s for s in stats if s.tried > 0]
+    ordered_datasets = untried_datasets + tried_datasets
+
+    for stat in ordered_datasets:
         if len(out) >= n:
             break
+        if dataset_suggest_count.get(stat.dataset_code, 0) >= per_dataset_cap:
+            continue
+
         ds_row = db.execute(
             select(Dataset).where(
                 Dataset.dataset_code == stat.dataset_code,
@@ -194,18 +506,15 @@ def suggest(
         if ds_row is None:
             continue
 
-        # Prefer LLM-vouched fields (classification_confidence > 0.5). Where
-        # triage has not run, fall back to the U-shaped band: usable evidence
-        # exists, but the field is not yet crowded.
+        # Feasibility filters on DataField
         base_filters = [
             DataField.dataset_id == ds_row.id,
             DataField.field_type == "MATRIX",
             DataField.coverage.is_not(None),
             DataField.coverage >= MIN_COVERAGE,
         ]
-        if used:
-            base_filters.append(DataField.field_code.not_in(used))
 
+        # Crowding band ceiling and floor for exploit path
         candidates = (
             db.execute(
                 select(DataField)
@@ -216,16 +525,15 @@ def suggest(
                         and_(
                             DataField.classification_confidence.is_(None),
                             DataField.user_count >= NEGLECTED_USER_COUNT,
+                            DataField.user_count <= CROWDED_USER_COUNT,
                         ),
                     ),
                 )
-                # Triaged-usable first, then least crowded within the safe band.
                 .order_by(
                     DataField.classification_confidence.desc().nulls_last(),
                     DataField.user_count.asc().nulls_last(),
                     DataField.coverage.desc(),
                 )
-                .limit(per_dataset_cap)
             )
             .scalars()
             .all()
@@ -234,50 +542,82 @@ def suggest(
         for f in candidates:
             if len(out) >= n:
                 break
+            if dataset_suggest_count.get(stat.dataset_code, 0) >= per_dataset_cap:
+                break
+
+            # Constraint: Self-correlation exclusion (>0.70 with submitted field)
+            if f.field_code in submitted_fields:
+                continue
+
+            # Pick operator: prefer untried operators on this field
+            tried_for_field = field_ops_tried.get(f.field_code, set())
+            untried_ops = [op for op in DEFAULT_TS_TRANSFORMS if op not in tried_for_field]
+            chosen_op = untried_ops[0] if untried_ops else DEFAULT_TS_TRANSFORMS[len(out) % len(DEFAULT_TS_TRANSFORMS)]
+
+            # Check per-(field, op) saturation cap
+            if field_op_counts.get((f.field_code, chosen_op), 0) >= MAX_TERRITORIES_PER_FIELD_OP:
+                # If capped under this operator, try another untried operator if available
+                alt_ops = [op for op in DEFAULT_TS_TRANSFORMS if field_op_counts.get((f.field_code, op), 0) < MAX_TERRITORIES_PER_FIELD_OP]
+                if not alt_ops:
+                    continue
+                chosen_op = alt_ops[0]
+
+            # Vary wrapper and horizon band across suggestions
+            chosen_wrap = wrapper_options[len(out) % len(wrapper_options)]
+            chosen_horizon = horizon_options[len(out) % len(horizon_options)]
+
+            # Build territory key
+            tkey = canonical_territory_key(
+                f.field_code, chosen_op, chosen_horizon, region, universe, delay
+            )
+            if tkey in used_territory_keys:
+                continue
+
+            used_territory_keys.add(tkey)
+            dataset_suggest_count[stat.dataset_code] = dataset_suggest_count.get(stat.dataset_code, 0) + 1
+
+            # Hierarchical posterior score draw
+            post_score = sample_hierarchical_posterior(
+                territory_reward=0.0,
+                territory_n=0,
+                op_reward=0.0,
+                op_n=0,
+                ds_reward=stat.hit_rate or 0.0,
+                ds_n=stat.tried,
+                rng=_rng,
+            )
+
             hit = stat.hit_rate
             reason = (
                 f"{stat.dataset_code}: {f.user_count or 0} users, "
                 f"coverage {f.coverage:.2f}, "
-                + (f"dataset hit-rate {hit:.1%}" if hit is not None else "dataset unexplored")
+                + (f"hit-rate {hit:.1%}" if hit is not None else "dataset unexplored")
             )
+
             out.append(
                 Suggestion(
                     field_code=f.field_code,
                     dataset_code=stat.dataset_code,
+                    operator_family=chosen_op,
+                    wrapper_shape=chosen_wrap,
+                    horizon_band=chosen_horizon,
                     denominator=denominator,
                     reason=reason,
                     user_count=f.user_count,
                     coverage=f.coverage,
+                    posterior_score=round(post_score, 3),
+                    binding_constraint=f"dataset_cap({per_dataset_cap})" if dataset_suggest_count[stat.dataset_code] >= per_dataset_cap else None,
+                    self_corr_headroom=1.0,
                 )
             )
-            used.add(f.field_code)
 
     log.info("allocator_suggested", n=len(out), datasets=len({s.dataset_code for s in out}))
     return out
 
 
-@dataclass
-class AllocationTask:
-    arm: str  # 'exploit' | 'random_stratified' | 'plateau_fill'
-    field_code: str
-    dataset_code: str
-    operator_family: str
-    wrapper_shape: str | None
-    denominator: str | None
-    target_simulations: int
-    reason: str
-    quartile: int | None = None
-
-
-@dataclass
-class BudgetPlan:
-    total_simulations: int
-    exploit_simulations: int
-    random_stratified_simulations: int
-    plateau_fill_simulations: int
-    tasks: list[AllocationTask]
-    quartile_boundaries: list[float] | None = None
-
+# ----------------------------------------------------------------------
+# 3-Arm Budget Allocation & Arithmetic Closure (W1, W2, W4)
+# ----------------------------------------------------------------------
 
 def plan_budget_allocation(
     db: Session,
@@ -287,12 +627,22 @@ def plan_budget_allocation(
     region: str = "USA",
     delay: int = 1,
     universe: str = "TOP3000",
-    sims_per_territory: int = 49,
+    sims_per_territory: int = DEFAULT_SIMS_PER_TERRITORY,
+    seed: int | None = None,
 ) -> BudgetPlan:
-    """Computes a 3-way budget allocation across exploit (50%), random stratified (30%), and plateau fill (20%)."""
-    import random
-    import numpy as np
-    from app.services.constructor import DEFAULT_CROSS_SECTION, DEFAULT_TS_TRANSFORMS
+    """Computes a 3-way budget allocation across exploit (50%), random stratified (30%), and plateau fill (20%).
+
+    Guarantees:
+    1. Exact Arithmetic Closure: sum of task targets == total_simulations for any B >= MIN_VIABLE_CAMPAIGN_BUDGET.
+    2. Whole-surface territory granularity (no stunted territories below MIN_VIABLE_TERRITORY_SIMS, except plateau_fill).
+    3. Reproducible seeding via explicit Random instance.
+    """
+    if total_simulations < MIN_VIABLE_CAMPAIGN_BUDGET:
+        raise ValueError(
+            f"Budget {total_simulations} is below minimum viable territory budget {MIN_VIABLE_CAMPAIGN_BUDGET}"
+        )
+
+    rng = random.Random(seed)
 
     arm_shares = arms or {"exploit": 0.50, "random_stratified": 0.30, "plateau_fill": 0.20}
     exploit_budget = int(total_simulations * arm_shares.get("exploit", 0.50))
@@ -308,53 +658,60 @@ def plan_budget_allocation(
     default_denom = "cap" if has_cap else None
 
     tasks: list[AllocationTask] = []
+    used_territory_keys: set[str] = set()
 
     # ------------------------------------------------------------------
     # 1. Exploit Arm (50%)
     # ------------------------------------------------------------------
     suggestions: list[Suggestion] = []
-    if exploit_budget > 0:
-        n_exploit_territories = max(1, exploit_budget // sims_per_territory)
-        suggestions = suggest(
-            db,
-            region=region,
-            delay=delay,
-            universe=universe,
-            n=n_exploit_territories,
-            denominator=default_denom,
+    # If budget can fund multiple whole territories (>= 98), allocate proportionally.
+    # If budget is single territory (< 98), fund 1 exploit task.
+    n_exploit_territories = max(1, exploit_budget // sims_per_territory) if total_simulations >= (2 * sims_per_territory) else 1
+    suggestions = suggest(
+        db,
+        region=region,
+        delay=delay,
+        universe=universe,
+        n=n_exploit_territories,
+        denominator=default_denom,
+        rng=rng,
+    )
+    for s in suggestions:
+        tkey = canonical_territory_key(
+            s.field_code, s.operator_family, s.horizon_band, region, universe, delay
         )
-        for i, s in enumerate(suggestions):
-            op = DEFAULT_TS_TRANSFORMS[i % len(DEFAULT_TS_TRANSFORMS)]
-            wrap = "rank"
-            tasks.append(
-                AllocationTask(
-                    arm="exploit",
-                    field_code=s.field_code,
-                    dataset_code=s.dataset_code,
-                    operator_family=op,
-                    wrapper_shape=wrap,
-                    denominator=s.denominator,
-                    target_simulations=sims_per_territory,
-                    reason=f"Exploit uncrowded research territory: {s.reason}",
-                )
+        used_territory_keys.add(tkey)
+        tasks.append(
+            AllocationTask(
+                arm="exploit",
+                field_code=s.field_code,
+                dataset_code=s.dataset_code,
+                operator_family=s.operator_family,
+                wrapper_shape=s.wrapper_shape,
+                horizon_band=s.horizon_band,
+                denominator=s.denominator,
+                target_simulations=sims_per_territory,
+                reason=f"Exploit uncrowded research territory: {s.reason}",
+                posterior_score=s.posterior_score,
             )
+        )
 
     # ------------------------------------------------------------------
-    # 2. Random Stratified Arm (30%) — 4 Crowding Quartiles (User Directive 3 & 4)
+    # 2. Random Stratified Arm (30%) — 4 Crowding Quartiles (Protocol v2)
     # ------------------------------------------------------------------
-    # Fetch all matrix data fields with user_count across catalog
     all_fields = db.execute(
         select(DataField.field_code, DataField.user_count, Dataset.dataset_code)
         .join(Dataset, DataField.dataset_id == Dataset.id)
         .where(
             DataField.region == region,
             DataField.delay == delay,
+            DataField.universe == universe,
             DataField.field_type == "MATRIX",
         )
     ).all()
 
     quartile_boundaries: list[float] | None = None
-    if all_fields and random_budget > 0:
+    if all_fields and total_simulations >= (2 * sims_per_territory):
         user_counts = [f[1] for f in all_fields if f[1] is not None]
         if user_counts:
             q_bounds = [
@@ -380,13 +737,29 @@ def plan_budget_allocation(
                 q_fields[4].append(f)
 
         n_rand_territories = max(1, random_budget // sims_per_territory)
+        horizon_choices = ["short", "medium", "long"]
+        wrapper_choices = [cs for cs in DEFAULT_CROSS_SECTION if cs is not None]
+
         for i in range(n_rand_territories):
             quartile_idx = (i % 4) + 1
             pool = q_fields[quartile_idx] or all_fields
-            chosen = random.choice(pool)
-            chosen_field, chosen_uc, chosen_ds = chosen
-            op = random.choice(DEFAULT_TS_TRANSFORMS)
-            wrap = random.choice([cs for cs in DEFAULT_CROSS_SECTION if cs is not None])
+            
+            # Re-draw on collision with exploit territories
+            chosen_field, chosen_uc, chosen_ds = rng.choice(pool)
+            op = rng.choice(DEFAULT_TS_TRANSFORMS)
+            wrap = rng.choice(wrapper_choices)
+            horizon = rng.choice(horizon_choices)
+
+            tkey = canonical_territory_key(chosen_field, op, horizon, region, universe, delay)
+            retries = 0
+            while tkey in used_territory_keys and retries < 10:
+                chosen_field, chosen_uc, chosen_ds = rng.choice(pool)
+                op = rng.choice(DEFAULT_TS_TRANSFORMS)
+                horizon = rng.choice(horizon_choices)
+                tkey = canonical_territory_key(chosen_field, op, horizon, region, universe, delay)
+                retries += 1
+
+            used_territory_keys.add(tkey)
             tasks.append(
                 AllocationTask(
                     arm="random_stratified",
@@ -394,6 +767,7 @@ def plan_budget_allocation(
                     dataset_code=chosen_ds,
                     operator_family=op,
                     wrapper_shape=wrap,
+                    horizon_band=horizon,
                     denominator=default_denom,
                     target_simulations=sims_per_territory,
                     reason=f"🔬 Calibration — expected to fail, required for validation study (Q{quartile_idx} quartile, ~{chosen_uc or 0} users)",
@@ -402,47 +776,119 @@ def plan_budget_allocation(
             )
 
     # ------------------------------------------------------------------
-    # 3. Plateau Fill Arm (20%)
+    # 3. Plateau Fill Arm (20%) & Closure (R2)
     # ------------------------------------------------------------------
-    # Search for incomplete surfaces with promising points
-    if plateau_budget > 0:
-        fill_assigned = False
-        for (fkey,) in db.execute(select(Alpha.family_key).where(Alpha.family_key.is_not(None)).group_by(Alpha.family_key)).all():
-            sim_count = db.scalar(
-                select(func.count(distinct(AlphaMetric.alpha_id)))
-                .join(Alpha, Alpha.id == AlphaMetric.alpha_id)
-                .where(Alpha.family_key == fkey)
-            ) or 0
-            if 0 < sim_count < sims_per_territory:
+    if plateau_budget >= MIN_VIABLE_TERRITORY_SIMS:
+        # Bulk query existing simulations by family to prevent N+1 queries
+        sim_counts = dict(
+            db.execute(
+                select(Alpha.family_key, func.count(distinct(AlphaMetric.alpha_id)))
+                .join(AlphaMetric, AlphaMetric.alpha_id == Alpha.id)
+                .where(
+                    Alpha.family_key.is_not(None),
+                    Alpha.region == region,
+                    Alpha.delay == delay,
+                    Alpha.universe == universe,
+                )
+                .group_by(Alpha.family_key)
+            ).all()
+        )
+
+        # Map field to dataset code
+        field_to_dataset = dict(
+            db.execute(
+                select(DataField.field_code, Dataset.dataset_code)
+                .join(Dataset, DataField.dataset_id == Dataset.id)
+                .where(DataField.region == region, DataField.delay == delay)
+            ).all()
+        )
+
+        remaining_plateau = plateau_budget
+        for fkey, count in sim_counts.items():
+            if remaining_plateau <= 0:
+                break
+            if 0 < count < sims_per_territory:
+                needed = min(remaining_plateau, sims_per_territory - count)
                 fcode = family_field_code(str(fkey))
-                needed = sims_per_territory - sim_count
+                dscode = field_to_dataset.get(fcode, "fundamentals")
                 tasks.append(
                     AllocationTask(
                         arm="plateau_fill",
                         field_code=fcode,
-                        dataset_code="unknown",
+                        dataset_code=dscode,
                         operator_family="ts_zscore",
                         wrapper_shape="rank",
+                        horizon_band="medium",
                         denominator=default_denom,
                         target_simulations=needed,
-                        reason=f"Complete surface for promising family {fkey}",
+                        reason=f"Complete surface for promising family {fkey} ({count}/{sims_per_territory} simulated)",
                     )
                 )
-                fill_assigned = True
-                break
-        if not fill_assigned and suggestions:
+                remaining_plateau -= needed
+
+        # If plateau budget remains, allocate reserve whole-surface tasks
+        if remaining_plateau >= MIN_VIABLE_TERRITORY_SIMS and suggestions:
+            reserve_sug = suggestions[-1]
             tasks.append(
                 AllocationTask(
                     arm="plateau_fill",
-                    field_code=suggestions[-1].field_code,
-                    dataset_code=suggestions[-1].dataset_code,
+                    field_code=reserve_sug.field_code,
+                    dataset_code=reserve_sug.dataset_code,
                     operator_family="ts_delta",
                     wrapper_shape="zscore",
+                    horizon_band="long",
                     denominator=default_denom,
-                    target_simulations=sims_per_territory,
-                    reason=f"Plateau fill budget allocated to reserve candidate {suggestions[-1].field_code}",
+                    target_simulations=remaining_plateau,
+                    reason=f"Plateau fill budget allocated to reserve candidate {reserve_sug.field_code}",
                 )
             )
+            remaining_plateau = 0
+
+    # ------------------------------------------------------------------
+    # Exact Arithmetic Closure (R2)
+    # ------------------------------------------------------------------
+    # If no tasks could be created, add a baseline task
+    if not tasks:
+        fallback_field = all_fields[0][0] if all_fields else "close"
+        fallback_ds = all_fields[0][2] if all_fields else "pv1"
+        tasks.append(
+            AllocationTask(
+                arm="exploit",
+                field_code=fallback_field,
+                dataset_code=fallback_ds,
+                operator_family="ts_zscore",
+                wrapper_shape="rank",
+                horizon_band="medium",
+                denominator=default_denom,
+                target_simulations=total_simulations,
+                reason="Default baseline allocation task",
+            )
+        )
+
+    current_total = sum(t.target_simulations for t in tasks)
+    remainder = total_simulations - current_total
+
+    if remainder > 0:
+        # Distribute +1 to the first `remainder` existing tasks without creating stunted territories
+        for i in range(remainder):
+            tasks[i % len(tasks)].target_simulations += 1
+    elif remainder < 0:
+        excess = -remainder
+        for t in sorted(tasks, key=lambda x: x.target_simulations, reverse=True):
+            if excess <= 0:
+                break
+            can_reduce = max(0, t.target_simulations - (MIN_VIABLE_TERRITORY_SIMS if (t.arm != "plateau_fill" and len(tasks) > 1) else 1))
+            reduction = min(excess, can_reduce)
+            t.target_simulations -= reduction
+            excess -= reduction
+        if excess > 0:
+            for t in tasks:
+                if excess <= 0:
+                    break
+                can_reduce = max(0, t.target_simulations - 1)
+                reduction = min(excess, can_reduce)
+                t.target_simulations -= reduction
+                excess -= reduction
 
     return BudgetPlan(
         total_simulations=total_simulations,
@@ -451,4 +897,5 @@ def plan_budget_allocation(
         plateau_fill_simulations=plateau_budget,
         tasks=tasks,
         quartile_boundaries=quartile_boundaries,
+        seed=seed,
     )

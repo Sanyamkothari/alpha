@@ -107,3 +107,19 @@ def test_brain_fetch_log_allows_get(engine) -> None:
                 "'2026-01-01', '2026-01-01')"
             )
         )
+
+
+def test_alembic_migrations_roundtrip(tmp_path) -> None:
+    """Ensure alembic migrations can upgrade to head, downgrade -1, and re-upgrade."""
+    from alembic.config import Config
+    from alembic import command
+    from pathlib import Path
+
+    alembic_ini = Path(__file__).resolve().parents[1] / "alembic.ini"
+    cfg = Config(str(alembic_ini))
+    db_file = tmp_path / "alembic_test.db"
+    cfg.set_main_option("sqlalchemy.url", f"sqlite:///{db_file}")
+
+    command.upgrade(cfg, "head")
+    command.downgrade(cfg, "-1")
+    command.upgrade(cfg, "head")

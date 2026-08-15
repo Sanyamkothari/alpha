@@ -81,7 +81,7 @@ def test_execute_campaign_with_fake_brain_client(db_session, monkeypatch):
         )
     db_session.commit()
 
-    camp = create_nightly_campaign(db_session, budget=50)
+    camp = create_nightly_campaign(db_session, budget=100)
     cid = camp.id
 
     @contextmanager

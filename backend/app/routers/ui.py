@@ -424,10 +424,16 @@ def suggestions(
             {
                 "field_code": s.field_code,
                 "dataset_code": s.dataset_code,
+                "operator_family": s.operator_family,
+                "wrapper_shape": s.wrapper_shape,
+                "horizon_band": s.horizon_band,
                 "denominator": s.denominator,
                 "reason": s.reason,
                 "user_count": s.user_count,
                 "coverage": s.coverage,
+                "posterior_score": s.posterior_score,
+                "binding_constraint": s.binding_constraint,
+                "self_corr_headroom": s.self_corr_headroom,
             }
             for s in suggest(db, region=region, delay=delay, universe=universe, n=n)
         ]

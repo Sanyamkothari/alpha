@@ -28,7 +28,7 @@ from fastapi.testclient import TestClient
 from app.models.alphas import Alpha
 from app.models.enums import AlphaStatus, ImportSource
 from app.models.results import AlphaMetric, SimulationImport
-from app.services.allocator_bandit import (
+from app.services.allocator import (
     DiscountedThompsonSampler,
     SimulationBudgetOrchestrator,
 )

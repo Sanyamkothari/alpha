@@ -156,8 +156,18 @@ def _structure_of(grid: dict) -> tuple:
 
 
 def family_field_code(family_key: str) -> str:
-    """The data field a family was built on."""
-    return family_key.split("@", 1)[0].split("/", 1)[0]
+    """The data field a family was built on.
+
+    Key Compatibility:
+    Compatible with both legacy keys (`field/denom@...`, `field/denom:op:wrap@...`)
+    and canonical territory keys (`field:op:horizon@...` or `field@...`).
+    Denominator and wrapper are sub-axes within a territory.
+    """
+    prefix = family_key.split("@", 1)[0]
+    prefix = prefix.split("+", 1)[0]
+    prefix = prefix.split(":", 1)[0]
+    prefix = prefix.split("/", 1)[0]
+    return prefix
 
 
 def load_surface(

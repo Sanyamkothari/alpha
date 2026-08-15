@@ -184,3 +184,14 @@ def db_session(test_session_factory: sessionmaker[Session]) -> Iterator[Session]
     finally:
         s.rollback()
         s.close()
+
+
+@pytest.fixture(autouse=True)
+def _isolate_pnl_store(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Isolate PnL storage to a temporary directory per test."""
+    from pathlib import Path
+    from app.services import pnl_storage
+
+    store = pnl_storage.PnLStore(tmp_path / "test_pnl")
+    monkeypatch.setattr(pnl_storage, "_default_store", store)
+    monkeypatch.setattr(pnl_storage, "get_pnl_store", lambda: store)

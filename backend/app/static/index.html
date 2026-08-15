@@ -303,7 +303,7 @@ table.data td.t{font-family:var(--font-ui)}
           <h3>Next up — allocator</h3>
           <div id="sugs"></div>
           <p class="faint" style="font-size:11px;margin-top:8px">
-            Capped at 20% per dataset — concentrating produces correlated alphas,
+            Capped at max 20% per dataset (at least 1 per dataset) — concentrating produces correlated alphas,
             and BRAIN pays only for uncorrelated ones.</p>
         </div>
       </aside>
@@ -935,7 +935,11 @@ function renderSpend(){
 }
 function renderSugs(){
   $("#sugs").innerHTML=S.sugs.map((s,i)=>`<button class="sug" onclick="launch(${i})">
-    <span class="f">${s.field_code}</span>${s.denominator?`<span class="faint"> / ${s.denominator}</span>`:""}
+    <div style="display:flex;justify-content:space-between;align-items:baseline">
+      <span class="f">${s.field_code}</span>
+      <span class="chip faint" style="font-size:10px">${s.operator_family||'ts_zscore'}:${s.horizon_band||'med'}${s.wrapper_shape?` (${s.wrapper_shape})`:''}</span>
+    </div>
+    ${s.denominator?`<div class="faint" style="font-size:11px">denom: ${s.denominator}</div>`:""}
     <span class="r">${s.reason}</span></button>`).join("")
     ||`<p class="faint" style="font-size:12px">no suggestions</p>`;
 }

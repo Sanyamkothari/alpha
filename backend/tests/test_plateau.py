@@ -23,10 +23,11 @@ _STRUCTURE = {"ts": "ts_zscore", "cs": "rank", "group": None, "truncation": 0.08
 
 def _point(db, family: str, window: int, decay: int, sharpe: float, *, passes: bool) -> Alpha:
     """Insert one simulated grid point."""
-    grid = dict(_STRUCTURE, window=window, decay=decay, neutralization="SUBINDUSTRY")
+    fcode = family.replace("/", "_").replace("@", "_").replace(":", "_")
+    grid = dict(_STRUCTURE, window=window, decay=decay, neutralization="SUBINDUSTRY", field=fcode)
     alpha = Alpha(
-        expression=f"rank(ts_zscore(close,{window}))",
-        normalized_expression=f"rank(ts_zscore(close,{window}))",
+        expression=f"rank(ts_zscore({fcode},{window}))",
+        normalized_expression=f"rank(ts_zscore({fcode},{window}))",
         expression_hash=f"{family}-{window}-{decay}",
         family_key=family,
         status="rejected",
@@ -124,11 +125,12 @@ def test_haircut_grows_with_family_size(db_session) -> None:
 
 def test_portfolio_correlation_blocks_promotion(db_session) -> None:
     """An alpha colliding structurally with an already-submitted alpha is blocked."""
+    fam = "close_sub_test/cap@USA/TOP3000/d1"
     submitted_alpha = Alpha(
-        expression="rank(ts_zscore(close,22))",
-        normalized_expression="rank(ts_zscore(close,22))",
+        expression="rank(ts_zscore(close_sub_test,22))",
+        normalized_expression="rank(ts_zscore(close_sub_test,22))",
         expression_hash="submitted-hash-1",
-        family_key="close/cap@USA/TOP3000/d1",
+        family_key=fam,
         status="submitted",
         source="constructor",
         region="USA",
@@ -139,18 +141,17 @@ def test_portfolio_correlation_blocks_promotion(db_session) -> None:
         truncation=0.08,
         is_valid=True,
         generation=0,
-        feature_json={"structural_hash": "shash-close-zscore", "grid": {"window": 22, "decay": 4}},
+        feature_json={"structural_hash": "shash-close_sub_test-zscore", "grid": {"window": 22, "decay": 4}},
     )
     db_session.add(submitted_alpha)
     db_session.flush()
 
-    fam = "close/cap@USA/TOP3000/d1"
     for w in WINDOW_LADDER:
         for d in DECAY_LADDER:
             a = _point(db_session, fam, w, d, 2.5, passes=True)
             a.feature_json = {
-                "structural_hash": "shash-close-zscore",
-                "grid": dict(_STRUCTURE, window=w, decay=d, neutralization="SUBINDUSTRY"),
+                "structural_hash": "shash-close_sub_test-zscore",
+                "grid": dict(_STRUCTURE, window=w, decay=d, neutralization="SUBINDUSTRY", field="close_sub_test"),
             }
     db_session.flush()
 

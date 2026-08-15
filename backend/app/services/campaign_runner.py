@@ -35,9 +35,20 @@ def create_nightly_campaign(
     region: str = "USA",
     universe: str = "TOP3000",
     delay: int = 1,
+    seed: int | None = None,
 ) -> Campaign:
     """Creates a new database-persisted campaign with 3-arm budget allocation."""
-    plan = plan_budget_allocation(db, total_simulations=budget, region=region, universe=universe, delay=delay)
+    import random as py_random
+    effective_seed = seed if seed is not None else py_random.randint(1, 2**31 - 1)
+
+    plan = plan_budget_allocation(
+        db,
+        total_simulations=budget,
+        region=region,
+        universe=universe,
+        delay=delay,
+        seed=effective_seed,
+    )
 
     name = f"nightly_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}"
     campaign = Campaign(
@@ -45,10 +56,12 @@ def create_nightly_campaign(
         status="queued",
         budget_total=budget,
         budget_completed=0,
+        seed=effective_seed,
         config_json={
             "region": region,
             "universe": universe,
             "delay": delay,
+            "seed": effective_seed,
             "exploit_sims": plan.exploit_simulations,
             "random_stratified_sims": plan.random_stratified_simulations,
             "plateau_fill_sims": plan.plateau_fill_simulations,
@@ -59,9 +72,7 @@ def create_nightly_campaign(
     db.flush()
 
     for t in plan.tasks:
-        territory_key = f"{t.field_code}" + (f"/{t.denominator}" if t.denominator else "")
-        territory_key += f":{t.operator_family}" + (f":{t.wrapper_shape}" if t.wrapper_shape else "")
-        territory_key += f"@{region}/{universe}/d{delay}"
+        territory_key = f"{t.field_code}:{t.operator_family}:{t.horizon_band}@{region}/{universe}/d{delay}"
 
         ctask = CampaignTask(
             campaign_id=campaign.id,
@@ -82,7 +93,7 @@ def create_nightly_campaign(
 
     db.commit()
     db.refresh(campaign)
-    log.info("campaign_created", campaign_id=campaign.id, tasks=len(plan.tasks), budget=budget)
+    log.info("campaign_created", campaign_id=campaign.id, tasks=len(plan.tasks), budget=budget, seed=effective_seed)
     return campaign
 
 
@@ -135,24 +146,31 @@ def execute_campaign(
         log.info("campaign_task_started", task_id=task_id, arm=task_arm, field=task_field, op=task_op)
 
         try:
+            horizon_band = None
+            if task.territory_key and ":" in task.territory_key.split("@")[0]:
+                horizon_band = task.territory_key.split("@")[0].split(":")[-1]
+                if horizon_band not in {"short", "medium", "long"}:
+                    horizon_band = None
+
             spec = FamilySpec(
                 field_code=task_field,
                 denominator=task_denom,
                 operator_family=task_op,
                 wrapper_shape=task_wrap,
+                horizon_band=horizon_band,
                 mechanism=f"Campaign Task #{task_id} ({task_arm})",
                 grid_mode="standard",
             )
             settings = AlphaSettings(region="USA", universe="TOP3000", delay=1)
             family_key = spec.family_key(settings)
 
-            # 1. Expand Candidates
+            # 1. Expand Candidates (always expand at least 1 full 49-point surface for plateau integrity)
             with session_scope() as db:
                 candidates = expand(
                     db,
                     spec,
                     base_settings=settings,
-                    max_candidates=task_budget,
+                    max_candidates=max(task_budget or 49, 49),
                     arm=task_arm,
                     campaign_task_id=task_id,
                 )

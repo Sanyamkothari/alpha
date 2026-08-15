@@ -123,6 +123,44 @@ class GridAxes:
     universes: tuple[str, ...] = DEFAULT_UNIVERSES
 
 
+def derive_horizon_band(window: int | float | None) -> str | None:
+    """Derive horizon band from lookback window duration in trading days.
+
+    Bands:
+    - short: 1–10d (e.g. 5, 10)
+    - medium: 11–63d (e.g. 20, 22, 40, 60, 63)
+    - long: 64d+ (e.g. 120, 126, 250, 252)
+    """
+    if window is None:
+        return None
+    try:
+        w = int(window)
+    except (ValueError, TypeError):
+        return None
+    if 1 <= w <= 10:
+        return "short"
+    if 11 <= w <= 63:
+        return "medium"
+    if w >= 64:
+        return "long"
+    return None
+
+
+def canonical_territory_key(
+    field_code: str,
+    operator_family: str,
+    horizon_band: str,
+    region: str = "USA",
+    universe: str = "TOP3000",
+    delay: int = 1,
+) -> str:
+    """Canonical territory identity: field x operator_family x horizon_band x simulation config.
+
+    Denominator and wrapper shape are sub-axes within a territory, not part of the primary key.
+    """
+    return f"{field_code}:{operator_family}:{horizon_band}@{region}/{universe}/d{delay}"
+
+
 @dataclass(frozen=True)
 class FamilySpec:
     """One economic mechanism."""
@@ -133,6 +171,7 @@ class FamilySpec:
     secondary_field: str | None = None
     operator_family: str | None = None
     wrapper_shape: str | None = None
+    horizon_band: str | None = None
     backfill_days: int | None = 120
     frequency: str | None = None
     grid_mode: str = "standard"  # "standard" (7x7=49) | "wide"
@@ -152,6 +191,8 @@ class FamilySpec:
             base = f"{base}:{self.operator_family}"
         if self.wrapper_shape:
             base = f"{base}:{self.wrapper_shape}"
+        if self.horizon_band:
+            base = f"{base}:{self.horizon_band}"
         if self.secondary_field:
             base = f"{base}+{self.secondary_field}"
         s = settings or AlphaSettings()
@@ -333,6 +374,24 @@ def expand(
             truncations=axes.truncations,
             universes=axes.universes,
         )
+
+    # Filter windows by horizon band if specified
+    if spec.horizon_band:
+        band = spec.horizon_band.lower()
+        band_windows = tuple(w for w in axes.windows if derive_horizon_band(w) == band)
+        if band_windows:
+            axes = GridAxes(
+                ts_transforms=axes.ts_transforms,
+                depth2_pairs=axes.depth2_pairs,
+                windows=band_windows,
+                inner_windows=axes.inner_windows,
+                cross_section=axes.cross_section,
+                groups=axes.groups,
+                neutralizations=axes.neutralizations,
+                decays=axes.decays,
+                truncations=axes.truncations,
+                universes=axes.universes,
+            )
 
     # Filter transforms and cross_sections if explicitly set on FamilySpec
     ts_transforms = (
