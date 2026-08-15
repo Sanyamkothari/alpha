@@ -188,16 +188,16 @@ def test_crowding_ceiling_in_exploit_vs_random_arm(db_session) -> None:
 
 
 def test_self_correlation_exclusion_from_exploit(db_session) -> None:
-    """A field whose alpha was submitted is excluded from exploit suggestions (W5 / R13)."""
-    ds = _dataset(db_session, "ds_sub_test", n_fields=2, users=30)
+    """A submitted territory is excluded from exploit suggestions, but the field remains reachable under new operators (F4)."""
+    ds = _dataset(db_session, "ds_sub_test", n_fields=1, users=30)
     sub_field = "ds_sub_test_f0"
-    clean_field = "ds_sub_test_f1"
 
-    # Register sub_field as submitted via SubmissionAttempt
+    # Register sub_field as submitted under ts_zscore / medium horizon
+    submitted_tkey = canonical_territory_key(sub_field, "ts_zscore", "medium", "USA", "TOP3000", 1)
     alpha = Alpha(
         expression=f"rank(ts_zscore({sub_field}, 10))",
         expression_hash=f"hash_sub_{sub_field}",
-        family_key=f"{sub_field}/cap@USA/TOP3000/d1",
+        family_key=submitted_tkey,
         region="USA",
         universe="TOP3000",
         delay=1,
@@ -210,8 +210,14 @@ def test_self_correlation_exclusion_from_exploit(db_session) -> None:
     db_session.flush()
 
     sugs = suggest(db_session, n=5)
-    sug_fields = [s.field_code for s in sugs]
-    assert sub_field not in sug_fields, f"Submitted field {sub_field} must be excluded from exploit suggestions"
+    field_sugs = [s for s in sugs if s.field_code == sub_field]
+    assert len(field_sugs) > 0, f"Field {sub_field} must remain reachable under untried operators (F4)"
+    
+    # Excluded from submitted territory, but recommended under another operator (e.g. ts_rank, ts_delta)
+    for s in field_sugs:
+        tkey = canonical_territory_key(s.field_code, s.operator_family, s.horizon_band, "USA", "TOP3000", 1)
+        assert tkey != submitted_tkey, f"Submitted territory {submitted_tkey} must not be re-suggested in exploit arm"
+        assert s.self_corr_headroom is None, "self_corr_headroom must be None (unmeasured) without fabricated proxies (F5)"
 
 
 def test_coordinate_diversity_and_no_duplicate_territory_across_arms(db_session) -> None:

@@ -52,10 +52,9 @@ def downgrade() -> None:
         sa.text(
             """
             UPDATE alphas
-            SET platform_outcome = 'accepted'
-            WHERE id IN (
-                SELECT DISTINCT alpha_id FROM submission_attempts WHERE result = 'submitted'
-            )
+            SET platform_outcome = NULL
+            WHERE platform_outcome IS NOT NULL
+              AND platform_outcome NOT IN ('accepted', 'rejected', 'in_review')
             """
         )
     )

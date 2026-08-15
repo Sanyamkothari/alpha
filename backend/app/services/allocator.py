@@ -10,39 +10,25 @@ the best dataset and pours everything into it, which produces a pile of
 mutually-correlated alphas — and BRAIN pays only for *uncorrelated* ones, so most
 of that output is worth nothing. Portfolio diversity beats marginal Sharpe.
 
-Hierarchical Evidence & Constrain-Then-Rank
--------------------------------------------
+Constrain-Then-Rank & Coordinate Diversification
+-----------------------------------------------
 1. **Hard Feasibility Constraints**:
    - `MAX_DATASET_SHARE` (20%) caps any single dataset's slice of a batch.
    - Forced exploration slots for untried datasets and untried operator families.
    - `CROWDED_USER_COUNT` (2,000 users) ceiling and `NEGLECTED_USER_COUNT` (5 users)
      floor on the exploit arm.
    - `MAX_TERRITORIES_PER_FIELD_OP` (3) saturation cap per `(field_code, operator_family)`.
-   - **Self-Correlation Exclusion**: Candidates correlating >0.70 with already submitted
-     alphas are excluded from the feasible exploit set.
+   - **Territory-Level Exclusion**: Specific territories `(field_code, operator_family, horizon_band)`
+     that produced confirmed submissions are excluded from the exploit path. A field with a
+     submitted alpha remains reachable under other untried operator families or horizon bands.
 
-2. **Hierarchical Reward Ladder (Rung Maximum)**:
-   Alpha success is mapped to the highest rung achieved:
-   - 0.10: Simulated and passed BRAIN checks
-   - 0.30: Plateau clearance
-   - 0.60: Subperiod stability / DSR promotion
-   - 0.85: Self-correlation cleared (<0.70 vs own submitted alphas)
-   - 1.00: Confirmed submission attempt recorded
-
-3. **Territory-Level Evidence & Shrinkage**:
-   384 near-duplicate alphas in one territory count as ~1 observation. Evidence is
-   aggregated to canonical territories `(field_code, operator_family, horizon_band)`
-   and shrunk toward operator and dataset priors using effective sample size
-   weighting: `w = n / (n + k)` where `k = 10.0`.
-   
-   *Note on Prior-Domination:* At small sample sizes (e.g. 486 simulations / 28 passes
-   / 2 submissions), territory estimates are prior-dominated.
-
-4. **Human-in-the-Loop Feedback Note**:
-   The top reward rung (1.00) is triggered by an operator submission action. The
-   allocator learns from operator selection, which can amplify operator bias. For this
-   reason, random stratified arm calibration outcomes are analyzed separately from
-   exploit arm outcomes.
+2. **Empirical Dataset Priority**:
+   Datasets are ranked using measured simulation hit-rate (simulations passing all checks)
+   blended with uncrowded user count priority:
+   `score = 0.6 * min(1.0, hit_rate * 10) + 0.4 * crowding_score` (for explored datasets)
+   `score = crowding_score` (for untried datasets).
+   The allocator does not use an unverified multi-rung reward ladder or synthetic posteriors;
+   unmeasured properties (e.g. self-correlation headroom) are reported as None.
 """
 
 from __future__ import annotations
@@ -89,16 +75,6 @@ MAX_TERRITORIES_PER_FIELD_OP = 3
 MIN_VIABLE_TERRITORY_SIMS = 30
 DEFAULT_SIMS_PER_TERRITORY = 49
 MIN_VIABLE_CAMPAIGN_BUDGET = 49
-
-# Prior weight for hierarchical shrinkage
-SHRINKAGE_K = 10.0
-
-# Graded reward ladder constants
-RUNG_SIMULATED = 0.10
-RUNG_PLATEAU = 0.30
-RUNG_DSR = 0.60
-RUNG_CORRELATION = 0.85
-RUNG_SUBMISSION = 1.00
 
 
 @dataclass
@@ -192,7 +168,7 @@ class DiscountedThompsonSampler:
         return self.arms[dataset_code]
 
     def update(self, dataset_code: str, reward: float) -> None:
-        """Update arm with graded reward in [0, 1] using discount factor gamma."""
+        """Update arm with reward in [0, 1] using discount factor gamma."""
         arm = self.get_arm(dataset_code)
         r = max(0.0, min(1.0, reward))
         arm.alpha_param = max(1.0, 1.0 + (arm.alpha_param - 1.0) * self.gamma + r)
@@ -241,11 +217,31 @@ class BudgetAllocation:
 
 
 class SimulationBudgetOrchestrator:
-    """Partitions the platform's 3 concurrent simulation slots based on program lifecycle."""
+    """Orchestrates daily simulation budget across pipeline phases."""
 
-    @staticmethod
-    def get_allocation(passed_alpha_count: int, max_concurrent: int = 3) -> BudgetAllocation:
+    def __init__(self, daily_budget: int = 15, explore_ratio: float = 0.60) -> None:
+        self.daily_budget = daily_budget
+        self.explore_ratio = explore_ratio
+
+    @classmethod
+    def get_allocation(cls, passed_alpha_count: int = 0) -> BudgetAllocation:
         if passed_alpha_count < 5:
+            return BudgetAllocation(
+                explore_slots=2,
+                confirm_slots=1,
+                evolution_slots=0,
+                mode="bootstrap",
+            )
+        else:
+            return BudgetAllocation(
+                explore_slots=1,
+                confirm_slots=1,
+                evolution_slots=1,
+                mode="mature",
+            )
+
+    def allocate_slots(self, has_confirmed_alphas: bool = False) -> BudgetAllocation:
+        if not has_confirmed_alphas:
             return BudgetAllocation(
                 explore_slots=2,
                 confirm_slots=1,
@@ -262,30 +258,8 @@ class SimulationBudgetOrchestrator:
 
 
 # ----------------------------------------------------------------------
-# Hierarchical Territory Evidence & Reward Model
+# Dataset Statistics & Ranking
 # ----------------------------------------------------------------------
-
-def compute_alpha_reward(
-    alpha: Alpha,
-    metric: AlphaMetric | None,
-    submitted_ids: set[int],
-    *,
-    has_self_corr_clearance: bool = False,
-) -> float:
-    """Compute highest rung achieved in [0.0, 1.0] for an individual alpha."""
-    if alpha.id in submitted_ids or alpha.status == "submitted":
-        return RUNG_SUBMISSION
-    if has_self_corr_clearance:
-        return RUNG_CORRELATION
-    if metric:
-        if getattr(metric, "subperiod_passed", False) or getattr(metric, "dsr_passed", False):
-            return RUNG_DSR
-        if getattr(metric, "is_plateau", False):
-            return RUNG_PLATEAU
-        if getattr(metric, "passed_all_checks", False):
-            return RUNG_SIMULATED
-    return 0.0
-
 
 def dataset_stats(
     db: Session,
@@ -317,7 +291,6 @@ def dataset_stats(
         .group_by(Dataset.dataset_code, Dataset.name)
     ).all()
 
-    # R10: filter by universe to avoid cross-attribution across universes
     field_to_dataset = dict(
         db.execute(
             select(DataField.field_code, Dataset.dataset_code)
@@ -370,48 +343,8 @@ def _dataset_priority(stat: DatasetStat) -> float:
     return 0.6 * min(1.0, hit * 10) + 0.4 * stat.crowding_score
 
 
-def sample_hierarchical_posterior(
-    territory_reward: float,
-    territory_n: int,
-    op_reward: float,
-    op_n: int,
-    ds_reward: float,
-    ds_n: int,
-    *,
-    k: float = SHRINKAGE_K,
-    rng: random.Random | None = None,
-) -> float:
-    """Sample from a Beta posterior with hierarchical empirical shrinkage.
-
-    Weights: w = n / (n + k).
-    Blends territory evidence with operator and dataset priors into Beta parameters.
-    """
-    _rng = rng or random
-    # Dataset level shrinkage over uniform prior 0.5
-    w_ds = ds_n / (ds_n + k) if (ds_n + k) > 0 else 0.0
-    mean_ds = w_ds * ds_reward + (1.0 - w_ds) * 0.5
-
-    # Operator level shrinkage toward dataset mean
-    w_op = op_n / (op_n + k) if (op_n + k) > 0 else 0.0
-    mean_op = w_op * op_reward + (1.0 - w_op) * mean_ds
-
-    # Territory level shrinkage toward operator mean
-    w_t = territory_n / (territory_n + k) if (territory_n + k) > 0 else 0.0
-    mean_t = w_t * territory_reward + (1.0 - w_t) * mean_op
-
-    # Total effective trials
-    eff_n = 1.0 + territory_n * w_t + op_n * (1.0 - w_t) * w_op + ds_n * (1.0 - w_op) * w_ds
-    alpha_param = max(0.1, 1.0 + eff_n * mean_t)
-    beta_param = max(0.1, 1.0 + eff_n * (1.0 - mean_t))
-
-    try:
-        return _rng.betavariate(alpha_param, beta_param)
-    except Exception:
-        return mean_t
-
-
 # ----------------------------------------------------------------------
-# Suggestion & Gated Exploitation (W3, W4, W5, W6)
+# Suggestion & Gated Exploitation (W3, W4, F4, F5, F9)
 # ----------------------------------------------------------------------
 
 def suggest(
@@ -427,9 +360,11 @@ def suggest(
 ) -> list[Suggestion]:
     """Propose the next ``n`` coordinates (field, operator, wrapper, horizon) to build families on.
 
-    Enforces hard diversity constraints (constrain-then-rank) and coverage-guided coordinate sampling.
+    Enforces hard diversity constraints (constrain-then-rank) and coordinate diversification.
+    Unseeded calls use random.Random() for diverse interactive UI recommendations; reproducible
+    campaigns pass an explicit seed or RNG instance.
     """
-    _rng = rng or (random.Random(seed) if seed is not None else random)
+    _rng = rng or (random.Random(seed) if seed is not None else random.Random())
 
     stats = sorted(
         dataset_stats(db, region=region, delay=delay, universe=universe),
@@ -453,10 +388,10 @@ def suggest(
         )
     ).all()
 
-    # Track mined (field_code, operator_family) pairs count and operators tried per field
+    # Track mined (field_code, operator_family) pairs count, operators tried, and submitted territory keys
     field_op_counts: dict[tuple[str, str], int] = {}
     field_ops_tried: dict[str, set[str]] = {}
-    submitted_fields: set[str] = set()
+    submitted_territories: set[str] = set()
 
     for aid, fkey, feat, status in existing_alphas:
         fcode = family_field_code(str(fkey))
@@ -464,18 +399,18 @@ def suggest(
         op = grid.get("ts") or "ts_zscore"
         field_op_counts[(fcode, op)] = field_op_counts.get((fcode, op), 0) + 1
         field_ops_tried.setdefault(fcode, set()).add(op)
-        if status == "submitted":
-            submitted_fields.add(fcode)
+        if status == "submitted" and fkey:
+            submitted_territories.add(str(fkey))
 
-    # Submission attempt confirmed alphas
+    # Add confirmed submission attempts
     sub_attempts = db.execute(
-        select(Alpha.id, Alpha.family_key)
+        select(Alpha.family_key)
         .join(SubmissionAttempt, SubmissionAttempt.alpha_id == Alpha.id)
         .where(SubmissionAttempt.result == "submitted")
     ).all()
-    for _, fkey in sub_attempts:
+    for (fkey,) in sub_attempts:
         if fkey:
-            submitted_fields.add(family_field_code(str(fkey)))
+            submitted_territories.add(str(fkey))
 
     out: list[Suggestion] = []
     dataset_suggest_count: dict[str, int] = {}
@@ -545,47 +480,48 @@ def suggest(
             if dataset_suggest_count.get(stat.dataset_code, 0) >= per_dataset_cap:
                 break
 
-            # Constraint: Self-correlation exclusion (>0.70 with submitted field)
-            if f.field_code in submitted_fields:
-                continue
-
-            # Pick operator: prefer untried operators on this field
+            # Find an eligible (operator, horizon) pair not submitted and not capped
+            # Invariant (F4): Exclusion is keyed on territory (field, op, horizon), never the whole field
             tried_for_field = field_ops_tried.get(f.field_code, set())
-            untried_ops = [op for op in DEFAULT_TS_TRANSFORMS if op not in tried_for_field]
-            chosen_op = untried_ops[0] if untried_ops else DEFAULT_TS_TRANSFORMS[len(out) % len(DEFAULT_TS_TRANSFORMS)]
+            
+            chosen_op: str | None = None
+            chosen_horizon: str | None = None
+            chosen_tkey: str | None = None
 
-            # Check per-(field, op) saturation cap
-            if field_op_counts.get((f.field_code, chosen_op), 0) >= MAX_TERRITORIES_PER_FIELD_OP:
-                # If capped under this operator, try another untried operator if available
-                alt_ops = [op for op in DEFAULT_TS_TRANSFORMS if field_op_counts.get((f.field_code, op), 0) < MAX_TERRITORIES_PER_FIELD_OP]
-                if not alt_ops:
+            # Try candidate operators ordered by: untried on this field first, then standard transforms
+            candidate_ops = [op for op in DEFAULT_TS_TRANSFORMS if op not in tried_for_field] + [
+                op for op in DEFAULT_TS_TRANSFORMS if op in tried_for_field
+            ]
+
+            for op in candidate_ops:
+                # Check per-(field, op) saturation cap
+                if field_op_counts.get((f.field_code, op), 0) >= MAX_TERRITORIES_PER_FIELD_OP:
                     continue
-                chosen_op = alt_ops[0]
+                
+                # Check horizons for an unsubmitted, unused territory
+                for h_idx, horizon in enumerate(horizon_options):
+                    tkey = canonical_territory_key(
+                        f.field_code, op, horizon, region, universe, delay
+                    )
+                    legacy_key = f"{f.field_code}/cap@{region}/{universe}/d{delay}"
+                    if tkey in used_territory_keys or tkey in submitted_territories or legacy_key in submitted_territories:
+                        continue
+                    
+                    chosen_op = op
+                    chosen_horizon = horizon
+                    chosen_tkey = tkey
+                    break
+                
+                if chosen_op is not None:
+                    break
 
-            # Vary wrapper and horizon band across suggestions
-            chosen_wrap = wrapper_options[len(out) % len(wrapper_options)]
-            chosen_horizon = horizon_options[len(out) % len(horizon_options)]
-
-            # Build territory key
-            tkey = canonical_territory_key(
-                f.field_code, chosen_op, chosen_horizon, region, universe, delay
-            )
-            if tkey in used_territory_keys:
+            if chosen_op is None or chosen_horizon is None or chosen_tkey is None:
+                # All operator-horizon territories for this field are saturated or submitted
                 continue
 
-            used_territory_keys.add(tkey)
+            chosen_wrap = wrapper_options[len(out) % len(wrapper_options)]
+            used_territory_keys.add(chosen_tkey)
             dataset_suggest_count[stat.dataset_code] = dataset_suggest_count.get(stat.dataset_code, 0) + 1
-
-            # Hierarchical posterior score draw
-            post_score = sample_hierarchical_posterior(
-                territory_reward=0.0,
-                territory_n=0,
-                op_reward=0.0,
-                op_n=0,
-                ds_reward=stat.hit_rate or 0.0,
-                ds_n=stat.tried,
-                rng=_rng,
-            )
 
             hit = stat.hit_rate
             reason = (
@@ -605,9 +541,9 @@ def suggest(
                     reason=reason,
                     user_count=f.user_count,
                     coverage=f.coverage,
-                    posterior_score=round(post_score, 3),
+                    posterior_score=None,
                     binding_constraint=f"dataset_cap({per_dataset_cap})" if dataset_suggest_count[stat.dataset_code] >= per_dataset_cap else None,
-                    self_corr_headroom=1.0,
+                    self_corr_headroom=None,  # F5: unmeasured; not fabricated
                 )
             )
 
@@ -664,8 +600,6 @@ def plan_budget_allocation(
     # 1. Exploit Arm (50%)
     # ------------------------------------------------------------------
     suggestions: list[Suggestion] = []
-    # If budget can fund multiple whole territories (>= 98), allocate proportionally.
-    # If budget is single territory (< 98), fund 1 exploit task.
     n_exploit_territories = max(1, exploit_budget // sims_per_territory) if total_simulations >= (2 * sims_per_territory) else 1
     suggestions = suggest(
         db,
@@ -692,7 +626,7 @@ def plan_budget_allocation(
                 denominator=s.denominator,
                 target_simulations=sims_per_territory,
                 reason=f"Exploit uncrowded research territory: {s.reason}",
-                posterior_score=s.posterior_score,
+                posterior_score=None,
             )
         )
 
@@ -794,7 +728,6 @@ def plan_budget_allocation(
             ).all()
         )
 
-        # Map field to dataset code
         field_to_dataset = dict(
             db.execute(
                 select(DataField.field_code, Dataset.dataset_code)
@@ -847,7 +780,6 @@ def plan_budget_allocation(
     # ------------------------------------------------------------------
     # Exact Arithmetic Closure (R2)
     # ------------------------------------------------------------------
-    # If no tasks could be created, add a baseline task
     if not tasks:
         fallback_field = all_fields[0][0] if all_fields else "close"
         fallback_ds = all_fields[0][2] if all_fields else "pv1"
@@ -869,7 +801,6 @@ def plan_budget_allocation(
     remainder = total_simulations - current_total
 
     if remainder > 0:
-        # Distribute +1 to the first `remainder` existing tasks without creating stunted territories
         for i in range(remainder):
             tasks[i % len(tasks)].target_simulations += 1
     elif remainder < 0:
