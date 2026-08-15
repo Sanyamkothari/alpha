@@ -312,30 +312,35 @@ def plan_budget_allocation(
     # ------------------------------------------------------------------
     # 1. Exploit Arm (50%)
     # ------------------------------------------------------------------
-    n_exploit_territories = max(1, exploit_budget // sims_per_territory)
-    suggestions = suggest(
-        db,
-        region=region,
-        delay=delay,
-        universe=universe,
-        n=n_exploit_territories,
-        denominator=default_denom,
-    )
-    for i, s in enumerate(suggestions):
-        op = DEFAULT_TS_TRANSFORMS[i % len(DEFAULT_TS_TRANSFORMS)]
-        wrap = "rank"
-        tasks.append(
-            AllocationTask(
-                arm="exploit",
-                field_code=s.field_code,
-                dataset_code=s.dataset_code,
-                operator_family=op,
-                wrapper_shape=wrap,
-                denominator=s.denominator,
-                target_simulations=sims_per_territory,
-                reason=f"Exploit uncrowded research territory: {s.reason}",
-            )
+    suggestions: list[AllocationSuggestion] = []
+    if exploit_budget > 0:
+        n_exploit_territories = max(1, exploit_budget // sims_per_territory)
+        base_exp = exploit_budget // n_exploit_territories
+        rem_exp = exploit_budget % n_exploit_territories
+        suggestions = suggest(
+            db,
+            region=region,
+            delay=delay,
+            universe=universe,
+            n=n_exploit_territories,
+            denominator=default_denom,
         )
+        for i, s in enumerate(suggestions):
+            op = DEFAULT_TS_TRANSFORMS[i % len(DEFAULT_TS_TRANSFORMS)]
+            wrap = "rank"
+            t_sims = base_exp + (1 if i < rem_exp else 0)
+            tasks.append(
+                AllocationTask(
+                    arm="exploit",
+                    field_code=s.field_code,
+                    dataset_code=s.dataset_code,
+                    operator_family=op,
+                    wrapper_shape=wrap,
+                    denominator=s.denominator,
+                    target_simulations=t_sims,
+                    reason=f"Exploit uncrowded research territory: {s.reason}",
+                )
+            )
 
     # ------------------------------------------------------------------
     # 2. Random Stratified Arm (30%) — 4 Crowding Quartiles (User Directive 3 & 4)
@@ -352,7 +357,7 @@ def plan_budget_allocation(
     ).all()
 
     quartile_boundaries: list[float] | None = None
-    if all_fields:
+    if all_fields and random_budget > 0:
         user_counts = [f[1] for f in all_fields if f[1] is not None]
         if user_counts:
             q_bounds = [
@@ -378,6 +383,8 @@ def plan_budget_allocation(
                 q_fields[4].append(f)
 
         n_rand_territories = max(1, random_budget // sims_per_territory)
+        base_rand = random_budget // n_rand_territories
+        rem_rand = random_budget % n_rand_territories
         for i in range(n_rand_territories):
             quartile_idx = (i % 4) + 1
             pool = q_fields[quartile_idx] or all_fields
@@ -385,6 +392,7 @@ def plan_budget_allocation(
             chosen_field, chosen_uc, chosen_ds = chosen
             op = random.choice(DEFAULT_TS_TRANSFORMS)
             wrap = random.choice([cs for cs in DEFAULT_CROSS_SECTION if cs is not None])
+            t_sims = base_rand + (1 if i < rem_rand else 0)
             tasks.append(
                 AllocationTask(
                     arm="random_stratified",
@@ -393,7 +401,7 @@ def plan_budget_allocation(
                     operator_family=op,
                     wrapper_shape=wrap,
                     denominator=default_denom,
-                    target_simulations=sims_per_territory,
+                    target_simulations=t_sims,
                     reason=f"🔬 Calibration — expected to fail, required for validation study (Q{quartile_idx} quartile, ~{chosen_uc or 0} users)",
                     quartile=quartile_idx,
                 )
@@ -406,9 +414,14 @@ def plan_budget_allocation(
     if plateau_budget > 0:
         fill_assigned = False
         for (fkey,) in db.execute(select(Alpha.family_key).where(Alpha.family_key.is_not(None)).group_by(Alpha.family_key)).all():
-            count = db.scalar(select(func.count(Alpha.id)).where(Alpha.family_key == fkey)) or 0
-            if 0 < count < sims_per_territory:
+            sim_count = db.scalar(
+                select(func.count(AlphaMetric.id))
+                .join(Alpha, Alpha.id == AlphaMetric.alpha_id)
+                .where(Alpha.family_key == fkey)
+            ) or 0
+            if 0 < sim_count < sims_per_territory:
                 fcode = family_field_code(str(fkey))
+                needed = min(plateau_budget, sims_per_territory - sim_count)
                 tasks.append(
                     AllocationTask(
                         arm="plateau_fill",
@@ -417,7 +430,7 @@ def plan_budget_allocation(
                         operator_family="ts_zscore",
                         wrapper_shape="rank",
                         denominator=default_denom,
-                        target_simulations=sims_per_territory - count,
+                        target_simulations=needed,
                         reason=f"Complete surface for promising family {fkey}",
                     )
                 )

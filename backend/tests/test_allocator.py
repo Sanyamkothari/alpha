@@ -84,3 +84,17 @@ def test_hit_rate_none_when_untried(db_session) -> None:
     no evidence would never be revisited."""
     assert DatasetStat("x", "x", 1, avg_user_count=1, tried=0, passed=0).hit_rate is None
     assert DatasetStat("y", "y", 1, avg_user_count=1, tried=4, passed=1).hit_rate == 0.25
+
+
+def test_plan_budget_allocation_respects_total_budget(db_session) -> None:
+    """Budget allocation tasks must sum exactly to total_simulations without overrun."""
+    from app.services.allocator import plan_budget_allocation
+
+    _dataset(db_session, "ds1", n_fields=20, users=10)
+    _dataset(db_session, "ds2", n_fields=20, users=50)
+
+    for budget in (50, 100, 200):
+        plan = plan_budget_allocation(db_session, total_simulations=budget)
+        task_sum = sum(t.target_simulations for t in plan.tasks)
+        assert task_sum == budget, f"Expected total {budget}, got {task_sum} across tasks {plan.tasks}"
+
