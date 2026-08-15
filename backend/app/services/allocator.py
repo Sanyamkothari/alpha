@@ -25,7 +25,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 import structlog
-from sqlalchemy import and_, func, or_, select
+from sqlalchemy import and_, distinct, func, or_, select
 from sqlalchemy.orm import Session
 
 from app.models.alphas import Alpha
@@ -312,11 +312,9 @@ def plan_budget_allocation(
     # ------------------------------------------------------------------
     # 1. Exploit Arm (50%)
     # ------------------------------------------------------------------
-    suggestions: list[AllocationSuggestion] = []
+    suggestions: list[Suggestion] = []
     if exploit_budget > 0:
         n_exploit_territories = max(1, exploit_budget // sims_per_territory)
-        base_exp = exploit_budget // n_exploit_territories
-        rem_exp = exploit_budget % n_exploit_territories
         suggestions = suggest(
             db,
             region=region,
@@ -328,7 +326,6 @@ def plan_budget_allocation(
         for i, s in enumerate(suggestions):
             op = DEFAULT_TS_TRANSFORMS[i % len(DEFAULT_TS_TRANSFORMS)]
             wrap = "rank"
-            t_sims = base_exp + (1 if i < rem_exp else 0)
             tasks.append(
                 AllocationTask(
                     arm="exploit",
@@ -337,7 +334,7 @@ def plan_budget_allocation(
                     operator_family=op,
                     wrapper_shape=wrap,
                     denominator=s.denominator,
-                    target_simulations=t_sims,
+                    target_simulations=sims_per_territory,
                     reason=f"Exploit uncrowded research territory: {s.reason}",
                 )
             )
@@ -383,8 +380,6 @@ def plan_budget_allocation(
                 q_fields[4].append(f)
 
         n_rand_territories = max(1, random_budget // sims_per_territory)
-        base_rand = random_budget // n_rand_territories
-        rem_rand = random_budget % n_rand_territories
         for i in range(n_rand_territories):
             quartile_idx = (i % 4) + 1
             pool = q_fields[quartile_idx] or all_fields
@@ -392,7 +387,6 @@ def plan_budget_allocation(
             chosen_field, chosen_uc, chosen_ds = chosen
             op = random.choice(DEFAULT_TS_TRANSFORMS)
             wrap = random.choice([cs for cs in DEFAULT_CROSS_SECTION if cs is not None])
-            t_sims = base_rand + (1 if i < rem_rand else 0)
             tasks.append(
                 AllocationTask(
                     arm="random_stratified",
@@ -401,7 +395,7 @@ def plan_budget_allocation(
                     operator_family=op,
                     wrapper_shape=wrap,
                     denominator=default_denom,
-                    target_simulations=t_sims,
+                    target_simulations=sims_per_territory,
                     reason=f"🔬 Calibration — expected to fail, required for validation study (Q{quartile_idx} quartile, ~{chosen_uc or 0} users)",
                     quartile=quartile_idx,
                 )
@@ -415,13 +409,13 @@ def plan_budget_allocation(
         fill_assigned = False
         for (fkey,) in db.execute(select(Alpha.family_key).where(Alpha.family_key.is_not(None)).group_by(Alpha.family_key)).all():
             sim_count = db.scalar(
-                select(func.count(AlphaMetric.id))
+                select(func.count(distinct(AlphaMetric.alpha_id)))
                 .join(Alpha, Alpha.id == AlphaMetric.alpha_id)
                 .where(Alpha.family_key == fkey)
             ) or 0
             if 0 < sim_count < sims_per_territory:
                 fcode = family_field_code(str(fkey))
-                needed = min(plateau_budget, sims_per_territory - sim_count)
+                needed = sims_per_territory - sim_count
                 tasks.append(
                     AllocationTask(
                         arm="plateau_fill",
@@ -445,7 +439,7 @@ def plan_budget_allocation(
                     operator_family="ts_delta",
                     wrapper_shape="zscore",
                     denominator=default_denom,
-                    target_simulations=plateau_budget,
+                    target_simulations=sims_per_territory,
                     reason=f"Plateau fill budget allocated to reserve candidate {suggestions[-1].field_code}",
                 )
             )
