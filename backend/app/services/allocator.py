@@ -49,8 +49,10 @@ from app.models.results import AlphaMetric
 from app.services.constructor import (
     DEFAULT_CROSS_SECTION,
     DEFAULT_TS_TRANSFORMS,
+    TerritorySignature,
     canonical_territory_key,
     derive_horizon_band,
+    parse_territory_signature,
 )
 from app.services.plateau import family_field_code
 
@@ -388,10 +390,10 @@ def suggest(
         )
     ).all()
 
-    # Track mined (field_code, operator_family) pairs count, operators tried, and submitted territory keys
+    # Track mined (field_code, operator_family) pairs count, operators tried, and submitted territory signatures
     field_op_counts: dict[tuple[str, str], int] = {}
     field_ops_tried: dict[str, set[str]] = {}
-    submitted_territories: set[str] = set()
+    submitted_sigs: list[TerritorySignature] = []
 
     for aid, fkey, feat, status in existing_alphas:
         fcode = family_field_code(str(fkey))
@@ -400,7 +402,14 @@ def suggest(
         field_op_counts[(fcode, op)] = field_op_counts.get((fcode, op), 0) + 1
         field_ops_tried.setdefault(fcode, set()).add(op)
         if status == "submitted" and fkey:
-            submitted_territories.add(str(fkey))
+            submitted_sigs.append(
+                parse_territory_signature(
+                    str(fkey),
+                    default_region=region,
+                    default_universe=universe,
+                    default_delay=delay,
+                )
+            )
 
     # Add confirmed submission attempts
     sub_attempts = db.execute(
@@ -410,7 +419,30 @@ def suggest(
     ).all()
     for (fkey,) in sub_attempts:
         if fkey:
-            submitted_territories.add(str(fkey))
+            submitted_sigs.append(
+                parse_territory_signature(
+                    str(fkey),
+                    default_region=region,
+                    default_universe=universe,
+                    default_delay=delay,
+                )
+            )
+
+    def is_territory_submitted(sig_field: str, sig_op: str, sig_horizon: str) -> bool:
+        """Check if territory is excluded due to an existing submitted alpha (FF1).
+
+        - Legacy key (horizon_band is None): sweeps all windows -> excludes all 3 horizons for (field, op).
+        - Canonical key (horizon_band set): excludes specifically that horizon.
+        """
+        for s in submitted_sigs:
+            if s.field_code != sig_field or s.region != region or s.universe != universe or s.delay != delay:
+                continue
+            if s.operator_family == sig_op:
+                if s.horizon_band is None:
+                    return True
+                if s.horizon_band == sig_horizon:
+                    return True
+        return False
 
     out: list[Suggestion] = []
     dataset_suggest_count: dict[str, int] = {}
@@ -474,6 +506,13 @@ def suggest(
             .all()
         )
 
+        if not candidates:
+            log.info(
+                "allocator_dataset_no_candidates",
+                dataset=stat.dataset_code,
+                reason="all_fields_exceed_crowding_ceiling_or_insufficient_coverage",
+            )
+
         for f in candidates:
             if len(out) >= n:
                 break
@@ -481,7 +520,7 @@ def suggest(
                 break
 
             # Find an eligible (operator, horizon) pair not submitted and not capped
-            # Invariant (F4): Exclusion is keyed on territory (field, op, horizon), never the whole field
+            # Invariant (F4 / FF1): Exclusion is keyed on territory (field, op, horizon), never the whole field
             tried_for_field = field_ops_tried.get(f.field_code, set())
             
             chosen_op: str | None = None
@@ -503,8 +542,7 @@ def suggest(
                     tkey = canonical_territory_key(
                         f.field_code, op, horizon, region, universe, delay
                     )
-                    legacy_key = f"{f.field_code}/cap@{region}/{universe}/d{delay}"
-                    if tkey in used_territory_keys or tkey in submitted_territories or legacy_key in submitted_territories:
+                    if tkey in used_territory_keys or is_territory_submitted(f.field_code, op, horizon):
                         continue
                     
                     chosen_op = op
@@ -546,6 +584,13 @@ def suggest(
                     self_corr_headroom=None,  # F5: unmeasured; not fabricated
                 )
             )
+
+    if not out:
+        log.info(
+            "allocator_empty_suggestions",
+            reason="all_candidates_exceed_crowding_ceiling_or_saturated",
+            total_datasets=len(stats),
+        )
 
     log.info("allocator_suggested", n=len(out), datasets=len({s.dataset_code for s in out}))
     return out

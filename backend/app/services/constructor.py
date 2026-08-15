@@ -146,6 +146,95 @@ def derive_horizon_band(window: int | float | None) -> str | None:
     return None
 
 
+@dataclass(frozen=True)
+class TerritorySignature:
+    """Normalized territory signature identifying research coordinates."""
+
+    field_code: str
+    operator_family: str
+    horizon_band: str | None  # 'short' | 'medium' | 'long' | None (None sweeps all horizons)
+    region: str
+    universe: str
+    delay: int
+
+
+def parse_territory_signature(
+    key_or_spec: str | FamilySpec,
+    *,
+    default_region: str = "USA",
+    default_universe: str = "TOP3000",
+    default_delay: int = 1,
+) -> TerritorySignature:
+    """Parse any family_key, territory_key, or FamilySpec into a normalized TerritorySignature.
+
+    Handles:
+    - Canonical territory keys: {field}:{op}:{horizon}@{region}/{universe}/d{delay}
+    - Production candidate keys: {field}/{denom}:{op}:{wrap}:{horizon}@{region}/{universe}/d{delay}
+    - Legacy candidate keys: {field}/{denom}:{op}:{wrap}@{region}/{universe}/d{delay} (horizon=None -> sweeps all)
+    - Legacy single-family keys: {field}/{denom}@{region}/{universe}/d{delay} (horizon=None -> sweeps all)
+    - Composite keys: composite:{mechanism}:{f1}+{f2}@{region}/{universe}/d{delay}
+    """
+    if isinstance(key_or_spec, FamilySpec):
+        return TerritorySignature(
+            field_code=key_or_spec.field_code,
+            operator_family=key_or_spec.operator_family or "ts_zscore",
+            horizon_band=key_or_spec.horizon_band,
+            region=default_region,
+            universe=default_universe,
+            delay=default_delay,
+        )
+
+    s = str(key_or_spec).strip()
+    region, universe, delay = default_region, default_universe, default_delay
+    if "@" in s:
+        left, right = s.split("@", 1)
+        sim_parts = right.split("/")
+        if len(sim_parts) >= 1 and sim_parts[0]:
+            region = sim_parts[0]
+        if len(sim_parts) >= 2 and sim_parts[1]:
+            universe = sim_parts[1]
+        if len(sim_parts) >= 3 and sim_parts[2].startswith("d"):
+            try:
+                delay = int(sim_parts[2][1:])
+            except ValueError:
+                pass
+    else:
+        left = s
+
+    colon_parts = [p.strip() for p in left.split(":") if p.strip()]
+    if not colon_parts:
+        return TerritorySignature("unknown", "ts_zscore", None, region, universe, delay)
+
+    first_seg = colon_parts[0]
+    if first_seg == "composite" and len(colon_parts) >= 3:
+        field_part = colon_parts[2].split("+")[0]
+    else:
+        field_part = first_seg.split("/")[0]
+
+    field_code = field_part.strip() or "unknown"
+
+    op_family = "ts_zscore"
+    for part in colon_parts[1:]:
+        if part in DEFAULT_TS_TRANSFORMS or part.startswith("ts_"):
+            op_family = part
+            break
+
+    horizon_band = None
+    for part in colon_parts[1:]:
+        if part in {"short", "medium", "long"}:
+            horizon_band = part
+            break
+
+    return TerritorySignature(
+        field_code=field_code,
+        operator_family=op_family,
+        horizon_band=horizon_band,
+        region=region,
+        universe=universe,
+        delay=delay,
+    )
+
+
 def canonical_territory_key(
     field_code: str,
     operator_family: str,

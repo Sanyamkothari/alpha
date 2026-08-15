@@ -19,7 +19,7 @@ from app.services.allocator import (
     plan_budget_allocation,
     suggest,
 )
-from app.services.constructor import canonical_territory_key
+from app.services.constructor import AlphaSettings, FamilySpec, canonical_territory_key
 
 
 def _dataset(db, code: str, *, n_fields: int, users: int, universe: str = "TOP3000") -> Dataset:
@@ -188,16 +188,26 @@ def test_crowding_ceiling_in_exploit_vs_random_arm(db_session) -> None:
 
 
 def test_self_correlation_exclusion_from_exploit(db_session) -> None:
-    """A submitted territory is excluded from exploit suggestions, but the field remains reachable under new operators (F4)."""
+    """A submitted territory is excluded from exploit suggestions, but the field remains reachable under new operators (F4 / FF1)."""
     ds = _dataset(db_session, "ds_sub_test", n_fields=1, users=30)
     sub_field = "ds_sub_test_f0"
 
-    # Register sub_field as submitted under ts_zscore / medium horizon
-    submitted_tkey = canonical_territory_key(sub_field, "ts_zscore", "medium", "USA", "TOP3000", 1)
+    # Build production key using constructor/campaign_runner's own key construction
+    settings = AlphaSettings(region="USA", universe="TOP3000", delay=1)
+    spec = FamilySpec(
+        field_code=sub_field,
+        denominator="cap",
+        operator_family="ts_zscore",
+        wrapper_shape="rank",
+    )
+    prod_family_key = spec.family_key(settings)
+    assert prod_family_key == f"{sub_field}/cap:ts_zscore:rank@USA/TOP3000/d1"
+
+    # Register sub_field as submitted via SubmissionAttempt
     alpha = Alpha(
         expression=f"rank(ts_zscore({sub_field}, 10))",
         expression_hash=f"hash_sub_{sub_field}",
-        family_key=submitted_tkey,
+        family_key=prod_family_key,
         region="USA",
         universe="TOP3000",
         delay=1,
@@ -213,11 +223,106 @@ def test_self_correlation_exclusion_from_exploit(db_session) -> None:
     field_sugs = [s for s in sugs if s.field_code == sub_field]
     assert len(field_sugs) > 0, f"Field {sub_field} must remain reachable under untried operators (F4)"
     
-    # Excluded from submitted territory, but recommended under another operator (e.g. ts_rank, ts_delta)
+    # Excluded from submitted operator ts_zscore (all horizon bands for legacy key), but recommended under untried ops
     for s in field_sugs:
-        tkey = canonical_territory_key(s.field_code, s.operator_family, s.horizon_band, "USA", "TOP3000", 1)
-        assert tkey != submitted_tkey, f"Submitted territory {submitted_tkey} must not be re-suggested in exploit arm"
+        assert s.operator_family != "ts_zscore", f"Submitted operator ts_zscore must be excluded from exploit suggestions for {sub_field}"
         assert s.self_corr_headroom is None, "self_corr_headroom must be None (unmeasured) without fabricated proxies (F5)"
+
+
+def test_self_correlation_exclusion_differential_passed_vs_submitted(db_session) -> None:
+    """Differential test (FF1):
+
+    1. status='passed' (unsubmitted) does NOT trigger self-correlation exclusion when evaluated.
+    2. status='submitted' triggers self-correlation exclusion across all horizons for legacy keys.
+    3. Canonical keys with explicit horizon only exclude that specific horizon.
+    """
+    settings = AlphaSettings(region="USA", universe="TOP3000", delay=1)
+
+    # 1. Test unsubmitted alpha (status='passed') where ts_zscore is the target operator
+    ds_pass = _dataset(db_session, "ds_pass_test", n_fields=1, users=25)
+    pass_field = "ds_pass_test_f0"
+    spec_pass = FamilySpec(
+        field_code=pass_field,
+        denominator="cap",
+        operator_family="ts_zscore",
+        wrapper_shape="rank",
+    )
+    # Populate all alternative operators as tried so ts_zscore is next in line
+    for op in ["ts_rank", "ts_mean", "ts_delta", "ts_std_dev", "ts_quantile", "ts_decay_linear", "ts_backfill"]:
+        db_session.add(Alpha(
+            expression=f"rank({op}({pass_field}, 10))",
+            expression_hash=f"hash_pass_{op}_{pass_field}",
+            family_key=f"{pass_field}/cap:{op}:rank@USA/TOP3000/d1",
+            region="USA",
+            universe="TOP3000",
+            delay=1,
+            status="passed",
+            feature_json={"grid": {"ts": op, "window": 10}},
+        ))
+    db_session.flush()
+
+    sugs_pass = suggest(db_session, n=5)
+    field_sugs_pass = [s for s in sugs_pass if s.field_code == pass_field]
+    assert len(field_sugs_pass) > 0
+    # Since status is 'passed' (not submitted), ts_zscore is NOT excluded by self-correlation
+    assert any(s.operator_family == "ts_zscore" for s in field_sugs_pass), "status='passed' must not trigger self-correlation exclusion"
+
+    # Now verify that marking ts_zscore as submitted immediately excludes ts_zscore on the identical setup
+    alpha_sub_legacy = Alpha(
+        expression=f"rank(ts_zscore({pass_field}, 10))",
+        expression_hash=f"hash_sub_legacy_{pass_field}",
+        family_key=spec_pass.family_key(settings),
+        region="USA",
+        universe="TOP3000",
+        delay=1,
+        status="submitted",
+        feature_json={"grid": {"ts": "ts_zscore", "window": 10}},
+    )
+    db_session.add(alpha_sub_legacy)
+    db_session.flush()
+    db_session.add(SubmissionAttempt(alpha_id=alpha_sub_legacy.id, result="submitted"))
+    db_session.flush()
+
+    sugs_now_sub = suggest(db_session, n=5)
+    field_sugs_now_sub = [s for s in sugs_now_sub if s.field_code == pass_field]
+    # Now ts_zscore must be excluded for all horizon bands
+    assert not any(s.operator_family == "ts_zscore" for s in field_sugs_now_sub), "status='submitted' must exclude ts_zscore across all horizon bands"
+
+    # 2. Test canonical submitted key with specific horizon band
+    ds_canon = _dataset(db_session, "ds_canon_test", n_fields=1, users=35)
+    canon_field = "ds_canon_test_f0"
+    spec_canon = FamilySpec(
+        field_code=canon_field,
+        denominator="cap",
+        operator_family="ts_zscore",
+        wrapper_shape="rank",
+        horizon_band="short",
+    )
+    canon_key = spec_canon.family_key(settings)
+    assert "short" in canon_key
+
+    alpha_canon = Alpha(
+        expression=f"rank(ts_zscore({canon_field}, 5))",
+        expression_hash=f"hash_canon_{canon_field}",
+        family_key=canon_key,
+        region="USA",
+        universe="TOP3000",
+        delay=1,
+        status="submitted",
+        feature_json={"grid": {"ts": "ts_zscore", "window": 5}},
+    )
+    db_session.add(alpha_canon)
+    db_session.flush()
+    db_session.add(SubmissionAttempt(alpha_id=alpha_canon.id, result="submitted"))
+    db_session.flush()
+
+    sugs_canon = suggest(db_session, n=5)
+    field_sugs_canon = [s for s in sugs_canon if s.field_code == canon_field]
+    assert len(field_sugs_canon) > 0
+    # Specific horizon 'short' is excluded under ts_zscore, but other horizons (medium/long) or operators remain available
+    for s in field_sugs_canon:
+        if s.operator_family == "ts_zscore":
+            assert s.horizon_band != "short", "Canonical submitted horizon 'short' must be excluded"
 
 
 def test_coordinate_diversity_and_no_duplicate_territory_across_arms(db_session) -> None:
