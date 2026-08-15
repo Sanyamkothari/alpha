@@ -106,3 +106,17 @@ A single malformed field or transient simulation failure must not stall an entir
 Previously, recording a local submission attempt with `result = "submitted"` immediately marked `platform_outcome = "accepted"`. This conflated "put forward by operator" with "accepted and paid by platform", undermining Phase 1's goal of measuring the true empirical acceptance rate.
 
 
+## D5 — Telemetry Freshness & Latency Revisit Threshold (2026-08-16)
+
+**Status:** accepted (resolves review finding F12).
+
+### What changed
+
+A proposed 60-second TTL cache on the telemetry and verdict endpoints was rejected in favor of maintaining live, honest metrics. Evaluation latency was measured at 946.2 ms across 17 families / 245 candidate points on the existing database.
+
+### Revisit Policy
+
+A revisit threshold is established: query caching and surface indexing will only be introduced if evaluation latency exceeds **3.0 seconds** or database size exceeds 25,000 alphas.
+
+
+
