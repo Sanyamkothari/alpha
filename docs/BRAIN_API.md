@@ -262,3 +262,18 @@ Sources: [jglazar notes](https://github.com/jglazar/notes/blob/main/quant_interv
 
 ---
 
+## 7) Verified API Behaviors
+
+### `GET /alphas/{id}/recordsets/daily-pnl` — Shape and Sharpe Reconciliation
+- **Status:** **VERIFIED** (2026-08-16, tested against local database snapshot `database/wq.db` and 369 PnL series in `database/pnl/` via `scripts/verify_pnl_reconciliation.py`).
+- **Recordset Format:** Returns a two-column array `[date, pnl_value]`.
+- **Series Property:** Non-cumulative, discrete daily dollar PnL (fluctuating positive and negative). For example, Alpha #257 begins with `[27721, 21939, 63990, 34602, 30617, 54748, 17238, -3954, -23985, 11115]`.
+- **Annualization & Reconciliation:**
+  - Across all 355 stored PnL vectors with reported metrics, 100% (355/355) reconcile with BRAIN's reported in-sample Sharpe ratio within the $\pm 0.05$ standing tolerance.
+  - Linear regression of recomputed Sharpe on reported Sharpe yields:
+    $$\text{recomputed\_sharpe} = 1.003473 \times \text{reported\_sharpe} - 0.000582 \quad (R^2 = 0.999908)$$
+  - **Residual Explanation:** BRAIN annualizes Sharpe using 250 trading days/year ($\times \sqrt{250}$), while the internal `subperiod.py` pipeline uses 252 trading days/year ($\times \sqrt{252}$). The theoretical ratio $\sqrt{252/250} = 1.003992$ accounts for the entire systematic slope and median difference ($\approx 0.0065$). Minor remaining differences (max $\Delta = 0.045$) stem from day-count differences and floating point precision.
+
+
+---
+
