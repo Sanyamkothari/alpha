@@ -119,14 +119,14 @@ def create_alpha(
         feature_json=({**(result.features or {}), "grid": grid} if grid else result.features),
         comments=comments,
     )
-    db.add(alpha)
     try:
-        db.flush()
+        with db.begin_nested():
+            db.add(alpha)
+            db.flush()
     except IntegrityError:
         # Lost a race on the unique expression_hash: another writer inserted the
-        # identical alpha between our SELECT and INSERT. Roll back and return theirs
-        # as a dedup hit instead of surfacing a 500.
-        db.rollback()
+        # identical alpha between our SELECT and INSERT. The savepoint rolls back
+        # only this insertion, preserving prior flushed candidates in the session.
         winner = db.execute(
             select(Alpha).where(Alpha.expression_hash == digest)
         ).scalar_one_or_none()
