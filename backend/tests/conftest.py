@@ -96,6 +96,9 @@ def _seed(test_session_factory: sessionmaker[Session]) -> None:
                 _op("ts_mean", "time_series", _matrix("x", 0), _window("d", 1)),
                 _op("ts_delta", "time_series", _matrix("x", 0), _window("d", 1)),
                 _op("ts_zscore", "time_series", _matrix("x", 0), _window("d", 1)),
+                _op("ts_std_dev", "time_series", _matrix("x", 0), _window("d", 1)),
+                _op("ts_quantile", "time_series", _matrix("x", 0), _window("d", 1)),
+                _op("normalize", "cross_section", _matrix("x", 0)),
                 _op("ts_decay_linear", "time_series", _matrix("x", 0), _window("d", 1)),
                 _op("ts_backfill", "time_series", _matrix("x", 0), _window("d", 1)),
                 _op("ts_corr", "time_series", _matrix("x", 0), _matrix("y", 1), _window("d", 2)),
@@ -106,34 +109,37 @@ def _seed(test_session_factory: sessionmaker[Session]) -> None:
                 _op("greater", "logical", _matrix("x", 0), _matrix("y", 1), returns="boolean"),
                 _op("trade_when", "transformational", _bool("trigger", 0), _matrix("alpha", 1), _matrix("exit", 2)),
                 _op("group_neutralize", "group", _matrix("x", 0), _group("group", 1)),
-                # The constructor emits group_<cs_op>; without these the grid's
-                # group axis would silently collapse to ungrouped variants only.
                 _op("group_rank", "group", _matrix("x", 0), _group("group", 1)),
                 _op("group_zscore", "group", _matrix("x", 0), _group("group", 1)),
             ]
         )
-        ds = Dataset(dataset_code="pv1", name="Price/Volume", region="USA")
+        ds = Dataset(dataset_code="pv1", name="Price/Volume", region="USA", universe="TOP3000", delay=1)
         s.add(ds)
         s.flush()
         s.add_all(
             [
                 DataField(
-                    field_code="close", dataset_id=ds.id, category="price", field_type="MATRIX"
+                    field_code="close", dataset_id=ds.id, category="price", field_type="MATRIX",
+                    region="USA", universe="TOP3000", delay=1, coverage=1.0, user_count=50,
                 ),
                 DataField(
-                    field_code="returns", dataset_id=ds.id, category="price", field_type="MATRIX"
+                    field_code="returns", dataset_id=ds.id, category="price", field_type="MATRIX",
+                    region="USA", universe="TOP3000", delay=1, coverage=1.0, user_count=50,
                 ),
                 DataField(
-                    field_code="volume", dataset_id=ds.id, category="price", field_type="MATRIX"
+                    field_code="volume", dataset_id=ds.id, category="price", field_type="MATRIX",
+                    region="USA", universe="TOP3000", delay=1, coverage=1.0, user_count=50,
                 ),
                 DataField(
-                    field_code="vwap", dataset_id=ds.id, category="price", field_type="MATRIX"
+                    field_code="vwap", dataset_id=ds.id, category="price", field_type="MATRIX",
+                    region="USA", universe="TOP3000", delay=1, coverage=1.0, user_count=50,
                 ),
                 DataField(
                     field_code="sector",
                     dataset_id=ds.id,
                     category="fundamentals",
                     field_type="GROUP",
+                    region="USA", universe="TOP3000", delay=1, coverage=1.0, user_count=50,
                 ),
             ]
         )

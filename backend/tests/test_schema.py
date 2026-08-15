@@ -39,6 +39,8 @@ def test_all_tables_created(engine) -> None:
         "alpha_status_history",
         "alphas",
         "brain_fetch_log",
+        "campaign_tasks",
+        "campaigns",
         "categories",
         "data_field_snapshots",
         "data_fields",

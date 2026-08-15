@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI
@@ -15,6 +16,19 @@ from app.routers import alphas, fields, health, operators, system, ui, validate
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 
 
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # On startup: check for interrupted campaigns
+    try:
+        import threading
+        from app.services.campaign_runner import auto_resume_interrupted_campaigns
+        # Run campaign resume in background thread to avoid blocking server boot
+        threading.Thread(target=auto_resume_interrupted_campaigns, daemon=True).start()
+    except Exception:
+        pass
+    yield
+
+
 def create_app() -> FastAPI:
     configure_logging(settings.log_level, settings.log_json)
 
@@ -25,6 +39,7 @@ def create_app() -> FastAPI:
             "Local alpha-research tool for WorldQuant BRAIN. Simulations run on the "
             "user's own account; submissions are always a manual human decision."
         ),
+        lifespan=lifespan,
     )
 
     app.include_router(health.router)

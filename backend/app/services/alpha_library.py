@@ -73,6 +73,8 @@ def create_alpha(
     mutation_type: str | None = None,
     source: str = "user",
     comments: str | None = None,
+    arm: str | None = None,
+    campaign_task_id: int | None = None,
 ) -> CreateResult:
     settings = settings or AlphaSettings()
     result = validate_expression(
@@ -108,6 +110,8 @@ def create_alpha(
         is_valid=True,
         validation_warnings=warnings or None,
         complexity_score=result.complexity_score,
+        arm=arm,
+        campaign_task_id=campaign_task_id,
         # Grid coordinates ride INSIDE feature_json. plateau.load_surface skips
         # any alpha without feature_json["grid"]["window"], so writing them here
         # rather than patching after creation is what stops a caller silently

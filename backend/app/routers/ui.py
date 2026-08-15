@@ -47,7 +47,13 @@ def _families(db: Session) -> list[str]:
 
 
 def _verdict_row(v: Any, db: Session) -> dict[str, Any]:
+    from app.services.correlation import compute_max_self_correlation_with_submitted
+
     alpha = db.get(Alpha, v.alpha_id)
+    self_corr, self_corr_target_id, self_corr_method = compute_max_self_correlation_with_submitted(
+        db, v.alpha_id
+    )
+
     return {
         "alpha_id": v.alpha_id,
         "expression": v.expression,
@@ -68,6 +74,10 @@ def _verdict_row(v: Any, db: Session) -> dict[str, Any]:
         "dsr_passed": getattr(v, "dsr_passed", None),
         "gate_mode": getattr(v, "gate_mode", "COLD_START_FALLBACK"),
         "subperiod_passed": getattr(v, "subperiod_passed", None),
+        "self_correlation": self_corr,
+        "self_correlation_target_id": self_corr_target_id,
+        "self_correlation_method": self_corr_method,
+        "arm": alpha.arm if alpha else None,
         "reasons": v.reasons,
         "status": alpha.status if alpha else None,
         "settings": (
@@ -694,5 +704,128 @@ def funnel_telemetry(db: Session = Depends(get_db)) -> dict:
             "dsr_mode_evaluations": dsr_gate_count,
             "cold_start_evaluations": cold_start_count,
         },
+    }
+
+
+@router.get("/throughput")
+def throughput(db: Session = Depends(get_db)) -> dict:
+    """Throughput & Evidence Dashboard data (Phase 1 Task 5)."""
+    from datetime import datetime, timedelta
+    from app.models.alphas import SubmissionAttempt
+    from app.models.campaigns import Campaign
+
+    now = datetime.utcnow()
+    today_start = datetime(now.year, now.month, now.day)
+    week_start = today_start - timedelta(days=7)
+    month_start = today_start - timedelta(days=30)
+
+    # 1. Simulations metrics
+    sims_today = (
+        db.scalar(
+            select(func.count(AlphaMetric.id)).where(AlphaMetric.created_at >= today_start)
+        )
+        or 0
+    )
+    sims_week = (
+        db.scalar(
+            select(func.count(AlphaMetric.id)).where(AlphaMetric.created_at >= week_start)
+        )
+        or 0
+    )
+
+    # Daily simulations trend for last 30 days
+    daily_rows = db.execute(
+        select(
+            func.date(AlphaMetric.created_at).label("day"),
+            func.count(AlphaMetric.id),
+        )
+        .where(AlphaMetric.created_at >= month_start)
+        .group_by("day")
+        .order_by("day")
+    ).all()
+    day_counts = {str(d): c for d, c in daily_rows}
+    simulations_30d = []
+    for i in range(30, -1, -1):
+        dt = (today_start - timedelta(days=i)).strftime("%Y-%m-%d")
+        simulations_30d.append({"date": dt, "count": day_counts.get(dt, 0)})
+
+    # 2. Territories metrics
+    all_families = _families(db)
+    territories_total = len(all_families)
+    territories_week = (
+        db.scalar(
+            select(func.count(func.distinct(Alpha.family_key))).where(
+                Alpha.family_key.is_not(None), Alpha.created_at >= week_start
+            )
+        )
+        or 0
+    )
+
+    # 3. Structural Diversity
+    known_ops = ["ts_zscore", "ts_rank", "ts_delta", "ts_mean", "ts_decay_linear", "ts_std_dev", "ts_quantile", "ts_corr"]
+    distinct_ops = set()
+    distinct_wrappers = set()
+    for (expr,) in db.execute(select(Alpha.expression).where(Alpha.expression.is_not(None))).all():
+        for op in known_ops:
+            if op in expr:
+                distinct_ops.add(op)
+        if expr.startswith("rank("):
+            distinct_wrappers.add("rank")
+        elif expr.startswith("zscore("):
+            distinct_wrappers.add("zscore")
+        elif expr.startswith("normalize("):
+            distinct_wrappers.add("normalize")
+        elif expr.startswith("group_rank("):
+            distinct_wrappers.add("group_rank")
+        elif expr.startswith("group_zscore("):
+            distinct_wrappers.add("group_zscore")
+        elif expr.startswith("group_neutralize("):
+            distinct_wrappers.add("group_neutralize")
+
+    # 4. Submission Attempts & Failure-by-check breakdown (Phase 1 Key Metric)
+    attempts = db.execute(select(SubmissionAttempt)).scalars().all()
+    att_total = len(attempts)
+    att_passed = sum(1 for a in attempts if a.result == "submitted")
+    att_failed = sum(1 for a in attempts if a.result == "rejected")
+    att_pending = sum(1 for a in attempts if a.result is None)
+
+    failures_by_check: dict[str, int] = {}
+    for a in attempts:
+        if a.result == "rejected":
+            chk = a.failed_check or "OTHER"
+            failures_by_check[chk] = failures_by_check.get(chk, 0) + 1
+
+    total_alphas = db.scalar(select(func.count(Alpha.id))) or 0
+    alphas_per_territory = round(total_alphas / max(territories_total, 1), 1)
+
+    calibration_count = (
+        db.scalar(select(func.count(Alpha.id)).where(Alpha.arm == "random_stratified")) or 0
+    )
+
+    active_campaigns = [
+        {"id": c.id, "name": c.name, "status": c.status, "completed": c.budget_completed, "total": c.budget_total}
+        for c in db.execute(select(Campaign).order_by(Campaign.id.desc()).limit(5)).scalars().all()
+    ]
+
+    return {
+        "simulations_today": sims_today,
+        "simulations_this_week": sims_week,
+        "simulations_30d": simulations_30d,
+        "territories_total": territories_total,
+        "territories_this_week": territories_week,
+        "distinct_operator_families": sorted(distinct_ops),
+        "distinct_wrapper_shapes": sorted(distinct_wrappers),
+        "submission_attempts": {
+            "total": att_total,
+            "passed": att_passed,
+            "failed": att_failed,
+            "pending": att_pending,
+            "target": 40,
+            "pct_to_target": round((att_total / 40.0) * 100, 1),
+        },
+        "failures_by_check": failures_by_check,
+        "alphas_per_territory": alphas_per_territory,
+        "calibration_alphas_count": calibration_count,
+        "active_campaigns": active_campaigns,
     }
 

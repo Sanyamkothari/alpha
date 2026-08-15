@@ -52,17 +52,29 @@ from app.validator.validator import normalize
 
 log = structlog.get_logger("constructor")
 
-# Time-series shapes. Each takes (x, window).
+# Standard 7x7 grid (Task 1: default 49 alphas per territory)
+STANDARD_WINDOWS: tuple[int, ...] = (5, 10, 20, 40, 60, 120, 250)
+STANDARD_DECAYS: tuple[int, ...] = (0, 1, 2, 4, 6, 8, 16)
+
+# Wide grid (opt-in via --grid wide)
+WIDE_WINDOWS: tuple[int, ...] = (5, 10, 22, 63, 126, 252)
+WIDE_DECAYS: tuple[int, ...] = (0, 4, 8, 16)
+
+DEFAULT_WINDOWS: tuple[int, ...] = STANDARD_WINDOWS
+DEFAULT_DECAYS: tuple[int, ...] = STANDARD_DECAYS
+
+# Diverse operator families from KB
 DEFAULT_TS_TRANSFORMS: tuple[str, ...] = (
     "ts_zscore",
     "ts_rank",
     "ts_delta",
     "ts_mean",
     "ts_decay_linear",
+    "ts_std_dev",
+    "ts_quantile",
 )
 
 # Depth-2: the outer operator wraps an inner time-series result.
-# Kept short — the cross-product with depth-1 transforms is already large.
 DEFAULT_DEPTH2_PAIRS: tuple[tuple[str, str], ...] = (
     ("ts_delta", "ts_rank"),      # acceleration of rank — regime change
     ("ts_zscore", "ts_delta"),    # z-score of momentum — mean-reversion of changes
@@ -70,32 +82,23 @@ DEFAULT_DEPTH2_PAIRS: tuple[tuple[str, str], ...] = (
     ("ts_delta", "ts_zscore"),    # change in standardised level — breakout
 )
 
-# Swept exhaustively — plateau analysis walks this axis.
-DEFAULT_WINDOWS: tuple[int, ...] = (5, 10, 22, 63, 126, 252)
-
 # Inner windows for depth-2 — always shorter to avoid inner >= outer redundancy.
-DEFAULT_INNER_WINDOWS: tuple[int, ...] = (5, 10, 22)
+DEFAULT_INNER_WINDOWS: tuple[int, ...] = (5, 10, 20)
 
 # Cross-sectional normalization. None = leave the raw time-series signal.
-DEFAULT_CROSS_SECTION: tuple[str | None, ...] = ("rank", "zscore", None)
+DEFAULT_CROSS_SECTION: tuple[str | None, ...] = ("rank", "zscore", "normalize", None)
 
 # Group-relative variants; None = ungrouped.
 DEFAULT_GROUPS: tuple[str | None, ...] = (None, "sector", "industry", "subindustry")
 
 DEFAULT_NEUTRALIZATIONS: tuple[str, ...] = ("SUBINDUSTRY", "INDUSTRY", "SECTOR", "MARKET", "NONE")
 
-# Also swept exhaustively — the second plateau axis.
-DEFAULT_DECAYS: tuple[int, ...] = (0, 4, 8, 16)
-
 DEFAULT_TRUNCATIONS: tuple[float, ...] = (0.08,)
 
 # Universes to sweep — each is a distinct alpha on BRAIN.
 DEFAULT_UNIVERSES: tuple[str, ...] = ("TOP3000",)
 
-# Map field update frequency → backfill days. A quarterly fundamental without
-# backfill is mostly NaN between reports; a daily news field with 120-day backfill
-# blurs the signal into noise. The LLM triage reports frequency; this table
-# translates it into the right construction parameter.
+# Map field update frequency → backfill days.
 FREQUENCY_BACKFILL: dict[str, int | None] = {
     "daily": None,       # no backfill — data arrives every day
     "weekly": 10,
@@ -122,28 +125,17 @@ class GridAxes:
 
 @dataclass(frozen=True)
 class FamilySpec:
-    """One economic mechanism.
-
-    ``denominator`` builds a ratio — ``liabilities / cap`` rather than raw
-    ``liabilities``. This matters more than it looks: a raw balance-sheet number
-    is dominated by company size, so the ratio is usually the actual signal. The
-    best result in the library (fitness 1.11) is exactly this shape.
-
-    ``secondary_field`` enables multi-field families — ``ts_corr(primary,
-    secondary, window)`` explores the time-series correlation between two fields,
-    opening an entirely new signal class.
-
-    ``frequency`` drives backfill duration via ``FREQUENCY_BACKFILL``. When set,
-    it overrides ``backfill_days`` so that daily fields skip backfill and annual
-    fields get a longer one.
-    """
+    """One economic mechanism."""
 
     field_code: str
-    mechanism: str
+    mechanism: str = ""
     denominator: str | None = None
     secondary_field: str | None = None
+    operator_family: str | None = None
+    wrapper_shape: str | None = None
     backfill_days: int | None = 120
     frequency: str | None = None
+    grid_mode: str = "standard"  # "standard" (7x7=49) | "wide"
     axes: GridAxes = dc_field(default_factory=GridAxes)
 
     @property
@@ -154,16 +146,12 @@ class FamilySpec:
         return self.backfill_days
 
     def family_key(self, settings: AlphaSettings | None = None) -> str:
-        """Identity of the family, INCLUDING the simulation config.
-
-        The config has to be part of the key. The same mechanism run at delay 0
-        and delay 1 is two different backtests over two different field
-        catalogues — without the suffix they share a key, and the plateau filter
-        then compares a delay-0 point against a delay-1 neighbour and calls the
-        result a ridge. Silently wrong, and wrong in the direction that promotes
-        things.
-        """
+        """Identity of the family/territory, INCLUDING the simulation config."""
         base = f"{self.field_code}/{self.denominator}" if self.denominator else self.field_code
+        if self.operator_family:
+            base = f"{base}:{self.operator_family}"
+        if self.wrapper_shape:
+            base = f"{base}:{self.wrapper_shape}"
         if self.secondary_field:
             base = f"{base}+{self.secondary_field}"
         s = settings or AlphaSettings()
@@ -178,6 +166,8 @@ class Candidate:
     settings: AlphaSettings
     complexity_score: float | None = None
     features: dict | None = None
+    arm: str | None = None
+    campaign_task_id: int | None = None
 
 
 def _base_node(spec: FamilySpec) -> Node:
@@ -229,6 +219,8 @@ def _emit_surface(
     config_key: tuple,
     seen: set[str],
     grid_extra: dict,
+    arm: str | None = None,
+    campaign_task_id: int | None = None,
 ) -> tuple[list[Candidate], int]:
     """Build a complete (window × decay) surface for one structural config.
 
@@ -275,6 +267,8 @@ def _emit_surface(
                 ),
                 complexity_score=result.complexity_score,
                 features=result.features,
+                arm=arm,
+                campaign_task_id=campaign_task_id,
             )
         )
 
@@ -290,11 +284,13 @@ def expand(
     *,
     base_settings: AlphaSettings | None = None,
     max_candidates: int = 400,
+    arm: str | None = None,
+    campaign_task_id: int | None = None,
 ) -> list[Candidate]:
     """Enumerate the family, returning only validator-passing candidates.
 
     Generates three layers of candidates (budget permitting):
-    1. **Depth-1** — the original single-operator template
+    1. **Depth-1** — the single-operator template
     2. **Depth-2** — nested operator pairs (acceleration, regime-change)
     3. **Multi-field** — ``ts_corr(primary, secondary, window)`` when a
        secondary field is specified
@@ -307,17 +303,48 @@ def expand(
         universe=base_settings.universe,
     )
     axes = spec.axes
-    groups = _group_fields(db, kb, axes.groups)
 
+    # Resolve grid ladders based on grid_mode if not explicitly customized
+    if spec.grid_mode == "wide":
+        if axes.windows == STANDARD_WINDOWS:
+            windows = WIDE_WINDOWS
+        else:
+            windows = axes.windows
+        if axes.decays == STANDARD_DECAYS:
+            decays = WIDE_DECAYS
+        else:
+            decays = axes.decays
+        axes = GridAxes(
+            ts_transforms=axes.ts_transforms,
+            depth2_pairs=axes.depth2_pairs,
+            windows=windows,
+            inner_windows=axes.inner_windows,
+            cross_section=axes.cross_section,
+            groups=axes.groups,
+            neutralizations=axes.neutralizations,
+            decays=decays,
+            truncations=axes.truncations,
+            universes=axes.universes,
+        )
+
+    # Filter transforms and cross_sections if explicitly set on FamilySpec
+    ts_transforms = (
+        (spec.operator_family,)
+        if spec.operator_family
+        else axes.ts_transforms
+    )
+    cross_sections = (
+        (spec.wrapper_shape,)
+        if spec.wrapper_shape
+        else axes.cross_section
+    )
+
+    groups = _group_fields(db, kb, axes.groups)
     family_key = spec.family_key(base_settings)
     out: list[Candidate] = []
     seen: set[str] = set()
     rejected = 0
 
-    # The unit of emission is a COMPLETE (window x decay) surface for one
-    # structural configuration — not an arbitrary slice of the cross-product.
-    # Plateau analysis compares a point against its window/decay neighbours, so a
-    # half-filled surface is worse than useless: missing neighbours make a real
     submitted_slices = set(
         (a.family_key, a.neutralization, a.truncation)
         for a in db.query(Alpha).filter_by(status=AlphaStatus.SUBMITTED.value).all()
@@ -330,7 +357,7 @@ def expand(
     # Layer 1: Depth-1 templates (the original grid)
     # ------------------------------------------------------------------
     configs = itertools.product(
-        axes.ts_transforms, axes.cross_section, groups,
+        ts_transforms, cross_sections, groups,
         axes.neutralizations, axes.truncations, axes.universes,
     )
     for ts_op, cs_op, group, neutralization, truncation, universe in configs:
@@ -352,6 +379,7 @@ def expand(
             spec, kb, family_key, base_settings, axes,
             _depth1_builder, (ts_op, cs_op, group, neutralization, truncation, universe),
             seen, grid_extra,
+            arm=arm, campaign_task_id=campaign_task_id,
         )
         rejected += rej
         out.extend(surface)
@@ -359,57 +387,53 @@ def expand(
     # ------------------------------------------------------------------
     # Layer 2: Depth-2 templates (nested operator pairs)
     # ------------------------------------------------------------------
-    for (outer_op, inner_op), cs_op, group, neutralization, truncation in itertools.product(
-        axes.depth2_pairs, axes.cross_section, groups,
-        axes.neutralizations, axes.truncations,
-    ):
-        if len(out) + surface_size > max_candidates:
-            break
-
-        # For depth-2, inner_windows are shorter lookbacks. For each outer
-        # window, we pick a single inner window (the first one that is strictly
-        # shorter). This keeps the surface the same shape as depth-1 so the
-        # plateau filter can compare neighbours identically.
-        def _depth2_builder(
-            window, _outer=outer_op, _inner=inner_op, _cs=cs_op, _grp=group,
+    if not spec.operator_family:  # Only explore depth-2 if operator family is unconstrained
+        for (outer_op, inner_op), cs_op, group, neutralization, truncation in itertools.product(
+            axes.depth2_pairs, cross_sections, groups,
+            axes.neutralizations, axes.truncations,
         ):
-            # Pick the longest inner window that is strictly shorter than outer.
-            inner_w = None
-            for iw in sorted(axes.inner_windows, reverse=True):
-                if iw < window:
-                    inner_w = iw
-                    break
-            if inner_w is None:
-                # Outer window too small for any inner — use smallest inner.
-                inner_w = min(axes.inner_windows) if axes.inner_windows else 5
+            if len(out) + surface_size > max_candidates:
+                break
 
-            inner_node = OperatorCall(
-                _inner, [_base_node(spec), Number(float(inner_w), True)]
-            )
-            outer_node = OperatorCall(
-                _outer, [inner_node, Number(float(window), True)]
-            )
-            return _wrap_cross_section(outer_node, _cs, _grp)
+            def _depth2_builder(
+                window, _outer=outer_op, _inner=inner_op, _cs=cs_op, _grp=group,
+            ):
+                inner_w = None
+                for iw in sorted(axes.inner_windows, reverse=True):
+                    if iw < window:
+                        inner_w = iw
+                        break
+                if inner_w is None:
+                    inner_w = min(axes.inner_windows) if axes.inner_windows else 5
 
-        grid_extra = {
-            "ts": f"{outer_op}({inner_op})", "cs": cs_op, "group": group,
-            "depth": 2, "neutralization": neutralization, "truncation": truncation,
-        }
-        surface, rej = _emit_surface(
-            spec, kb, family_key, base_settings, axes,
-            _depth2_builder,
-            (outer_op, inner_op, cs_op, group, neutralization, truncation),
-            seen, grid_extra,
-        )
-        rejected += rej
-        out.extend(surface)
+                inner_node = OperatorCall(
+                    _inner, [_base_node(spec), Number(float(inner_w), True)]
+                )
+                outer_node = OperatorCall(
+                    _outer, [inner_node, Number(float(window), True)]
+                )
+                return _wrap_cross_section(outer_node, _cs, _grp)
+
+            grid_extra = {
+                "ts": f"{outer_op}({inner_op})", "cs": cs_op, "group": group,
+                "depth": 2, "neutralization": neutralization, "truncation": truncation,
+            }
+            surface, rej = _emit_surface(
+                spec, kb, family_key, base_settings, axes,
+                _depth2_builder,
+                (outer_op, inner_op, cs_op, group, neutralization, truncation),
+                seen, grid_extra,
+                arm=arm, campaign_task_id=campaign_task_id,
+            )
+            rejected += rej
+            out.extend(surface)
 
     # ------------------------------------------------------------------
     # Layer 3: Multi-field (ts_corr) when a secondary field is available
     # ------------------------------------------------------------------
     if spec.secondary_field and kb.field_type(spec.secondary_field) is not None:
         for cs_op, group, neutralization, truncation in itertools.product(
-            axes.cross_section, groups, axes.neutralizations, axes.truncations,
+            cross_sections, groups, axes.neutralizations, axes.truncations,
         ):
             if len(out) + surface_size > max_candidates:
                 break
@@ -432,6 +456,7 @@ def expand(
                 _corr_builder,
                 ("ts_corr", spec.secondary_field, cs_op, group, neutralization, truncation),
                 seen, grid_extra,
+                arm=arm, campaign_task_id=campaign_task_id,
             )
             rejected += rej
             out.extend(surface)

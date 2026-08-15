@@ -14,9 +14,11 @@ See STRATEGY.md Rule 2 and Rule 5.
 from __future__ import annotations
 
 from datetime import date, datetime
+from typing import TYPE_CHECKING
 
 from sqlalchemy import (
     Boolean,
+    CheckConstraint,
     Date,
     DateTime,
     Float,
@@ -28,6 +30,9 @@ from sqlalchemy import (
     func,
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
+
+if TYPE_CHECKING:
+    from app.models.campaigns import CampaignTask
 
 from app.db.types import JSONType
 from app.models._common import Base, IdMixin, TimestampMixin, enum_check
@@ -83,8 +88,15 @@ class Alpha(IdMixin, TimestampMixin, Base):
     outcome_note: Mapped[str | None] = mapped_column(Text)
     outcome_source: Mapped[str | None] = mapped_column(String(16))
 
+    # ---- Campaign & Budget Allocation (Phase 1) ----
+    arm: Mapped[str | None] = mapped_column(String(32), index=True)
+    campaign_task_id: Mapped[int | None] = mapped_column(
+        ForeignKey("campaign_tasks.id", ondelete="SET NULL")
+    )
+
     # ---- Relationships ----
     parent: Mapped[Alpha | None] = relationship(remote_side="Alpha.id", backref="children")
+    campaign_task: Mapped[CampaignTask | None] = relationship("CampaignTask", back_populates="alphas")
     status_history: Mapped[list[AlphaStatusHistory]] = relationship(
         back_populates="alpha", cascade="all, delete-orphan"
     )
@@ -104,6 +116,10 @@ class Alpha(IdMixin, TimestampMixin, Base):
         enum_check("mutation_type", MutationType),
         enum_check("platform_outcome", PlatformOutcome),
         enum_check("outcome_source", OutcomeSource),
+        CheckConstraint(
+            "arm IS NULL OR arm IN ('exploit', 'random_stratified', 'plateau_fill')",
+            name="ck_alphas_arm_valid",
+        ),
     )
 
 

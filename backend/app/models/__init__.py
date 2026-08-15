@@ -20,6 +20,7 @@ from app.models.alphas import (
     SubmissionAttempt,
 )
 from app.models.brain import BrainFetchLog
+from app.models.campaigns import Campaign, CampaignTask
 from app.models.fields import Category, DataField, DataFieldSnapshot, Dataset, FieldTag, Tag
 from app.models.operators import (
     Operator,
@@ -50,6 +51,9 @@ __all__ = [
     "AlphaFieldSnapshot",
     "SubmissionAttempt",
     "AlphaProductionSnapshot",
+    # campaigns
+    "Campaign",
+    "CampaignTask",
     # results
     "SimulationImport",
     "AlphaMetric",

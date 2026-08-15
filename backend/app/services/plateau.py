@@ -205,17 +205,25 @@ MIN_NEIGHBOURS_TO_JUDGE = 2
 
 def _neighbours(point: SurfacePoint, surface: list[SurfacePoint]) -> tuple[list[SurfacePoint], int]:
     """Simulated neighbours one step away, and how many COULD exist."""
+    # Dynamically resolve coordinate ladders from the surface points
+    windows = sorted({p.window for p in surface if p.window is not None})
+    decays = sorted({p.decay for p in surface if p.decay is not None})
+    if not windows:
+        windows = list(WINDOW_LADDER)
+    if not decays:
+        decays = list(DECAY_LADDER)
+
     try:
-        wi = WINDOW_LADDER.index(point.window)
-        di = DECAY_LADDER.index(point.decay)
+        wi = windows.index(point.window)
+        di = decays.index(point.decay)
     except ValueError:
         return [], 0
     wanted = set()
     for step in (-1, 1):
-        if 0 <= wi + step < len(WINDOW_LADDER):
-            wanted.add((WINDOW_LADDER[wi + step], point.decay))
-        if 0 <= di + step < len(DECAY_LADDER):
-            wanted.add((point.window, DECAY_LADDER[di + step]))
+        if 0 <= wi + step < len(windows):
+            wanted.add((windows[wi + step], point.decay))
+        if 0 <= di + step < len(decays):
+            wanted.add((point.window, decays[di + step]))
     found = [
         p
         for p in surface

@@ -266,6 +266,7 @@ table.data td.t{font-family:var(--font-ui)}
     <nav>
       <button data-view="morning" aria-current="page">Morning</button>
       <button data-view="portfolio">Submitted</button>
+      <button data-view="throughput">Throughput</button>
       <button data-view="datasets">Datasets</button>
     </nav>
     <span class="spacer"></span>
@@ -330,6 +331,43 @@ table.data td.t{font-family:var(--font-ui)}
         Submitted alphas, and ones still cleared and waiting. Every submission makes
         the next one harder — BRAIN pays only for uncorrelated alphas.</p>
       <table class="data" id="pfTable"></table>
+    </div>
+  </section>
+
+  <section id="view-throughput" class="hide">
+    <div class="panel" style="margin-bottom:16px">
+      <div style="display:flex;align-items:baseline;gap:16px;margin-bottom:8px">
+        <h3 style="margin:0">Phase 1 Evidence Target: 40 Submission Attempts</h3>
+        <span id="tpTargetBadge" style="font-size:13px;font-weight:700"></span>
+      </div>
+      <p class="muted" style="font-size:12px;margin-bottom:14px">
+        40 recorded submission attempts in 4 months estimates the platform acceptance rate to ±15%.
+      </p>
+      <div style="background:var(--sunken);border-radius:6px;height:12px;overflow:hidden;margin-bottom:16px;display:flex">
+        <div id="tpBarPassed" style="background:var(--ok);height:100%;width:0%" title="Accepted"></div>
+        <div id="tpBarFailed" style="background:var(--bad,#e53935);height:100%;width:0%" title="Rejected"></div>
+        <div id="tpBarPending" style="background:var(--warn,#fb8c00);height:100%;width:0%" title="Pending"></div>
+      </div>
+      <div id="tpStatsRow" style="display:grid;grid-template-columns:repeat(auto-fit, minmax(140px, 1fr));gap:12px;margin-bottom:8px"></div>
+    </div>
+
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:16px">
+      <div class="panel">
+        <h3>Submission Checks Failure Diagnostics</h3>
+        <p class="muted" style="font-size:12px;margin-bottom:10px">What BRAIN checks reject our candidates:</p>
+        <div id="tpFailuresTable"></div>
+      </div>
+      <div class="panel">
+        <h3>Library Diversity</h3>
+        <p class="muted" style="font-size:12px;margin-bottom:10px">Breaking the single-template monoculture:</p>
+        <div id="tpDiversityBox"></div>
+      </div>
+    </div>
+
+    <div class="panel">
+      <h3>Active & Overnight Campaigns</h3>
+      <p class="muted" style="font-size:12px;margin-bottom:10px">Persisted, database-checkpointed multi-territory simulation campaigns:</p>
+      <div id="tpCampaignsTable"></div>
     </div>
   </section>
 
@@ -655,9 +693,27 @@ function fullCard(row){
   }
   const right=document.createElement("div");
   const s=row.settings||{};
+
+  const selfCorrVal = row.self_correlation !== null && row.self_correlation !== undefined ? row.self_correlation : null;
+  const selfCorrTag = row.self_correlation_method === 'structural_proxy' ? ' (proxy)' : '';
+  let selfCorrBadge = '';
+  if (selfCorrVal !== null && row.self_correlation_target_id) {
+    const color = selfCorrVal < 0.55 ? 'var(--ok)' : (selfCorrVal < 0.70 ? 'var(--warn,#fb8c00)' : 'var(--bad,#e53935)');
+    const warning = selfCorrVal >= 0.70 ? ' ⚠️ BRAIN limit 0.70' : '';
+    selfCorrBadge = `<span style="border:1px solid ${color};color:${color};padding:2px 6px;border-radius:4px;font-size:11px;font-weight:600" title="Max self-correlation against confirmed submitted alphas">Self-Corr: ${selfCorrVal.toFixed(2)}${selfCorrTag} vs #${row.self_correlation_target_id}${warning}</span>`;
+  }
+
+  const armBanner = row.arm === 'random_stratified'
+    ? `<div style="background:rgba(255, 152, 0, 0.12);border:1px solid var(--warn,#fb8c00);color:var(--warn,#fb8c00);padding:5px 8px;border-radius:4px;font-size:11px;margin-bottom:8px;font-weight:600">🔬 Calibration (expected to fail — required for validation study)</div>`
+    : (row.arm ? `<span class="caps" style="background:var(--sunken);padding:2px 6px;border-radius:4px;font-size:10px;margin-left:6px">${row.arm}</span>` : '');
+
   right.innerHTML=`
-    <div class="caps" style="margin-bottom:6px">${row._family||"—"} · #${row.alpha_id}${
-      row.status==="submitted"?' · <b>submitted</b>':""}</div>
+    ${armBanner}
+    <div class="caps" style="margin-bottom:6px;display:flex;align-items:center;gap:6px;flex-wrap:wrap">
+      <span>${row._family||"—"} · #${row.alpha_id}</span>
+      ${row.status==="submitted"?'· <b>submitted</b>':""}
+      ${selfCorrBadge}
+    </div>
     <div class="expr">${row.expression}</div>
     <div class="settings-line"><span>${s.region}</span><span>${s.universe}</span>
       <span>delay ${s.delay}</span><span>${s.neutralization||"NONE"}</span>
@@ -970,7 +1026,7 @@ function go(view){
   else{ // library has no nav button — it is reached from the counters
     S.view=view;
     document.querySelectorAll("nav button").forEach(x=>x.removeAttribute("aria-current"));
-    ["morning","portfolio","datasets","library"].forEach(v=>
+    ["morning","portfolio","throughput","datasets","library"].forEach(v=>
       $("#view-"+v).classList.toggle("hide",v!==view));
   }
 }
@@ -1163,6 +1219,87 @@ async function submitRejection(e){
   await resolveAttemptDirect(attemptId, "rejected", check, detail, notes);
 }
 
+async function showThroughput(){
+  try {
+    const d = await api("/ui/throughput");
+    const att = d.submission_attempts || {};
+    const totalAtt = att.total || 0;
+    const target = att.target || 40;
+    const pct = Math.min(100, (totalAtt / target) * 100);
+    const passedPct = (att.passed / target) * 100;
+    const failedPct = (att.failed / target) * 100;
+    const pendingPct = (att.pending / target) * 100;
+
+    $("#tpTargetBadge").textContent = `${totalAtt} / ${target} attempts (${pct.toFixed(0)}%)`;
+    $("#tpBarPassed").style.width = `${passedPct}%`;
+    $("#tpBarFailed").style.width = `${failedPct}%`;
+    $("#tpBarPending").style.width = `${pendingPct}%`;
+
+    $("#tpStatsRow").innerHTML = `
+      <div class="panel" style="padding:10px">
+        <div class="k faint">Simulations (Today)</div>
+        <div style="font-size:20px;font-weight:700;margin-top:4px">${d.simulations_today}</div>
+      </div>
+      <div class="panel" style="padding:10px">
+        <div class="k faint">Simulations (7 Days)</div>
+        <div style="font-size:20px;font-weight:700;margin-top:4px">${d.simulations_this_week}</div>
+      </div>
+      <div class="panel" style="padding:10px">
+        <div class="k faint">Territories Explored</div>
+        <div style="font-size:20px;font-weight:700;margin-top:4px">${d.territories_total} <span class="faint" style="font-size:12px">(+${d.territories_this_week} this wk)</span></div>
+      </div>
+      <div class="panel" style="padding:10px">
+        <div class="k faint">Density (Alphas/Terr)</div>
+        <div style="font-size:20px;font-weight:700;margin-top:4px">${d.alphas_per_territory}</div>
+      </div>
+      <div class="panel" style="padding:10px">
+        <div class="k faint">Calibration Alphas</div>
+        <div style="font-size:20px;font-weight:700;margin-top:4px">${d.calibration_alphas_count}</div>
+      </div>
+    `;
+
+    // Failures diagnostic
+    const fails = d.failures_by_check || {};
+    const failKeys = Object.keys(fails);
+    if (!failKeys.length) {
+      $("#tpFailuresTable").innerHTML = `<p class="faint" style="font-size:12px;padding:8px">No rejected attempts recorded yet.</p>`;
+    } else {
+      $("#tpFailuresTable").innerHTML = `<table class="data"><tr><th>Check Name</th><th>Rejections</th></tr>` +
+        failKeys.map(k => `<tr><td class="t font-mono"><b>${k}</b></td><td>${fails[k]}</td></tr>`).join("") + `</table>`;
+    }
+
+    // Diversity box
+    const ops = d.distinct_operator_families || [];
+    const wraps = d.distinct_wrapper_shapes || [];
+    $("#tpDiversityBox").innerHTML = `
+      <div style="font-size:12px;margin-bottom:8px"><b>Operator Families in Library (${ops.length}):</b></div>
+      <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:12px">
+        ${ops.map(o => `<span class="caps" style="background:var(--sunken);padding:3px 8px;border-radius:4px">${o}</span>`).join("")}
+      </div>
+      <div style="font-size:12px;margin-bottom:8px"><b>Wrapper Shapes in Library (${wraps.length}):</b></div>
+      <div style="display:flex;gap:6px;flex-wrap:wrap">
+        ${wraps.map(w => `<span class="caps" style="background:var(--sunken);padding:3px 8px;border-radius:4px">${w}</span>`).join("")}
+      </div>
+    `;
+
+    // Campaigns table
+    const camps = d.active_campaigns || [];
+    if (!camps.length) {
+      $("#tpCampaignsTable").innerHTML = `<p class="faint" style="font-size:12px;padding:8px">No campaigns launched yet. Start one with <code>python -m scripts.run_campaign --nightly</code>.</p>`;
+    } else {
+      $("#tpCampaignsTable").innerHTML = `<table class="data"><tr><th>ID</th><th>Name</th><th>Status</th><th>Progress</th></tr>` +
+        camps.map(c => `<tr>
+          <td>${c.id}</td>
+          <td class="t"><b>${c.name}</b></td>
+          <td class="t"><span class="caps" style="background:${c.status==='completed'?'var(--ok)':c.status==='running'?'var(--accent)':'var(--sunken)'};color:${c.status==='completed'||c.status==='running'?'var(--bg)':'inherit'};padding:2px 6px;border-radius:3px">${c.status}</span></td>
+          <td>${c.completed} / ${c.total} sims</td>
+        </tr>`).join("") + `</table>`;
+    }
+  } catch(e) {
+    console.error("Failed to load throughput:", e);
+  }
+}
+
 async function showDatasets(){
   if(!S.datasets.length) S.datasets=(await api("/ui/datasets")).datasets||[];
   $("#dsTable").innerHTML=`<tr><th>Dataset</th><th>Fields</th><th>Avg users/field</th>
@@ -1181,9 +1318,11 @@ document.querySelectorAll("nav button").forEach(b=>b.onclick=()=>{
   $("#view-morning").classList.toggle("hide",S.view!=="morning");
   $("#view-library").classList.toggle("hide",S.view!=="library");
   $("#view-portfolio").classList.toggle("hide",S.view!=="portfolio");
+  $("#view-throughput").classList.toggle("hide",S.view!=="throughput");
   $("#view-datasets").classList.toggle("hide",S.view!=="datasets");
   if(S.view==="datasets") showDatasets();
   if(S.view==="portfolio") showPortfolio();
+  if(S.view==="throughput") showThroughput();
 });
 $("#themeBtn").onclick=()=>{
   const c=document.documentElement.getAttribute("data-theme");

@@ -38,6 +38,8 @@ def save(candidates: list[Candidate]) -> dict[str, int]:
                     family_key=cand.family_key,
                     grid=cand.grid,
                     source="constructor",
+                    arm=cand.arm,
+                    campaign_task_id=cand.campaign_task_id,
                 )
             except Exception:  # noqa: BLE001 - validator gate; count and continue
                 counts["invalid"] += 1
@@ -56,7 +58,13 @@ def main() -> int:
     ap.add_argument("--field", required=True)
     ap.add_argument("--denominator", default=None)
     ap.add_argument("--mechanism", default="")
-    ap.add_argument("--max-candidates", type=int, default=384)
+    ap.add_argument("--grid", choices=["standard", "wide"], default="standard", help="standard (7x7=49) or wide")
+    ap.add_argument("--operators", nargs="*", help="specific operator families to sweep (e.g. ts_zscore ts_rank ts_delta)")
+    ap.add_argument("--wrappers", nargs="*", help="specific wrapper shapes (e.g. rank zscore normalize)")
+    ap.add_argument("--windows", nargs="*", type=int, help="custom lookback windows")
+    ap.add_argument("--decays", nargs="*", type=int, help="custom decays")
+    ap.add_argument("--arm", choices=["exploit", "random_stratified", "plateau_fill"], default=None)
+    ap.add_argument("--max-candidates", type=int, default=None)
     ap.add_argument("--simulate", type=int, default=0, help="how many to actually run on BRAIN")
     ap.add_argument("--no-backfill", action="store_true")
     ap.add_argument("--region", default="USA")
@@ -64,20 +72,41 @@ def main() -> int:
     ap.add_argument("--delay", type=int, default=1)
     args = ap.parse_args()
 
+    from app.services.constructor import (
+        GridAxes,
+        STANDARD_DECAYS,
+        STANDARD_WINDOWS,
+        WIDE_DECAYS,
+        WIDE_WINDOWS,
+    )
+
+    windows = tuple(args.windows) if args.windows else (WIDE_WINDOWS if args.grid == "wide" else STANDARD_WINDOWS)
+    decays = tuple(args.decays) if args.decays else (WIDE_DECAYS if args.grid == "wide" else STANDARD_DECAYS)
+    ts_transforms = tuple(args.operators) if args.operators else None
+    cross_section = tuple(args.wrappers) if args.wrappers else None
+
+    axes = GridAxes(
+        windows=windows,
+        decays=decays,
+        ts_transforms=ts_transforms if ts_transforms else GridAxes.ts_transforms,
+        cross_section=cross_section if cross_section else GridAxes.cross_section,
+    )
+
+    # In standard mode, default max_candidates to 49 (1 surface/territory) unless specified
+    max_cands = args.max_candidates or (384 if args.grid == "wide" else 49)
+
     spec = FamilySpec(
         field_code=args.field,
         denominator=args.denominator,
         mechanism=args.mechanism or f"{args.field} signal",
         backfill_days=None if args.no_backfill else 120,
+        grid_mode=args.grid,
+        axes=axes,
     )
 
     settings = AlphaSettings(region=args.region, universe=args.universe, delay=args.delay)
     family_key = spec.family_key(settings)
 
-    # Preflight before generating anything. A config can be fully *readable* and
-    # still not simulatable: delay-0 exposes 2,121 fields via GET but rejects the
-    # simulation with "Delay 0 is not available." Finding that out after
-    # expansion means hundreds of dead alpha rows.
     if args.simulate:
         from app.services.brain import BrainClient, SimulationSettings
 
@@ -90,9 +119,12 @@ def main() -> int:
             print(f"  {why}")
             print("  (the catalog may still be readable — that does not imply access)")
             return 1
+
     with session_scope() as db:
-        candidates = expand(db, spec, base_settings=settings, max_candidates=args.max_candidates)
-    print(f"expanded: {len(candidates)} candidates for family {family_key!r}")
+        candidates = expand(
+            db, spec, base_settings=settings, max_candidates=max_cands, arm=args.arm
+        )
+    print(f"expanded: {len(candidates)} candidates for family {family_key!r} (grid={args.grid}, arm={args.arm})")
     if not candidates:
         print("nothing emitted — check the field code exists for this region/delay/universe")
         return 1

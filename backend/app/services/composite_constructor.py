@@ -147,6 +147,8 @@ def expand_composite(
     *,
     base_settings: AlphaSettings | None = None,
     max_candidates: int = 400,
+    arm: str | None = None,
+    campaign_task_id: int | None = None,
 ) -> list[Candidate]:
     """Expands a composite multi-factor specification across structure x settings grids."""
     base_settings = base_settings or AlphaSettings()
@@ -181,19 +183,25 @@ def expand_composite(
                         valid_surface = True
 
                         for window, decay in itertools.product(axes.windows, axes.decays):
-                            p_ts = _build_ts_node(prim_base, ts_op, window)
-                            s_ts = _build_ts_node(sec_base, ts_op, window)
+                            prim_ts = _build_ts_node(prim_base, ts_op, window)
+                            sec_ts = _build_ts_node(sec_base, ts_op, window)
 
-                            if spec.mode == "spread":
-                                root = _build_spread_ast(p_ts, s_ts, group)
+                            if spec.mode == "blend":
+                                root = _build_blend_ast(prim_ts, sec_ts, cs_op, group, spec.weight)
+                            elif spec.mode == "spread":
+                                root = _build_spread_ast(prim_ts, sec_ts, group)
                             elif spec.mode == "orthogonal":
-                                root = _build_orthogonal_ast(p_ts, s_ts, group)
-                            elif spec.mode == "conditional" and trigger_base:
-                                root = _build_conditional_ast(p_ts, trigger_base, window, group)
+                                root = _build_orthogonal_ast(prim_ts, sec_ts, group)
+                            elif spec.mode == "conditional":
+                                trig_node = (
+                                    _build_ts_node(trigger_base, "ts_mean", window)
+                                    if trigger_base
+                                    else sec_ts
+                                )
+                                root = _build_conditional_ast(prim_ts, trig_node, window, group)
                             else:
-                                root = _build_blend_ast(p_ts, s_ts, cs_op, group, spec.weight)
+                                root = _build_blend_ast(prim_ts, sec_ts, cs_op, group, spec.weight)
 
-                            # Check tree bloat caps
                             if _depth(root) > spec.max_tree_depth:
                                 valid_surface = False
                                 break
@@ -245,6 +253,8 @@ def expand_composite(
                                     ),
                                     complexity_score=val_res.complexity_score,
                                     features=val_res.features,
+                                    arm=arm,
+                                    campaign_task_id=campaign_task_id,
                                 )
                             )
 

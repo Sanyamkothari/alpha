@@ -167,6 +167,8 @@ def evolve_generation(
     *,
     config: EvolutionConfig | None = None,
     base_settings: AlphaSettings | None = None,
+    arm: str | None = None,
+    campaign_task_id: int | None = None,
 ) -> list[Candidate]:
     """Produce generation N+1 from top parent alphas."""
     cfg = config or EvolutionConfig()
@@ -265,6 +267,8 @@ def evolve_generation(
                 ),
                 complexity_score=val_res.complexity_score,
                 features=val_res.features,
+                arm=arm,
+                campaign_task_id=campaign_task_id,
             )
         )
 

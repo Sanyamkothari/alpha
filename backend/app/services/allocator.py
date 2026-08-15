@@ -254,3 +254,190 @@ def suggest(
 
     log.info("allocator_suggested", n=len(out), datasets=len({s.dataset_code for s in out}))
     return out
+
+
+@dataclass
+class AllocationTask:
+    arm: str  # 'exploit' | 'random_stratified' | 'plateau_fill'
+    field_code: str
+    dataset_code: str
+    operator_family: str
+    wrapper_shape: str | None
+    denominator: str | None
+    target_simulations: int
+    reason: str
+    quartile: int | None = None
+
+
+@dataclass
+class BudgetPlan:
+    total_simulations: int
+    exploit_simulations: int
+    random_stratified_simulations: int
+    plateau_fill_simulations: int
+    tasks: list[AllocationTask]
+
+
+def plan_budget_allocation(
+    db: Session,
+    total_simulations: int = 200,
+    *,
+    arms: dict[str, float] | None = None,
+    region: str = "USA",
+    delay: int = 1,
+    universe: str = "TOP3000",
+    sims_per_territory: int = 49,
+) -> BudgetPlan:
+    """Computes a 3-way budget allocation across exploit (50%), random stratified (30%), and plateau fill (20%)."""
+    import random
+    import numpy as np
+    from app.services.constructor import DEFAULT_CROSS_SECTION, DEFAULT_TS_TRANSFORMS
+
+    arm_shares = arms or {"exploit": 0.50, "random_stratified": 0.30, "plateau_fill": 0.20}
+    exploit_budget = int(total_simulations * arm_shares.get("exploit", 0.50))
+    random_budget = int(total_simulations * arm_shares.get("random_stratified", 0.30))
+    plateau_budget = total_simulations - exploit_budget - random_budget
+
+    has_cap = (
+        db.execute(
+            select(DataField.id).where(DataField.field_code == "cap", DataField.region == region)
+        ).scalars().first()
+        is not None
+    )
+    default_denom = "cap" if has_cap else None
+
+    tasks: list[AllocationTask] = []
+
+    # ------------------------------------------------------------------
+    # 1. Exploit Arm (50%)
+    # ------------------------------------------------------------------
+    n_exploit_territories = max(1, exploit_budget // sims_per_territory)
+    suggestions = suggest(
+        db,
+        region=region,
+        delay=delay,
+        universe=universe,
+        n=n_exploit_territories,
+        denominator=default_denom,
+    )
+    for i, s in enumerate(suggestions):
+        op = DEFAULT_TS_TRANSFORMS[i % len(DEFAULT_TS_TRANSFORMS)]
+        wrap = "rank"
+        tasks.append(
+            AllocationTask(
+                arm="exploit",
+                field_code=s.field_code,
+                dataset_code=s.dataset_code,
+                operator_family=op,
+                wrapper_shape=wrap,
+                denominator=s.denominator,
+                target_simulations=sims_per_territory,
+                reason=f"Exploit uncrowded research territory: {s.reason}",
+            )
+        )
+
+    # ------------------------------------------------------------------
+    # 2. Random Stratified Arm (30%) — 4 Crowding Quartiles (User Directive 3 & 4)
+    # ------------------------------------------------------------------
+    # Fetch all matrix data fields with user_count across catalog
+    all_fields = db.execute(
+        select(DataField.field_code, DataField.user_count, Dataset.dataset_code)
+        .join(Dataset, DataField.dataset_id == Dataset.id)
+        .where(
+            DataField.region == region,
+            DataField.delay == delay,
+            DataField.field_type == "MATRIX",
+        )
+    ).all()
+
+    if all_fields:
+        user_counts = [f[1] for f in all_fields if f[1] is not None]
+        if user_counts:
+            q_bounds = [
+                np.percentile(user_counts, 25),
+                np.percentile(user_counts, 50),
+                np.percentile(user_counts, 75),
+            ]
+        else:
+            q_bounds = [10, 100, 1000]
+
+        # Partition into 4 quartiles
+        q_fields: dict[int, list] = {1: [], 2: [], 3: [], 4: []}
+        for f in all_fields:
+            uc = f[1] or 0
+            if uc <= q_bounds[0]:
+                q_fields[1].append(f)
+            elif uc <= q_bounds[1]:
+                q_fields[2].append(f)
+            elif uc <= q_bounds[2]:
+                q_fields[3].append(f)
+            else:
+                q_fields[4].append(f)
+
+        n_rand_territories = max(1, random_budget // sims_per_territory)
+        for i in range(n_rand_territories):
+            quartile_idx = (i % 4) + 1
+            pool = q_fields[quartile_idx] or all_fields
+            chosen = random.choice(pool)
+            chosen_field, chosen_uc, chosen_ds = chosen
+            op = random.choice(DEFAULT_TS_TRANSFORMS)
+            wrap = random.choice([cs for cs in DEFAULT_CROSS_SECTION if cs is not None])
+            tasks.append(
+                AllocationTask(
+                    arm="random_stratified",
+                    field_code=chosen_field,
+                    dataset_code=chosen_ds,
+                    operator_family=op,
+                    wrapper_shape=wrap,
+                    denominator=default_denom,
+                    target_simulations=sims_per_territory,
+                    reason=f"🔬 Calibration — expected to fail, required for validation study (Q{quartile_idx} quartile, ~{chosen_uc or 0} users)",
+                    quartile=quartile_idx,
+                )
+            )
+
+    # ------------------------------------------------------------------
+    # 3. Plateau Fill Arm (20%)
+    # ------------------------------------------------------------------
+    # Search for incomplete surfaces with promising points
+    if plateau_budget > 0:
+        fill_assigned = False
+        for (fkey,) in db.execute(select(Alpha.family_key).where(Alpha.family_key.is_not(None)).group_by(Alpha.family_key)).all():
+            count = db.scalar(select(func.count(Alpha.id)).where(Alpha.family_key == fkey)) or 0
+            if 0 < count < sims_per_territory:
+                fcode = family_field_code(str(fkey))
+                tasks.append(
+                    AllocationTask(
+                        arm="plateau_fill",
+                        field_code=fcode,
+                        dataset_code="unknown",
+                        operator_family="ts_zscore",
+                        wrapper_shape="rank",
+                        denominator=default_denom,
+                        target_simulations=sims_per_territory - count,
+                        reason=f"Complete surface for promising family {fkey}",
+                    )
+                )
+                fill_assigned = True
+                break
+        if not fill_assigned and suggestions:
+            tasks.append(
+                AllocationTask(
+                    arm="plateau_fill",
+                    field_code=suggestions[-1].field_code,
+                    dataset_code=suggestions[-1].dataset_code,
+                    operator_family="ts_delta",
+                    wrapper_shape="zscore",
+                    denominator=default_denom,
+                    target_simulations=plateau_budget,
+                    reason=f"Plateau fill budget allocated to reserve candidate {suggestions[-1].field_code}",
+                )
+            )
+
+    return BudgetPlan(
+        total_simulations=total_simulations,
+        exploit_simulations=exploit_budget,
+        random_stratified_simulations=random_budget,
+        plateau_fill_simulations=plateau_budget,
+        tasks=tasks,
+    )

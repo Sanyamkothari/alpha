@@ -246,7 +246,22 @@ def build(db: Session, *, region: str = "USA", delay: int = 1, universe: str = "
         add("```")
     add("")
 
-    # ---- 6. active portfolio ----
+    # ---- 6. simulation budget & territory projections (Phase 1) ----
+    add("## Simulation budget & territory projections (Phase 1)")
+    add("")
+    add("Standard 7x7 grid yields **49 alphas per territory** (vs 384 for wide grid).")
+    add("")
+    add("| Daily Budget | Standard Grid (7x7=49) | Wide Grid (384) | 4-Month Territories (Standard) |")
+    add("|---|---|---|---|")
+    for b in (50, 100, 200, 500):
+        t_day_std = b / 49.0
+        t_month_std = t_day_std * 30
+        t_4mo_std = t_day_std * 120
+        t_month_wide = (b / 384.0) * 30
+        add(f"| {b} sims/day | {t_day_std:.1f} terr/day ({t_month_std:.0f}/mo) | {t_month_wide:.1f} terr/mo | **{t_4mo_std:.0f} territories** |")
+    add("")
+
+    # ---- 7. active portfolio ----
     submitted_alphas = list(
         db.execute(
             select(Alpha, AlphaMetric)
