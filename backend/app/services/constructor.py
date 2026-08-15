@@ -452,9 +452,14 @@ def expand(
                 return _wrap_cross_section(node, _cs, _grp)
 
             grid_extra = {
-                "ts": f"ts_corr({spec.field_code},{spec.secondary_field})",
-                "cs": cs_op, "group": group, "depth": 1, "multi_field": True,
-                "neutralization": neutralization, "truncation": truncation,
+                "ts": "ts_corr",
+                "secondary": spec.secondary_field,
+                "cs": cs_op,
+                "group": group,
+                "depth": 1,
+                "multi_field": True,
+                "neutralization": neutralization,
+                "truncation": truncation,
             }
             surface, rej = _emit_surface(
                 spec, kb, family_key, base_settings, axes,
