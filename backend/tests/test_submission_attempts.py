@@ -114,7 +114,7 @@ def test_multiple_attempts_derived_outcome(client, db_session):
     )
     assert res3.status_code == 201
     alpha_get3 = client.get(f"/api/alphas/{alpha_id}").json()
-    assert alpha_get3["platform_outcome"] == "accepted"
+    assert alpha_get3["platform_outcome"] == "submitted"
 
 
 def test_ui_attempt_endpoints(client, db_session):

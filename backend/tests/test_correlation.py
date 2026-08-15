@@ -146,7 +146,8 @@ def test_portfolio_correlation_gate_threshold(tmp_path, db_session) -> None:
     assert reason_l is None
 
 
-def test_structural_fallback_when_pnl_missing(db_session) -> None:
+def test_structural_fallback_when_pnl_missing(db_session, tmp_path) -> None:
+    store = PnLStore(tmp_path / "pnl")
     # Portfolio alpha with structural hash
     port_alpha = Alpha(
         expression="rank(ts_delta(close, 5))",
@@ -169,7 +170,7 @@ def test_structural_fallback_when_pnl_missing(db_session) -> None:
     db_session.commit()
 
     # Empirical PnL missing -> must fallback to structural check
-    is_corr, reason, _ = check_portfolio_empirical_correlation(db_session, cand_alpha.id)
+    is_corr, reason, _ = check_portfolio_empirical_correlation(db_session, cand_alpha.id, pnl_store=store)
     assert is_corr
     assert "structural correlation collision" in (reason or "")
 

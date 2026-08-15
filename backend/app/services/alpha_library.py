@@ -11,6 +11,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable, Sequence
 from dataclasses import asdict, dataclass
+import hashlib
 
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
