@@ -52,6 +52,7 @@ def create_nightly_campaign(
             "exploit_sims": plan.exploit_simulations,
             "random_stratified_sims": plan.random_stratified_simulations,
             "plateau_fill_sims": plan.plateau_fill_simulations,
+            "quartile_boundaries": plan.quartile_boundaries,
         },
     )
     db.add(campaign)
@@ -74,6 +75,7 @@ def create_nightly_campaign(
             alphas_total=t.target_simulations,
             alphas_simulated=0,
             alphas_passed=0,
+            quartile=t.quartile,
             error=None,
         )
         db.add(ctask)

@@ -276,6 +276,7 @@ class BudgetPlan:
     random_stratified_simulations: int
     plateau_fill_simulations: int
     tasks: list[AllocationTask]
+    quartile_boundaries: list[float] | None = None
 
 
 def plan_budget_allocation(
@@ -350,16 +351,18 @@ def plan_budget_allocation(
         )
     ).all()
 
+    quartile_boundaries: list[float] | None = None
     if all_fields:
         user_counts = [f[1] for f in all_fields if f[1] is not None]
         if user_counts:
             q_bounds = [
-                np.percentile(user_counts, 25),
-                np.percentile(user_counts, 50),
-                np.percentile(user_counts, 75),
+                float(np.percentile(user_counts, 25)),
+                float(np.percentile(user_counts, 50)),
+                float(np.percentile(user_counts, 75)),
             ]
         else:
-            q_bounds = [10, 100, 1000]
+            q_bounds = [10.0, 100.0, 1000.0]
+        quartile_boundaries = q_bounds
 
         # Partition into 4 quartiles
         q_fields: dict[int, list] = {1: [], 2: [], 3: [], 4: []}
@@ -440,4 +443,5 @@ def plan_budget_allocation(
         random_stratified_simulations=random_budget,
         plateau_fill_simulations=plateau_budget,
         tasks=tasks,
+        quartile_boundaries=quartile_boundaries,
     )
