@@ -88,3 +88,21 @@ If an individual campaign task fails (e.g. invalid field code or simulation erro
 
 A single malformed field or transient simulation failure must not stall an entire overnight campaign. The failed task's simulation budget is forfeited (not reallocated) to preserve the predetermined multi-armed sampling balance across territories without introducing unbounded retries.
 
+
+## D4 — Platform Outcome 3-State Lifecycle Machine (2026-08-16)
+
+**Status:** accepted (resolves review finding F6).
+
+### What changed
+
+`sync_alpha_platform_outcome` derives `platform_outcome` using a strict 3-state lifecycle:
+1. **`submitted`**: Local operator recorded a submission attempt with `result = "submitted"`. The alpha has been put forward on BRAIN, but platform review has not confirmed approval.
+2. **`accepted`**: Platform review API (`sync_submission_outcomes.py`) confirms platform status is `ACCEPTED`/`APPROVED` or in stage `PROD`/`OS`.
+3. **`rejected`**: Local submission failed or platform review rejected the alpha.
+4. **`pending`**: Unresolved submission attempt recorded.
+
+### Why
+
+Previously, recording a local submission attempt with `result = "submitted"` immediately marked `platform_outcome = "accepted"`. This conflated "put forward by operator" with "accepted and paid by platform", undermining Phase 1's goal of measuring the true empirical acceptance rate.
+
+

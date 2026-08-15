@@ -44,9 +44,9 @@ def test_pending_attempt_and_unresolved_queue(client, db_session):
     assert resolve_res.status_code == 200
     assert resolve_res.json()["result"] == "submitted"
 
-    # Outcome should now be derived as accepted / submitted
+    # Outcome should now be derived as submitted
     alpha_get2 = client.get(f"/api/alphas/{alpha_id}").json()
-    assert alpha_get2["platform_outcome"] == PlatformOutcome.ACCEPTED.value
+    assert alpha_get2["platform_outcome"] == PlatformOutcome.SUBMITTED.value
     assert alpha_get2["status"] == AlphaStatus.SUBMITTED.value
 
     # Unresolved list should now be empty of this attempt

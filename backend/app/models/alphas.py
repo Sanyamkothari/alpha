@@ -240,7 +240,7 @@ def sync_alpha_platform_outcome(db, alpha_id: int) -> str | None:
     outcome_src = None
 
     if any(a.result == SubmissionResult.SUBMITTED.value for a in attempts):
-        outcome = PlatformOutcome.ACCEPTED.value
+        outcome = PlatformOutcome.SUBMITTED.value
         sub_attempt = next(a for a in attempts if a.result == SubmissionResult.SUBMITTED.value)
         outcome_dt = sub_attempt.attempted_at.date() if sub_attempt.attempted_at else None
         outcome_note = sub_attempt.notes
