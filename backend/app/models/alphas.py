@@ -234,27 +234,44 @@ def sync_alpha_platform_outcome(db, alpha_id: int) -> str | None:
         .order_by(SubmissionAttempt.attempted_at.desc())
     ).scalars().all()
 
+    # Check for API sync history (platform verified outcomes)
+    api_history = db.execute(
+        select(AlphaStatusHistory)
+        .where(AlphaStatusHistory.alpha_id == alpha_id, AlphaStatusHistory.note.like("outcome:%(api sync%"))
+        .order_by(AlphaStatusHistory.id.desc())
+    ).scalars().first()
+
     outcome = None
     outcome_dt = None
     outcome_note = None
     outcome_src = None
 
-    if any(a.result == SubmissionResult.SUBMITTED.value for a in attempts):
-        outcome = PlatformOutcome.SUBMITTED.value
-        sub_attempt = next(a for a in attempts if a.result == SubmissionResult.SUBMITTED.value)
-        outcome_dt = sub_attempt.attempted_at.date() if sub_attempt.attempted_at else None
-        outcome_note = sub_attempt.notes
-        outcome_src = OutcomeSource.MANUAL.value
-        if alpha.status != AlphaStatus.SUBMITTED.value:
-            alpha.status = AlphaStatus.SUBMITTED.value
-    elif attempts and all(a.result == SubmissionResult.REJECTED.value for a in attempts):
-        outcome = PlatformOutcome.REJECTED.value
-        latest = attempts[0]
-        outcome_dt = latest.attempted_at.date() if latest.attempted_at else None
-        outcome_note = f"{latest.failed_check or 'REJECTED'}: {latest.check_detail or ''}".strip(": ")
-        outcome_src = OutcomeSource.MANUAL.value
-    elif any(a.result is None for a in attempts):
-        outcome = PlatformOutcome.PENDING.value
+    if api_history:
+        note = api_history.note or ""
+        outcome_part = note.split()[0].replace("outcome:", "")
+        if outcome_part in {e.value for e in PlatformOutcome}:
+            outcome = outcome_part
+            outcome_dt = api_history.created_at.date() if api_history.created_at else None
+            outcome_note = note
+            outcome_src = OutcomeSource.API.value
+
+    if not outcome:
+        if any(a.result == SubmissionResult.SUBMITTED.value for a in attempts):
+            outcome = PlatformOutcome.SUBMITTED.value
+            sub_attempt = next(a for a in attempts if a.result == SubmissionResult.SUBMITTED.value)
+            outcome_dt = sub_attempt.attempted_at.date() if sub_attempt.attempted_at else None
+            outcome_note = sub_attempt.notes
+            outcome_src = OutcomeSource.MANUAL.value
+            if alpha.status != AlphaStatus.SUBMITTED.value:
+                alpha.status = AlphaStatus.SUBMITTED.value
+        elif attempts and all(a.result == SubmissionResult.REJECTED.value for a in attempts):
+            outcome = PlatformOutcome.REJECTED.value
+            latest = attempts[0]
+            outcome_dt = latest.attempted_at.date() if latest.attempted_at else None
+            outcome_note = f"{latest.failed_check or 'REJECTED'}: {latest.check_detail or ''}".strip(": ")
+            outcome_src = OutcomeSource.MANUAL.value
+        elif any(a.result is None for a in attempts):
+            outcome = PlatformOutcome.PENDING.value
 
     alpha.platform_outcome = outcome
     alpha.outcome_date = outcome_dt

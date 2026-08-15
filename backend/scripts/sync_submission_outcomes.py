@@ -18,7 +18,7 @@ import structlog
 from sqlalchemy import select
 
 from app.db import session_scope
-from app.models.alphas import Alpha, AlphaStatusHistory
+from app.models.alphas import Alpha, AlphaStatusHistory, SubmissionAttempt, sync_alpha_platform_outcome
 from app.models.enums import AlphaStatus, OutcomeSource, PlatformOutcome
 from app.models.results import SimulationImport
 from app.services.brain import BrainClient
@@ -65,7 +65,10 @@ def run(dry_run: bool = False) -> dict[str, int]:
     with session_scope() as db:
         submitted = list(
             db.execute(
-                select(Alpha).where(Alpha.status == AlphaStatus.SUBMITTED.value)
+                select(Alpha).where(
+                    (Alpha.status == AlphaStatus.SUBMITTED.value)
+                    | (Alpha.id.in_(select(SubmissionAttempt.alpha_id)))
+                )
             ).scalars().all()
         )
         counts["submitted_found"] = len(submitted)
@@ -91,7 +94,6 @@ def run(dry_run: bool = False) -> dict[str, int]:
                 counts["checked"] += 1
                 status = str(payload.get("status") or "").upper()
                 stage = str(payload.get("stage") or "").upper()
-                date_sub = payload.get("dateSubmitted")
 
                 # Map platform response to PlatformOutcome
                 outcome = None
@@ -104,16 +106,6 @@ def run(dry_run: bool = False) -> dict[str, int]:
 
                 if outcome and outcome != alpha.platform_outcome:
                     if not dry_run:
-                        alpha.platform_outcome = outcome
-                        alpha.outcome_source = OutcomeSource.API.value
-                        if date_sub:
-                            try:
-                                alpha.outcome_date = datetime.fromisoformat(date_sub.replace("Z", "+00:00")).date()
-                            except Exception:
-                                alpha.outcome_date = date.today()
-                        else:
-                            alpha.outcome_date = date.today()
-
                         db.add(
                             AlphaStatusHistory(
                                 alpha_id=alpha.id,
@@ -122,6 +114,7 @@ def run(dry_run: bool = False) -> dict[str, int]:
                                 note=f"outcome:{outcome} (api sync from BRAIN {brain_id})",
                             )
                         )
+                        sync_alpha_platform_outcome(db, alpha.id)
                     counts["updated"] += 1
                     log.info("updated_outcome", alpha_id=alpha.id, brain_id=brain_id, outcome=outcome)
                 else:
