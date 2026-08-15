@@ -24,8 +24,8 @@ from app.models.fields import DataField, Dataset
 from app.models.operators import Operator, OperatorArgument
 
 
-def _op(name: str, category: str, *args: OperatorArgument) -> Operator:
-    op = Operator(name=name, category=category, definition=name, returns="matrix")
+def _op(name: str, category: str, *args: OperatorArgument, returns: str = "matrix") -> Operator:
+    op = Operator(name=name, category=category, definition=name, returns=returns)
     op.arguments = list(args)
     return op
 
@@ -48,6 +48,10 @@ def _window(name: str, position: int) -> OperatorArgument:
 
 def _group(name: str, position: int) -> OperatorArgument:
     return OperatorArgument(name=name, position=position, arg_type="group", required=True)
+
+
+def _bool(name: str, position: int) -> OperatorArgument:
+    return OperatorArgument(name=name, position=position, arg_type="boolean", required=True)
 
 
 @pytest.fixture(scope="session")
@@ -96,6 +100,11 @@ def _seed(test_session_factory: sessionmaker[Session]) -> None:
                 _op("ts_backfill", "time_series", _matrix("x", 0), _window("d", 1)),
                 _op("ts_corr", "time_series", _matrix("x", 0), _matrix("y", 1), _window("d", 2)),
                 _op("divide", "arithmetic", _matrix("x", 0), _matrix("y", 1)),
+                _op("add", "arithmetic", _matrix("x", 0), _matrix("y", 1)),
+                _op("subtract", "arithmetic", _matrix("x", 0), _matrix("y", 1)),
+                _op("multiply", "arithmetic", _matrix("x", 0), _matrix("y", 1)),
+                _op("greater", "logical", _matrix("x", 0), _matrix("y", 1), returns="boolean"),
+                _op("trade_when", "transformational", _bool("trigger", 0), _matrix("alpha", 1), _matrix("exit", 2)),
                 _op("group_neutralize", "group", _matrix("x", 0), _group("group", 1)),
                 # The constructor emits group_<cs_op>; without these the grid's
                 # group axis would silently collapse to ungrouped variants only.
@@ -116,6 +125,9 @@ def _seed(test_session_factory: sessionmaker[Session]) -> None:
                 ),
                 DataField(
                     field_code="volume", dataset_id=ds.id, category="price", field_type="MATRIX"
+                ),
+                DataField(
+                    field_code="vwap", dataset_id=ds.id, category="price", field_type="MATRIX"
                 ),
                 DataField(
                     field_code="sector",

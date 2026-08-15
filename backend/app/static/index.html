@@ -561,6 +561,8 @@ function fullCard(row){
       <div class="metric hero"><div class="k">Plateau</div><div class="v">${fx(row.plateau_ratio)}</div>
         <div class="sub">nb ${fx(row.neighbour_median_sharpe)} · ${row.neighbours_simulated ?? "?"}/${
           row.neighbours_possible ?? "?"} neighbours</div></div>
+      <div class="metric"><div class="k">DSR</div><div class="v">${row.dsr!==null&&row.dsr!==undefined?fx(row.dsr):"—"}</div>
+        <div class="sub">${row.gate_mode||"COLD_START"}</div></div>
       <div class="metric"><div class="k">Fitness</div><div class="v">${fx(row.fitness)}</div></div>
       <div class="metric"><div class="k">Bar</div><div class="v">${fx(row.haircut_bar)}</div>
         <div class="sub">multiple-testing</div></div>
@@ -568,7 +570,9 @@ function fullCard(row){
     <div class="gates">
       <span class="gate ${row.is_plateau?"ok":""}">${row.is_plateau?"✓":"✗"} plateau</span>
       <span class="gate ${row.clears_bar?"ok":""}">${row.clears_bar?"✓":"✗"} BRAIN checks</span>
-      <span class="gate ${row.sharpe>=row.haircut_bar?"ok":""}">${row.sharpe>=row.haircut_bar?"✓":"✗"} above bar</span>
+      <span class="gate ${row.dsr_passed?"ok":""}">${row.dsr_passed?"✓":"✗"} ${row.gate_mode==="DSR"?"DSR ≥ 0.95":"Cold-Start SR ≥ 1.50"}</span>
+      <span class="gate ${row.subperiod_passed!==false?"ok":""}">${row.subperiod_passed!==false?"✓":"✗"} sub-period</span>
+      <span class="gate ${!row.is_correlated?"ok":""}">${!row.is_correlated?"✓":"✗"} corr &lt; 0.55</span>
       <span class="actions">
         <button class="btn" onclick="copyRow()">⧉ copy<kbd>c</kbd></button>
         <button class="btn primary" onclick="mark('submitted')">submitted<kbd>s</kbd></button>

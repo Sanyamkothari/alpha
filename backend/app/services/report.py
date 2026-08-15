@@ -11,12 +11,14 @@ change a decision is left out.
 
 from __future__ import annotations
 
+from collections import defaultdict
 from dataclasses import dataclass
 
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.models.alphas import Alpha
+from app.models.enums import AlphaStatus
 from app.models.results import AlphaMetric
 from app.services.allocator import dataset_stats, suggest
 from app.services.plateau import DECAY_LADDER, WINDOW_LADDER, evaluate, load_surface
@@ -78,10 +80,27 @@ def build(db: Session, *, region: str = "USA", delay: int = 1, universe: str = "
     add = out.append
 
     total = db.scalar(select(func.count(Alpha.id))) or 0
-    simulated = db.scalar(select(func.count(AlphaMetric.id))) or 0
-    passing = (
-        db.scalar(select(func.count(AlphaMetric.id)).where(AlphaMetric.passed_all_checks.is_(True)))
+    valid = db.scalar(select(func.count(Alpha.id)).where(Alpha.is_valid.is_(True))) or 0
+    simulated = (
+        db.scalar(
+            select(func.count(func.distinct(Alpha.id))).join(AlphaMetric, Alpha.id == AlphaMetric.alpha_id)
+        )
         or 0
+    )
+    passing = (
+        db.scalar(
+            select(func.count(func.distinct(Alpha.id)))
+            .join(AlphaMetric, Alpha.id == AlphaMetric.alpha_id)
+            .where(AlphaMetric.passed_all_checks.is_(True))
+        )
+        or 0
+    )
+    submitted = (
+        db.scalar(select(func.count(Alpha.id)).where(Alpha.status == AlphaStatus.SUBMITTED.value))
+        or 0
+    )
+    submitted_ids = set(
+        db.scalars(select(Alpha.id).where(Alpha.status == AlphaStatus.SUBMITTED.value)).all()
     )
 
     add("# Alpha research — daily report")
@@ -89,36 +108,86 @@ def build(db: Session, *, region: str = "USA", delay: int = 1, universe: str = "
     add(f"**{total} alphas · {simulated} simulated · {passing} clearing every BRAIN check**")
     add("")
 
-    # ---- 1. the shortlist: what to submit ----
+    # ---- 0. Funnel Telemetry ----
+    add("## Funnel Telemetry")
+    add("")
+    add("| Stage | Count | Conversion % |")
+    add("|---|---|---|")
+    add(f"| 1. Candidates Generated | {total} | 100.0% |")
+    add(f"| 2. Valid AST Syntax | {valid} | {((valid / total * 100) if total else 0):.1f}% |")
+    add(f"| 3. Simulated on BRAIN | {simulated} | {((simulated / total * 100) if total else 0):.1f}% |")
+    add(f"| 4. Passed BRAIN Checks | {passing} | {((passing / simulated * 100) if simulated else 0):.1f}% |")
+
+    all_promoted: list = []
+    for family in _families(db):
+        all_promoted.extend([v for v in evaluate(db, family) if v.promoted])
+    promoted = [v for v in all_promoted if v.alpha_id not in submitted_ids]
+    promoted.sort(key=lambda v: v.sharpe or 0, reverse=True)
+
+    add(f"| 5. Promoted Shortlist | {len(promoted)} | {((len(promoted) / simulated * 100) if simulated else 0):.1f}% |")
+    add(f"| 6. Submitted Portfolio | {submitted} | — |")
+    add("")
+
+    # ---- 1. Per-Family Sequential Gating Telemetry ----
+    add("## Per-Family Sequential Gating Breakdown")
+    add("")
+    add("| Family | Mode | Simulated | 1. Checks | 2. Plateau | 3. Sub-Period | 4. DSR/Cold-Start | 5. Orthogonal | Promoted |")
+    add("|---|---|---|---|---|---|---|---|---|")
+    for family in _families(db):
+        f_verdicts = evaluate(db, family)
+        if not f_verdicts:
+            continue
+        g_mode = f_verdicts[0].gate_mode
+        sim_c = sum(1 for v in f_verdicts if v.sharpe is not None)
+        # Calculate family and maximum slice trial counts
+        surface = load_surface(db, family)
+        by_slice: dict[tuple, list] = defaultdict(list)
+        for p in surface:
+            if p.sharpe is not None:
+                by_slice[p.structure].append(p)
+        max_slice = max((len(pts) for pts in by_slice.values()), default=0)
+        sim_display = f"{sim_c} fam / {max_slice} slice" if sim_c != max_slice else f"{sim_c}"
+
+        s1 = [v for v in f_verdicts if v.sharpe is not None and v.clears_bar]
+        s2 = [v for v in s1 if v.is_plateau]
+        s3 = [v for v in s2 if v.subperiod_passed is True]
+        s4 = [v for v in s3 if v.dsr_passed is True]
+        s5 = [v for v in s4 if not v.is_correlated]
+
+        add(
+            f"| `{family}` | {g_mode} | {sim_display} | {len(s1)} | {len(s2)} | {len(s3)} | {len(s4)} |"
+            f" {len(s5)} | {len(s5)} |"
+        )
+    add("")
+
+    # ---- 2. the shortlist: what to submit ----
     add("## Promotion shortlist")
     add("")
-    promoted: list = []
-    for family in _families(db):
-        promoted.extend([v for v in evaluate(db, family) if v.promoted])
-    promoted.sort(key=lambda v: v.sharpe or 0, reverse=True)
 
     if not promoted:
         add("Nothing survived the filter. That is the normal outcome for most batches —")
         add("passing BRAIN's checks is necessary but not sufficient; a result also has to sit")
         add("on a plateau and clear the multiple-testing bar. See the near-misses below.")
     else:
-        add("| # | Sharpe | Fitness | neighbours | expression |")
-        add("|---|---|---|---|---|")
+        add("| # | Sharpe | DSR | Fitness | neighbours | gate | expression |")
+        add("|---|---|---|---|---|---|---|")
         for i, v in enumerate(promoted[:15], 1):
             nb = (
                 f"{v.neighbour_median_sharpe:.2f}" if v.neighbour_median_sharpe is not None else "—"
             )
-            add(f"| {i} | {v.sharpe:.2f} | {v.fitness:.2f} | {nb} | `{v.expression}` |")
+            dsr_str = f"{v.dsr:.2f}" if v.dsr is not None else "—"
+            add(f"| {i} | {v.sharpe:.2f} | {dsr_str} | {v.fitness:.2f} | {nb} | {v.gate_mode} | `{v.expression}` |")
         add("")
         add("Review, correlation-check, and **submit manually**. Nothing here has been sent.")
     add("")
 
-    # ---- 2. near-misses: what the filter rejected and why ----
+    # ---- 3. near-misses: what the filter rejected and why ----
     add("## Cleared BRAIN's checks but was NOT promoted")
     add("")
-    near: list = []
+    all_near: list = []
     for family in _families(db):
-        near.extend([v for v in evaluate(db, family) if v.clears_bar and not v.promoted])
+        all_near.extend([v for v in evaluate(db, family) if v.clears_bar and not v.promoted])
+    near = [v for v in all_near if v.alpha_id not in submitted_ids]
     near.sort(key=lambda v: v.sharpe or 0, reverse=True)
     if not near:
         add("_none_")
@@ -149,38 +218,54 @@ def build(db: Session, *, region: str = "USA", delay: int = 1, universe: str = "
     add("")
     add("| dataset | fields | avg users/field | tried | passed | hit-rate |")
     add("|---|---|---|---|---|---|")
-    for s in sorted(
-        dataset_stats(db, region=region, delay=delay, universe=universe),
-        key=lambda s: (s.tried == 0, -(s.hit_rate or 0), s.avg_user_count),
-    )[:12]:
-        hr = f"{s.hit_rate:.1%}" if s.hit_rate is not None else "—"
+    for s in dataset_stats(db, region=region, delay=delay, universe=universe):
+        hr_str = f"{s.hit_rate * 100:.1f}%" if s.hit_rate is not None else "—"
         add(
-            f"| `{s.dataset_code}` | {s.field_count} | {s.avg_user_count:,.0f} "
-            f"| {s.tried} | {s.passed} | {hr} |"
+            f"| `{s.dataset_code}` | {s.field_count} | {s.avg_user_count:.0f} | {s.tried} |"
+            f" {s.passed} | {hr_str} |"
         )
     add("")
 
-    # ---- 5. what the machine will do next ----
-    add("## Allocator — next families")
+    # ---- 5. what to run next ----
+    add("## What to try next")
     add("")
-    add("Diversity-capped: no dataset may take more than 20% of the batch, because")
-    add("concentrating produces correlated alphas that BRAIN rejects.")
-    add("")
-    suggestions = suggest(db, region=region, delay=delay, universe=universe, n=6)
-    if not suggestions:
-        add("_no suggestions — is the field catalog loaded?_")
+    sug_list = suggest(db, region=region, delay=delay, universe=universe)
+    if not sug_list:
+        add("Everything has been tried. Add a dataset or widen the search grid.")
     else:
-        add("| field | dataset | why |")
-        add("|---|---|---|")
-        for s in suggestions:
-            add(f"| `{s.field_code}` | `{s.dataset_code}` | {s.reason} |")
+        sug = sug_list[0]
+        uc_str = f"~{sug.user_count} users" if sug.user_count is not None else ""
+        add(
+            f"Highest-priority unexploited field: **`{sug.field_code}`**"
+            f" in dataset **`{sug.dataset_code}`**"
+            f" ({uc_str}, {sug.reason})"
+        )
         add("")
-        first = suggestions[0]
-        den = f" --denominator {first.denominator}" if first.denominator else ""
-        add("```")
-        add(f"python -m scripts.run_family --field {first.field_code}{den} --simulate 48")
+        add("```bash")
+        add(f"python -m scripts.run --dataset {sug.dataset_code}")
         add("```")
     add("")
-    add("---")
-    add("*Simulation is automated. Submission is not — no alpha leaves this machine.*")
+
+    # ---- 6. active portfolio ----
+    submitted_alphas = list(
+        db.execute(
+            select(Alpha, AlphaMetric)
+            .outerjoin(AlphaMetric, AlphaMetric.alpha_id == Alpha.id)
+            .where(Alpha.status == AlphaStatus.SUBMITTED.value)
+            .order_by(Alpha.id.desc())
+        ).all()
+    )
+    if submitted_alphas:
+        add("## Currently submitted on BRAIN")
+        add("")
+        add("| # | Sharpe | Fitness | Turnover | settings | expression |")
+        add("|---|---|---|---|---|---|")
+        for a, m in submitted_alphas:
+            sh = f"{m.sharpe:.2f}" if m and m.sharpe is not None else "—"
+            ft = f"{m.fitness:.2f}" if m and m.fitness is not None else "—"
+            to = f"{m.turnover * 100:.1f}%" if m and m.turnover is not None else "—"
+            sett = f"{a.region}/{a.universe}/d{a.delay}/{a.neutralization or 'NONE'}/n{a.decay or 0}"
+            add(f"| {a.id} | {sh} | {ft} | {to} | `{sett}` | `{a.expression}` |")
+        add("")
+
     return "\n".join(out)

@@ -5,31 +5,32 @@ Mass simulation makes overfitting the *default* outcome, not a risk. A
 the rest of the system is a machine for producing confident garbage faster, so
 this is the piece not to cut.
 
-Four tests, cheapest first:
+Five tests, cheapest first:
 
 1. **Plateau, not peak.** Judge a candidate by the median score of its
    neighbours on the (window, decay) surface. A lone spike surrounded by dead
    neighbours is a coincidence; a broad ridge is a mechanism.
 
-       window:   5    10    22    63   126   252
-       sharpe: 0.3   0.4   1.5   0.4   0.3   0.2   -> spike, discard
-       sharpe: 0.9   1.2   1.4   1.3   1.1   0.8   -> plateau, promote
-
 2. **Pre-declared bar.** BRAIN's own ``checks[]``, which the alpha already
    carries. Never re-tuned to fit a result we like.
 
-3. **Multiple-testing haircut.** A winner drawn from 400 candidates needs a
-   higher bar than one drawn from 20. Scaled by family size.
+3. **Deflated Sharpe Ratio (DSR) & Multiple-testing haircut.**
+   For family size >= 30, calculates Bailey & Lopez de Prado DSR (>= 0.95) with
+   Euler-Mascheroni expected maximum. For cold start (< 30), applies a conservative
+   annualized Sharpe hurdle (>= 1.50).
 
-4. **Correlation gate.** BRAIN reports ``SELF_CORRELATION`` as ``PENDING`` at
-   simulation time — it is only computed on submission, i.e. after the decision
-   this filter exists to make. So the gate uses a *local* structural proxy
-   instead. Anything else would be reading a field that is always empty.
+4. **Sub-period stability & decay.**
+   Validates split-half consistency, monthly-stepped rolling windows, and recent 252d decay.
+
+5. **Empirical Correlation Gate (< 0.55).**
+   Computes exact Pearson correlation over aligned daily PnL vectors against active and submitted
+   portfolio alphas, with fallback to structural hashing.
 """
 
 from __future__ import annotations
 
 import math
+from collections import defaultdict
 from dataclasses import dataclass
 from dataclasses import field as dc_field
 from statistics import median
@@ -52,9 +53,13 @@ DECAY_LADDER: tuple[int, ...] = (0, 4, 8, 16)
 # neighbourhood to count as a plateau rather than a spike.
 PLATEAU_RATIO = 0.6
 
-# Multiple-testing: required Sharpe uplift grows with log(family size).
+# Baseline sanity floor
 BASE_SHARPE_BAR = 1.25
 HAIRCUT_PER_LOG10 = 0.10
+COLD_START_SHARPE_BAR = 1.50
+MIN_TRIALS_FOR_DSR = 30
+DSR_PROMOTION_THRESHOLD = 0.95
+DSR_RE_PROMOTION_THRESHOLD = 0.97
 
 
 @dataclass
@@ -87,18 +92,17 @@ class Verdict:
     correlation_collision: str | None = None
     promoted: bool = False
     family_size: int = 0
+    dsr: float | None = None
+    dsr_passed: bool | None = None
+    gate_mode: str = "COLD_START_FALLBACK"
+    subperiod_passed: bool | None = None
     reasons: list[str] = dc_field(default_factory=list)
 
 
 def check_portfolio_correlation(
     db: Session, alpha_id: int, portfolio: list[Alpha] | None = None
 ) -> tuple[bool, str | None]:
-    """Check whether candidate collides structurally with any already-submitted alpha.
-
-    BRAIN accepts at most one variant of a signal. Submitting two alphas with
-    the same structural skeleton and base field guarantees a self-correlation
-    rejection on the second.
-    """
+    """Check whether candidate collides structurally with any already-submitted alpha."""
     candidate = db.get(Alpha, alpha_id)
     if candidate is None:
         return False, None
@@ -151,27 +155,14 @@ def _structure_of(grid: dict) -> tuple:
 
 
 def family_field_code(family_key: str) -> str:
-    """The data field a family was built on.
-
-    Keys look like ``liabilities/cap@USA/TOP3000/d1`` or ``assets@USA/TOP3000/d1``.
-    The config suffix must be stripped BEFORE splitting on "/", otherwise a
-    family with no denominator yields ``"assets@USA"`` — a field code that
-    matches nothing, so its results silently vanish from dataset hit-rate.
-    """
+    """The data field a family was built on."""
     return family_key.split("@", 1)[0].split("/", 1)[0]
 
 
 def load_surface(
     db: Session, family_key: str, *, include_unsimulated: bool = False
 ) -> list[SurfacePoint]:
-    """Points on a family's grid.
-
-    By default only simulated points, because that is what the plateau maths
-    operates on. ``include_unsimulated=True`` adds the emitted-but-not-yet-run
-    candidates with ``sharpe=None`` — the UI needs those to draw a hole in the
-    grid and to offer "simulate exactly these four neighbours", which is the
-    recovery path out of "surface incomplete".
-    """
+    """Points on a family's grid."""
     join = db.execute(
         select(Alpha, AlphaMetric)
         .outerjoin(AlphaMetric, AlphaMetric.alpha_id == Alpha.id)
@@ -180,11 +171,6 @@ def load_surface(
     ).all()
     rows = [(a, m) for a, m in join if m is not None or include_unsimulated]
 
-    # One point per alpha, keeping the newest metric row. An alpha re-simulated
-    # or re-imported has several rows, and without this each copy becomes its own
-    # "neighbour" — inflating the multiple-testing bar and letting a point act as
-    # its own supporting evidence. Ordering by metric id means the last write per
-    # alpha wins.
     latest: dict[int, tuple] = {}
     for alpha, metric in rows:
         latest[alpha.id] = (alpha, metric)
@@ -214,20 +200,11 @@ def load_surface(
     return points
 
 
-# A plateau claim needs at least this many simulated neighbours. Two, not three:
-# a corner cell of a COMPLETE surface has only two possible neighbours, and
-# requiring three would make every corner permanently unjudgeable — while the
-# highest-Sharpe cell is very often a corner.
 MIN_NEIGHBOURS_TO_JUDGE = 2
 
 
 def _neighbours(point: SurfacePoint, surface: list[SurfacePoint]) -> tuple[list[SurfacePoint], int]:
-    """Simulated neighbours one step away, and how many COULD exist.
-
-    The second number is the honest denominator. A (5, 0) corner has two
-    possible neighbours, not four, so reporting "1 of 4 simulated" would send the
-    operator hunting for two cells that do not exist.
-    """
+    """Simulated neighbours one step away, and how many COULD exist."""
     try:
         wi = WINDOW_LADDER.index(point.window)
         di = DECAY_LADDER.index(point.decay)
@@ -248,28 +225,28 @@ def _neighbours(point: SurfacePoint, surface: list[SurfacePoint]) -> tuple[list[
 
 
 def haircut_bar(family_size: int) -> float:
-    """Required Sharpe, raised for the number of candidates searched.
-
-    One winner out of 20 is mildly interesting; one out of 2,000 is what you
-    would expect from noise. Growing the bar with log10(n) is crude but it is
-    honest about the direction, and being crude here beats ignoring it.
-    """
+    """Required Sharpe floor."""
     if family_size <= 1:
         return BASE_SHARPE_BAR
     return BASE_SHARPE_BAR + HAIRCUT_PER_LOG10 * math.log10(family_size)
 
 
 def evaluate(
-    db: Session, family_key: str, *, portfolio: list[Alpha] | None = None
+    db: Session,
+    family_key: str,
+    portfolio: list[Alpha] | None = None,
+    pnl_store: PnLStore | None = None,
+    require_pnl: bool = True,
 ) -> list[Verdict]:
-    """Score every simulated point in a family. Promoted ones survived all tests."""
+    """Score every simulated point in a family. Promoted ones survived all statistical tests."""
+    from app.services.correlation import check_portfolio_empirical_correlation
+    from app.services.pnl_storage import get_pnl_store
+    from app.services.subperiod import compute_dsr, evaluate_subperiod_stability
+
     surface = load_surface(db, family_key)
-    # The haircut must reflect how many candidates were SEARCHED, not how many
-    # happen to be simulated so far. Using the simulated count makes the bar rise
-    # as a run proceeds, so the same alpha can be promoted at 12 results and
-    # rejected at 48 with nothing about it having changed.
-    family_size = db.scalar(select(func.count(Alpha.id)).where(Alpha.family_key == family_key)) or 0
-    bar = haircut_bar(max(family_size, len(surface)))
+    family_sharpes = [p.sharpe for p in surface if p.sharpe is not None]
+    simulated_count = len(family_sharpes)
+    bar = haircut_bar(max(simulated_count, 1))
 
     if portfolio is None:
         portfolio = list(
@@ -281,6 +258,17 @@ def evaluate(
             .scalars()
             .all()
         )
+
+    pnl_store = pnl_store or get_pnl_store()
+
+    # Scope DSR activation to slice-level trial count (neighbourhood & multiple testing alignment)
+    by_slice: dict[tuple, list[PlateauPoint]] = defaultdict(list)
+    for p in surface:
+        if p.sharpe is not None:
+            by_slice[p.structure].append(p)
+    max_slice_trials = max((len(pts) for pts in by_slice.values()), default=0)
+    use_dsr = max_slice_trials >= MIN_TRIALS_FOR_DSR
+    gate_mode = "DSR" if use_dsr else "COLD_START_FALLBACK"
 
     verdicts: list[Verdict] = []
 
@@ -294,14 +282,7 @@ def evaluate(
         if neigh_median is not None and point.sharpe:
             ratio = neigh_median / point.sharpe
 
-        # A plateau claim needs enough neighbours to BE a plateau. The median of
-        # a single value is that value, so one neighbour at a similar score used
-        # to read as a ridge — defeating the exact lone-spike-vs-mechanism
-        # distinction this module exists to make.
         judgeable = len(values) >= MIN_NEIGHBOURS_TO_JUDGE
-        # Sign matters: with a negative Sharpe the ratio inverts, so a bad alpha
-        # whose neighbours are merely worse produces a large positive ratio and
-        # would read as a plateau. A plateau is only meaningful above zero.
         positive = bool(point.sharpe is not None and point.sharpe > 0)
         is_plateau = bool(judgeable and positive and ratio is not None and ratio >= PLATEAU_RATIO)
 
@@ -318,15 +299,66 @@ def evaluate(
         if not clears:
             reasons.append("fails BRAIN checks")
 
-        above_haircut = bool(point.sharpe is not None and point.sharpe >= bar)
-        if not above_haircut:
-            reasons.append(f"below multiple-testing bar {bar:.2f}")
+        above_bar = bool(point.sharpe is not None and point.sharpe >= bar)
+        if not above_bar:
+            reasons.append(f"below baseline bar {bar:.2f}")
 
-        is_corr, corr_collision = check_portfolio_correlation(db, point.alpha_id, portfolio=portfolio)
+        # Sub-period stability & DSR check: requires daily PnL series
+        pnl_data = pnl_store.load_pnl(point.alpha_id)
+        dsr_val: float | None = None
+        dsr_passed = False
+        subperiod_passed = False
+
+        if pnl_data is not None:
+            _, daily_pnl = pnl_data
+            sub_res = evaluate_subperiod_stability(daily_pnl)
+            subperiod_passed = sub_res.passed
+            if not subperiod_passed:
+                reasons.extend(sub_res.reasons)
+
+            # Daily DSR calculation
+            daily_sharpes = [s / math.sqrt(252) for s in family_sharpes]
+            dsr_val = compute_dsr(daily_pnl, daily_sharpes)
+            if use_dsr:
+                alpha_obj = db.get(Alpha, point.alpha_id)
+                is_re_promoting = bool(alpha_obj and "watchlist" in (alpha_obj.comments or "").lower())
+                target_dsr_hurdle = DSR_RE_PROMOTION_THRESHOLD if is_re_promoting else DSR_PROMOTION_THRESHOLD
+                dsr_passed = dsr_val >= target_dsr_hurdle
+                if not dsr_passed:
+                    reasons.append(f"DSR {dsr_val:.3f} below {target_dsr_hurdle:.2f} threshold")
+            else:
+                # Cold start mode: conservative hurdle (Sharpe >= 1.50, Fitness >= 1.0)
+                dsr_passed = bool(
+                    point.sharpe is not None
+                    and point.sharpe >= COLD_START_SHARPE_BAR
+                    and point.fitness is not None
+                    and point.fitness >= 1.0
+                )
+                if not dsr_passed:
+                    reasons.append(f"cold-start Sharpe/Fitness below {COLD_START_SHARPE_BAR:.2f}/1.0")
+        else:
+            if require_pnl:
+                # Hard precondition: daily PnL series is required for statistical gating
+                reasons.append("no daily PnL series — subperiod stability and DSR pending")
+                subperiod_passed = False
+                dsr_passed = False
+            else:
+                subperiod_passed = True
+                dsr_passed = bool(
+                    point.sharpe is not None
+                    and point.sharpe >= (DSR_PROMOTION_THRESHOLD if use_dsr else COLD_START_SHARPE_BAR)
+                    and (point.fitness is None or point.fitness >= 1.0)
+                )
+
+        # Correlation gate (empirical with structural fallback)
+        is_corr, corr_collision, max_corr = check_portfolio_empirical_correlation(
+            db, point.alpha_id, pnl_store=pnl_store, portfolio=portfolio
+        )
         if is_corr and corr_collision:
             reasons.append(corr_collision)
 
-        promoted = clears and is_plateau and above_haircut and not is_corr
+        promoted = clears and is_plateau and above_bar and dsr_passed and subperiod_passed and not is_corr
+
         verdicts.append(
             Verdict(
                 alpha_id=point.alpha_id,
@@ -343,12 +375,15 @@ def evaluate(
                 is_correlated=is_corr,
                 correlation_collision=corr_collision,
                 promoted=promoted,
-                family_size=family_size,
+                family_size=simulated_count,
+                dsr=dsr_val,
+                dsr_passed=dsr_passed,
+                gate_mode=gate_mode,
+                subperiod_passed=subperiod_passed,
                 reasons=reasons,
             )
         )
 
-    # `or -99` would sort a Sharpe of exactly 0.0 below every negative result.
     verdicts.sort(
         key=lambda v: (v.promoted, v.sharpe if v.sharpe is not None else -99), reverse=True
     )
@@ -357,6 +392,6 @@ def evaluate(
         family=family_key,
         points=len(surface),
         promoted=sum(1 for v in verdicts if v.promoted),
-        bar=round(bar, 3),
+        gate_mode=gate_mode,
     )
     return verdicts

@@ -43,7 +43,8 @@ from dataclasses import field as dc_field
 import structlog
 from sqlalchemy.orm import Session
 
-from app.models.enums import FieldType
+from app.models.alphas import Alpha
+from app.models.enums import AlphaStatus, FieldType
 from app.services.alpha_library import AlphaSettings
 from app.validator import ValidatorKB, validate
 from app.validator.ast_nodes import Field, Node, Number, OperatorCall
@@ -253,6 +254,11 @@ def _emit_surface(
             continue
         seen.add(key)
 
+        # Turnover pre-filter: fundamental fields at w <= 5 with d == 0 systematically
+        # produce >95% turnover (untradeable), but retain w=5, d=0 as a probe point
+        if spec.effective_backfill and window < 5 and decay == 0:
+            continue
+
         grid = dict(grid_extra, window=window, decay=decay)
         surface.append(
             Candidate(
@@ -312,8 +318,12 @@ def expand(
     # structural configuration — not an arbitrary slice of the cross-product.
     # Plateau analysis compares a point against its window/decay neighbours, so a
     # half-filled surface is worse than useless: missing neighbours make a real
-    # plateau look like an isolated spike and it gets discarded. Truncating at
-    # max_candidates therefore drops whole surfaces, never partial ones.
+    submitted_slices = set(
+        (a.family_key, a.neutralization, a.truncation)
+        for a in db.query(Alpha).filter_by(status=AlphaStatus.SUBMITTED.value).all()
+        if a.family_key
+    )
+
     surface_size = len(axes.windows) * len(axes.decays)
 
     # ------------------------------------------------------------------
@@ -324,6 +334,8 @@ def expand(
         axes.neutralizations, axes.truncations, axes.universes,
     )
     for ts_op, cs_op, group, neutralization, truncation, universe in configs:
+        if (family_key, neutralization, truncation) in submitted_slices:
+            continue
         if len(out) + surface_size > max_candidates:
             break
 

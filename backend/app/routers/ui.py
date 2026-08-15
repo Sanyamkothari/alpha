@@ -58,6 +58,10 @@ def _verdict_row(v: Any, db: Session) -> dict[str, Any]:
         "is_correlated": getattr(v, "is_correlated", False),
         "correlation_collision": getattr(v, "correlation_collision", None),
         "promoted": v.promoted,
+        "dsr": getattr(v, "dsr", None),
+        "dsr_passed": getattr(v, "dsr_passed", None),
+        "gate_mode": getattr(v, "gate_mode", "COLD_START_FALLBACK"),
+        "subperiod_passed": getattr(v, "subperiod_passed", None),
         "reasons": v.reasons,
         "status": alpha.status if alpha else None,
         "settings": (
@@ -495,3 +499,95 @@ def mark_alpha(alpha_id: int, payload: dict = Body(...), db: Session = Depends(g
 
     transition_status(db, alpha, mapping[action], note=payload.get("note") or f"ui:{action}")
     return {"alpha_id": alpha_id, "status": alpha.status}
+
+
+@router.get("/correlation-matrix")
+def correlation_matrix(db: Session = Depends(get_db)) -> dict:
+    """Computes full empirical correlation matrix over submitted and promoted alphas."""
+    from app.services.correlation import compute_correlation_matrix
+    from app.services.pnl_storage import get_pnl_store
+
+    store = get_pnl_store()
+    alphas = list(
+        db.execute(
+            select(Alpha).where(
+                Alpha.status.in_([AlphaStatus.SUBMITTED.value, AlphaStatus.PASSED.value])
+            )
+        )
+        .scalars()
+        .all()
+    )
+    a_ids = [a.id for a in alphas]
+    valid_ids, dates, mat = store.get_aligned_matrix(a_ids, min_overlap=30)
+    if not valid_ids:
+        return {"alpha_ids": [], "matrix": [], "common_days": 0}
+
+    corr = compute_correlation_matrix(mat)
+    return {
+        "alpha_ids": valid_ids,
+        "matrix": corr.tolist(),
+        "common_days": len(dates),
+    }
+
+
+@router.get("/lineage/{alpha_id}")
+def lineage_tree(alpha_id: int, db: Session = Depends(get_db)) -> list[dict]:
+    """Walks the lineage tree for an alpha using recursive CTE."""
+    from sqlalchemy import text
+
+    LINEAGE_CTE = text("""
+        WITH RECURSIVE lineage(id, expression, parent_id, generation, mutation_type, depth) AS (
+            SELECT id, expression, parent_id, generation, mutation_type, 0 FROM alphas WHERE id = :root
+            UNION ALL
+            SELECT a.id, a.expression, a.parent_id, a.generation, a.mutation_type, l.depth + 1
+            FROM alphas a JOIN lineage l ON a.id = l.parent_id
+        )
+        SELECT id, expression, parent_id, generation, mutation_type, depth FROM lineage ORDER BY depth DESC
+    """)
+    rows = db.execute(LINEAGE_CTE, {"root": alpha_id}).mappings().all()
+    return [dict(r) for r in rows]
+
+
+@router.get("/telemetry")
+def funnel_telemetry(db: Session = Depends(get_db)) -> dict:
+    """Telemetry report of funnel drop-offs across statistical gates."""
+    total = db.scalar(select(func.count(Alpha.id))) or 0
+    valid = db.scalar(select(func.count(Alpha.id)).where(Alpha.is_valid.is_(True))) or 0
+    simulated = db.scalar(select(func.count(AlphaMetric.id))) or 0
+    passing_brain = (
+        db.scalar(select(func.count(AlphaMetric.id)).where(AlphaMetric.passed_all_checks.is_(True)))
+        or 0
+    )
+    submitted = (
+        db.scalar(select(func.count(Alpha.id)).where(Alpha.status == AlphaStatus.SUBMITTED.value))
+        or 0
+    )
+
+    promoted_count = 0
+    dsr_gate_count = 0
+    cold_start_count = 0
+
+    for family in _families(db):
+        for v in evaluate(db, family):
+            if v.promoted:
+                promoted_count += 1
+            if v.gate_mode == "DSR":
+                dsr_gate_count += 1
+            else:
+                cold_start_count += 1
+
+    return {
+        "funnel": {
+            "generated": total,
+            "valid_syntax": valid,
+            "simulated": simulated,
+            "passed_brain_checks": passing_brain,
+            "promoted_shortlist": promoted_count,
+            "submitted_portfolio": submitted,
+        },
+        "gates_active": {
+            "dsr_mode_evaluations": dsr_gate_count,
+            "cold_start_evaluations": cold_start_count,
+        },
+    }
+

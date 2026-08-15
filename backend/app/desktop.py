@@ -19,7 +19,7 @@ import uvicorn
 from alembic import command
 from alembic.config import Config
 
-from app.config import IS_FROZEN, USER_DATA_DIR, settings
+from app.config import DATABASE_DIR, IS_FROZEN, USER_DATA_DIR, settings
 from app.main import app
 from app.seeds import seed_all
 
@@ -40,7 +40,7 @@ def get_migrations_dir() -> Path:
 def ensure_user_directories() -> None:
     """Ensure user config and database directories exist."""
     USER_DATA_DIR.mkdir(parents=True, exist_ok=True)
-    settings.DATABASE_DIR.mkdir(parents=True, exist_ok=True)
+    DATABASE_DIR.mkdir(parents=True, exist_ok=True)
     logger.info("User data directory: %s", USER_DATA_DIR)
 
 
