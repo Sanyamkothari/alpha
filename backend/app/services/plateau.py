@@ -45,7 +45,8 @@ from app.models.results import AlphaMetric
 
 log = structlog.get_logger("plateau")
 
-# Neighbour steps along each swept axis. Ordered so "adjacent" means one step.
+# Fallback coordinate ladders used only when surface is empty.
+# In production, _neighbours dynamically derives active ladders from the surface's own points.
 WINDOW_LADDER: tuple[int, ...] = (5, 10, 22, 63, 126, 252)
 DECAY_LADDER: tuple[int, ...] = (0, 4, 8, 16)
 

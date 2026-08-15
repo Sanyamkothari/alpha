@@ -158,3 +158,40 @@ def test_portfolio_correlation_blocks_promotion(db_session) -> None:
     assert not any(v.promoted for v in verdicts), "colliding family alphas must not be promoted"
     assert all(v.is_correlated for v in verdicts)
     assert any("collision with submitted alpha" in r for v in verdicts for r in v.reasons)
+
+
+def test_neighbours_derives_ladders_from_surface_points() -> None:
+    """_neighbours dynamically resolves coordinates from the surface points, not stale constants."""
+    from app.services.plateau import SurfacePoint, _neighbours
+
+    # Constructor standard grid windows and decays (different from fallback WINDOW_LADDER)
+    custom_windows = [5, 10, 20, 40, 60, 120, 250]
+    custom_decays = [0, 1, 2, 4, 6, 8, 16]
+
+    surface = [
+        SurfacePoint(
+            alpha_id=i,
+            expression=f"e_{w}_{d}",
+            window=w,
+            decay=d,
+            sharpe=1.5,
+            fitness=1.0,
+            turnover=0.2,
+            passed_all_checks=True,
+            structure=("ts_zscore", "rank", None, 0.08, "SUBINDUSTRY"),
+        )
+        for i, (w, d) in enumerate(
+            (w, d) for w in custom_windows for d in custom_decays
+        )
+    ]
+
+    # Target point: (window=40, decay=4)
+    target = next(p for p in surface if p.window == 40 and p.decay == 4)
+    neighbours, possible = _neighbours(target, surface)
+
+    assert possible == 4  # 2 window neighbours (20, 60) + 2 decay neighbours (2, 6)
+    assert len(neighbours) == 4
+    neigh_coords = {(n.window, n.decay) for n in neighbours}
+    expected_coords = {(20, 4), (60, 4), (40, 2), (40, 6)}
+    assert neigh_coords == expected_coords
+
