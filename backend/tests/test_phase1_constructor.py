@@ -54,12 +54,12 @@ def test_self_correlation_ground_truth(db_session, tmp_path):
         family_key="close@USA/TOP3000/d1",
     ).alpha
 
-    # With no PnL yet, returns structural proxy or none
+    # With no submitted alphas yet, returns none
     corr, target_id, method = compute_max_self_correlation_with_submitted(
         db_session, cand.id, pnl_store=store
     )
-    assert method in ["none", "structural_proxy"]
-    assert corr is not None
+    assert method == "none"
+    assert corr == 0.0
 
     # 2. Create a submitted alpha
     sub_alpha = create_alpha(
@@ -76,6 +76,13 @@ def test_self_correlation_ground_truth(db_session, tmp_path):
     )
     db_session.add(attempt)
     db_session.commit()
+
+    # With submitted alpha present but no PnL and no structural collision, returns unmeasured
+    corr, target_id, method = compute_max_self_correlation_with_submitted(
+        db_session, cand.id, pnl_store=store
+    )
+    assert method == "unmeasured"
+    assert corr is None
 
     # Save mock PnL for both
     # Make 600 points

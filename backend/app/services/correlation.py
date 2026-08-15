@@ -238,5 +238,6 @@ def compute_max_self_correlation_with_submitted(
         # Near-duplicate / same family structural proxy estimate
         return 0.85, target_id, "structural_proxy"
 
-    # Default proxy baseline for different structure
-    return 0.20, target_id, "structural_proxy"
+    # When no structural collision is detected and PnL is unmeasured, return (None, None, "unmeasured")
+    # Fabricating a synthetic 0.20 would create a false sense of empirical measurement.
+    return None, None, "unmeasured"
