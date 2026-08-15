@@ -53,7 +53,13 @@ Review the morning queue. Check self-correlation badges before copying anything:
 
 ### Friday — 10 minutes
 
-Confirm the nightly campaign is still running and hasn't silently stalled. Check that the calibration arm is still enabled.
+- Confirm the nightly campaign is still running and hasn't silently stalled. Check that the calibration arm is still enabled.
+- **Run offline PnL backfill & submission sync**:
+  ```bash
+  python -m scripts.backfill_pnl
+  python -m scripts.sync_submission_outcomes
+  ```
+  *(Synchronizes daily PnL vectors offline into `database/pnl/` so that candidate self-correlation badges in the review queue are measured without synchronous request-thread network stalls, and updates platform acceptance/rejection outcomes).*
 
 ---
 

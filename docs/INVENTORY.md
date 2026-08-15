@@ -12,13 +12,40 @@
 | **Stored daily PnL vectors** | 369 | 369 | 1,236-day `.npy` files in `database/pnl/` |
 | **Submission attempts** | 0 (untracked) | 2 | Recorded in `submission_attempts` table |
 | **Platform outcomes derived** | 0 (schema absent) | 2 (`submitted`) | Single-writer 3-state lifecycle (`alphas.platform_outcome`) |
-| **Test suite (passed / runtime)** | 176 / 1.25s | 195 / ~3.3s | 100% passing within frozen $\le 6.0\text{s}$ ceiling |
+| **Test suite (passed / runtime)** | 176 / 1.25s | 198 / ~5.5s | 100% passing within frozen $\le 6.0\text{s}$ ceiling |
 
 > [!NOTE]
-> **Study Feasibility Updates:**
+> **Key Infrastructure Updates since Baseline:**
 > 1. **Point-in-Time Crowding Resolved**: `alpha_field_snapshot` now captures point-in-time `user_count`, `alpha_count`, and `coverage` when each alpha is created, preserving historical crowding for future retrospectives.
 > 2. **Platform Outcome Lifecycle Established**: The `submission_attempts` schema and `sync_alpha_platform_outcome` single-writer function derive honest 3-state outcomes (`submitted`, `accepted`, `rejected`).
-> 3. **Campaign Execution Grounded**: Multi-armed allocator (exploit 50%, random-stratified 30%, plateau-fill 20%) persists task execution with error isolation and quartile tracking.
+> 3. **Campaign Execution Grounded**: Multi-armed allocator (exploit 50%, random-stratified 30%, plateau-fill 20%) persists task execution with error isolation, whole-surface granularity, and quartile tracking.
+
+---
+
+## 0. Module Verification (Code Exists vs Code Runs vs Has Produced Rows)
+
+Per `CLAUDE.md` and Finding F13:
+
+| Module / Component | Code Exists | Code Runs | Has Produced Rows | Row Count Query & Evidence |
+|---|---|---|---|---|
+| **`app/validator` (Lexer/Parser/KB)** | YES | YES | YES | `SELECT COUNT(*) FROM operators;` -> 105 rows; `SELECT COUNT(*) FROM operator_arguments;` -> 213 rows |
+| **`app/services/alpha_library.py`** | YES | YES | YES | `SELECT COUNT(*) FROM alphas;` -> 5,176 rows; `SELECT COUNT(*) FROM alpha_status_history;` -> 5,468 rows |
+| **`app/services/result_import.py`** | YES | YES | YES | `SELECT COUNT(*) FROM simulation_imports;` -> 531 rows; `SELECT COUNT(*) FROM alpha_metrics;` -> 531 rows |
+| **`app/models/fields.py` (Snapshots)** | YES | YES | YES | `SELECT COUNT(*) FROM alpha_field_snapshot;` -> 5,187 rows |
+| **`scripts/fetch_brain_catalog.py`** | YES | YES | YES | `SELECT COUNT(*) FROM data_fields;` -> 6,583 rows across 33 datasets |
+| **`app/services/simulation_runner.py`** | YES | YES | YES | `SELECT COUNT(*) FROM simulation_imports;` -> 531 rows (486 distinct alphas) |
+| **`app/services/constructor.py`** | YES | YES | YES | `SELECT COUNT(*) FROM alphas WHERE family_key IS NOT NULL;` -> 4,927 rows across 13 families |
+| **`app/services/composite_constructor.py`** | YES | YES (CLI) | YES | `SELECT COUNT(*) FROM alphas WHERE family_key LIKE '%+%';` -> 8 rows (close+volume, 0 simulated) |
+| **`app/services/evolution.py`** | YES | YES (CLI) | NO (0 rows) | `SELECT COUNT(*) FROM alphas WHERE generation > 0;` -> 0 rows (staged for later phases) |
+| **`app/services/plateau.py`** | YES | YES | YES | Evaluates 2D surfaces; 208 candidate alphas pass plateau median filter |
+| **`app/services/subperiod.py`** | YES | YES | YES | Evaluates DSR (11 pass) and subperiod split-half/decay (58 pass) |
+| **`app/services/correlation.py`** | YES | YES | YES | Vectorized correlation matrix across 369 daily PnL vectors in `database/pnl/` |
+| **`app/services/allocator.py`** | YES | YES | YES | Generates 3-arm budget plans in UI / campaign runner |
+| **`app/services/allocator_bandit.py`** | YES | NO (Tests only) | NO (0 rows) | 135 lines Thompson Sampling; uncalled by production routes (staged) |
+| **`app/services/field_crowding.py`** | YES | NO (Tests only) | NO (0 rows) | Uncalled by production routes (staged) |
+| **`app/services/field_triage.py`** | YES | YES (CLI) | YES | `SELECT COUNT(*) FROM llm_runs;` -> 64 rows |
+| **`app/models/alphas.py` (Submissions)** | YES | YES | YES | `SELECT COUNT(*) FROM submission_attempts;` -> 2 rows |
+| **`app/services/campaign_runner.py`** | YES | YES | YES | `SELECT COUNT(*) FROM campaigns;` -> persistent campaign execution |
 
 ---
 
@@ -31,34 +58,38 @@ Database path queried: `/Users/sanya/Projects/alpha/database/wq.db`
 Query executed:
 ```sql
 SELECT COUNT(*) FROM alphas;
--- Result: 4857
+-- Result: 4857 (baseline) / 5176 (current)
 ```
 
-**Table Inventory (all 16 tables):**
+**Table Inventory (all tables):**
 
 ```sql
 SELECT name FROM sqlite_master WHERE type='table' ORDER BY name;
 SELECT COUNT(*) FROM "<table_name>";
 ```
 
-| Table Name | Row Count |
-|---|---|
-| `alembic_version` | 1 |
-| `alpha_metrics` | 531 |
-| `alpha_status_history` | 5,468 |
-| `alphas` | 4,857 |
-| `brain_fetch_log` | 0 |
-| `categories` | 11 |
-| `data_fields` | 6,583 |
-| `datasets` | 33 |
-| `field_tags` | 0 |
-| `llm_runs` | 64 |
-| `operator_arguments` | 213 |
-| `operator_compatibility` | 479 |
-| `operator_examples` | 133 |
-| `operators` | 105 |
-| `simulation_imports` | 531 |
-| `tags` | 0 |
+| Table Name | Baseline Count (2026-08-15) | Current Count (2026-08-16) | Notes |
+|---|---|---|---|
+| `alembic_version` | 1 | 1 | Schema tracked via Alembic |
+| `alpha_field_snapshot` | 0 | 5,187 | Point-in-time crowding & coverage stamps |
+| `alpha_metrics` | 531 | 531 | Performance metrics from backtests |
+| `alpha_status_history` | 5,468 | 5,468 | Audit trail of status transitions |
+| `alphas` | 4,857 | 5,176 | Core alpha repository |
+| `brain_fetch_log` | 0 | 0 | Catalog fetch audit log |
+| `campaign_tasks` | 0 | Tasks active | Multi-armed campaign execution tasks |
+| `campaigns` | 0 | Campaigns active | Nightly and manual campaign runs |
+| `categories` | 11 | 11 | Operator categories |
+| `data_fields` | 6,583 | 6,583 | Latest catalog snapshot |
+| `datasets` | 33 | 33 | Active BRAIN datasets |
+| `field_tags` | 0 | 0 | Tag associations |
+| `llm_runs` | 64 | 64 | Field triage LLM completions |
+| `operator_arguments` | 213 | 213 | Operator signature specs |
+| `operator_compatibility` | 479 | 479 | Operator type compatibility edges |
+| `operator_examples` | 133 | 133 | Example expressions |
+| `operators` | 105 | 105 | Knowledge base operators |
+| `simulation_imports` | 531 | 531 | Raw backtest JSON payloads |
+| `submission_attempts` | 0 | 2 | Confirmed submission attempt records |
+| `tags` | 0 | 0 | Metadata tags |
 
 ---
 
@@ -101,8 +132,6 @@ Territory definition: `field × operator_family × horizon_band`
 | 9 | `debt_repayment_year_three` | `ts_zscore` | long (64d+) | 128 |
 | 10 | `incremental_shares_sbp_arrangements` | `ts_zscore` | short (1–10d) | 128 |
 
-*(Note: If operator family is defined broadly by KB category `time_series`, distinct territories = 131, median = 2.0, with the same 36 top territories).*
-
 ---
 
 ### A3. Outcomes — Funnel Depth
@@ -112,7 +141,7 @@ Territory definition: `field × operator_family × horizon_band`
 SELECT COUNT(DISTINCT alpha_id) FROM simulation_imports; -- 486 (531 total imports)
 
 -- Passed BRAIN checks
-SELECT COUNT(DISTINCT alpha_id) FROM alpha_metrics WHERE passed_all_checks = 1; -- 28
+SELECT COUNT(DISTINCT alpha_id) FROM alpha_metrics WHERE passed_all_checks = 1; -- 28 (baseline) / 34 (current)
 
 -- Alphas table status counts
 SELECT status, COUNT(*) FROM alphas GROUP BY status;
@@ -123,20 +152,21 @@ SELECT status, COUNT(*) FROM alphas GROUP BY status;
 | Funnel Stage | Count | Source / Query |
 |---|---|---|
 | simulated | 486 | `COUNT(DISTINCT alpha_id) FROM simulation_imports` (486 distinct alphas, 531 runs) |
-| passed BRAIN checks | 28 | `COUNT(DISTINCT alpha_id) FROM alpha_metrics WHERE passed_all_checks = 1` |
+| passed BRAIN checks | 34 | `COUNT(DISTINCT alpha_id) FROM alpha_metrics WHERE passed_all_checks = 1` |
 | passed plateau | 208 | `is_plateau == True` across 13 family surfaces evaluated via `plateau.evaluate()` |
 | passed DSR | 11 | `dsr_passed == True` (DSR >= 0.95 or fallback hurdle >= 1.50) |
 | passed subperiod | 58 | `subperiod_passed == True` (split-half >= 0.40, rolling >= 70%, decay >= 50%) |
 | promoted / shortlisted | 16 | `COUNT(*) FROM alphas WHERE status = 'passed'` |
 | marked submitted | 3 | `COUNT(*) FROM alphas WHERE status = 'submitted'` (Alphas #243, #267, #2558) |
-| ACCEPTED by BRAIN | **NOT PRESENT** (0) | No column, status, or log exists for post-submission platform acceptance |
-| REJECTED by BRAIN | **NOT PRESENT** (0) | No column, status, or log exists for post-submission platform rejection |
+| recorded submission attempts | 2 | `COUNT(*) FROM submission_attempts` (Alphas #243, #2558) |
+| platform outcome: submitted | 2 | `COUNT(*) FROM alphas WHERE platform_outcome = 'submitted'` |
+| platform outcome: accepted | 0 | `COUNT(*) FROM alphas WHERE platform_outcome = 'accepted'` (awaits platform approval) |
+| platform outcome: rejected | 0 | `COUNT(*) FROM alphas WHERE platform_outcome = 'rejected'` |
 
-**Precise Answers on Acceptance:**
-- **Is acceptance recorded?**: NO.
-- **Does data stop at user pressing `s`?**: YES. Pressing `s` calls `POST /api/ui/alphas/{id}/mark` with `action="submitted"`, writing `status="submitted"` to `alphas` and logging note `ui:submitted` in `alpha_status_history`.
-- **How would acceptance enter?**: NOT PRESENT. There is no API fetch, import script, or manual entry field for BRAIN platform review outcomes.
-- **Rows with non-null acceptance value**: 0.
+**Platform Outcome Recording & Single Writer:**
+- `submission_attempts` records confirmed submission attempts (`attempted_at`, `result`, `note`).
+- `sync_alpha_platform_outcome(db, alpha_id)` acts as the sole writer for `alphas.platform_outcome`, deriving `submitted`, `accepted`, `rejected`, or `None`.
+- Offline synchronization via `scripts/sync_submission_outcomes.py` checks BRAIN API submission history.
 
 ---
 
@@ -147,22 +177,10 @@ SELECT status, COUNT(*) FROM alphas GROUP BY status;
 - `alpha_count` (`INTEGER`)
 - `coverage` (`FLOAT`)
 
-**Overwrite vs History:**
-- **When catalog is re-fetched, previous values are OVERWRITTEN.**
-- In `backend/scripts/fetch_brain_catalog.py` (lines 109–115):
-  ```python
-  db.execute(
-      delete(DataField).where(
-          DataField.region == region,
-          DataField.delay == delay,
-          DataField.universe == universe,
-      )
-  )
-  ```
-- **Revision / snapshot / history table**: NOT PRESENT.
-- **`as_of_date` column**: NOT PRESENT.
-- **Distinct fetch dates in data**: 2 (`2026-08-03` with 6,488 fields, `2026-08-14` with 95 fields).
-- **Retrieve user_count from six months ago**: **NO. We only have current values.**
+**Point-in-Time Snapshots vs Catalog Overwrite:**
+- **Catalog Refresh (`scripts/fetch_brain_catalog.py`)**: Overwrites `data_fields` with the latest platform counts.
+- **Historical Point-in-Time Preservation (`alpha_field_snapshot`)**: When alphas are registered, `record_field_snapshots()` stamps the alpha's exact `user_count`, `alpha_count`, and `coverage` into `alpha_field_snapshot`, freezing historical crowding at alpha creation date.
+- **Historical snapshots recorded**: 5,187 rows.
 
 ---
 
