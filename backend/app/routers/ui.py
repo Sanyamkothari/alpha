@@ -356,6 +356,10 @@ def portfolio(db: Session = Depends(get_db)) -> dict:
                 "turnover": metric.turnover if metric else None,
                 "neutralization": alpha.neutralization,
                 "decay": alpha.decay,
+                "platform_outcome": alpha.platform_outcome,
+                "outcome_date": str(alpha.outcome_date) if alpha.outcome_date else None,
+                "outcome_note": alpha.outcome_note,
+                "outcome_source": alpha.outcome_source,
                 "updated_at": str(alpha.updated_at),
             }
         )
@@ -499,6 +503,54 @@ def mark_alpha(alpha_id: int, payload: dict = Body(...), db: Session = Depends(g
 
     transition_status(db, alpha, mapping[action], note=payload.get("note") or f"ui:{action}")
     return {"alpha_id": alpha_id, "status": alpha.status}
+
+
+@router.post("/alphas/{alpha_id}/outcome")
+def set_ui_outcome(alpha_id: int, payload: dict = Body(...), db: Session = Depends(get_db)) -> dict:
+    """Record platform review outcome via UI."""
+    from datetime import date
+    from app.models.alphas import AlphaStatusHistory
+    from app.models.enums import PlatformOutcome
+
+    outcome = payload.get("outcome") or payload.get("platform_outcome")
+    valid_outcomes = {p.value for p in PlatformOutcome}
+    if outcome not in valid_outcomes:
+        raise HTTPException(
+            status_code=422,
+            detail=f"outcome must be one of {sorted(valid_outcomes)}",
+        )
+
+    alpha = db.get(Alpha, alpha_id)
+    if alpha is None:
+        raise HTTPException(status_code=404, detail="no such alpha")
+
+    note = payload.get("note") or payload.get("outcome_note")
+    source = payload.get("source") or payload.get("outcome_source") or "manual"
+    raw_date = payload.get("date") or payload.get("outcome_date")
+    outcome_dt = date.fromisoformat(raw_date) if raw_date else date.today()
+
+    alpha.platform_outcome = outcome
+    alpha.outcome_date = outcome_dt
+    alpha.outcome_note = note
+    alpha.outcome_source = source
+
+    hist_note = f"outcome:{outcome}" + (f": {note}" if note else "")
+    entry = AlphaStatusHistory(
+        alpha_id=alpha.id,
+        from_status=alpha.status,
+        to_status=alpha.status,
+        note=hist_note,
+    )
+    db.add(entry)
+    db.flush()
+
+    return {
+        "alpha_id": alpha.id,
+        "platform_outcome": alpha.platform_outcome,
+        "outcome_date": str(alpha.outcome_date),
+        "outcome_note": alpha.outcome_note,
+        "outcome_source": alpha.outcome_source,
+    }
 
 
 @router.get("/correlation-matrix")

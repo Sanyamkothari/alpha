@@ -28,6 +28,21 @@ class AlphaStatus(StrEnum):
     SUBMITTED = "submitted"
 
 
+class PlatformOutcome(StrEnum):
+    """Post-submission platform outcome from BRAIN review."""
+
+    ACCEPTED = "accepted"
+    REJECTED = "rejected"
+    IN_REVIEW = "in_review"
+
+
+class OutcomeSource(StrEnum):
+    """How the platform outcome was recorded."""
+
+    MANUAL = "manual"
+    API = "api"
+
+
 class FieldCategory(StrEnum):
     PRICE = "price"
     VOLUME = "volume"

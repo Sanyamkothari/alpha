@@ -12,9 +12,9 @@ disappears from autogenerate, and an unmigrated one silently reappears.
 """
 
 from app.models._common import Base
-from app.models.alphas import Alpha, AlphaStatusHistory
+from app.models.alphas import Alpha, AlphaFieldSnapshot, AlphaStatusHistory
 from app.models.brain import BrainFetchLog
-from app.models.fields import Category, DataField, Dataset, FieldTag, Tag
+from app.models.fields import Category, DataField, DataFieldSnapshot, Dataset, FieldTag, Tag
 from app.models.operators import (
     Operator,
     OperatorArgument,
@@ -29,6 +29,7 @@ __all__ = [
     # fields
     "Dataset",
     "DataField",
+    "DataFieldSnapshot",
     "Category",
     "Tag",
     "FieldTag",
@@ -40,6 +41,7 @@ __all__ = [
     # alphas
     "Alpha",
     "AlphaStatusHistory",
+    "AlphaFieldSnapshot",
     # results
     "SimulationImport",
     "AlphaMetric",

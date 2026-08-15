@@ -7,7 +7,9 @@ and the real read-only fetcher (Phase 4) populate the *same* tables.
 
 from __future__ import annotations
 
-from sqlalchemy import Float, ForeignKey, Integer, String, Text, UniqueConstraint
+from datetime import date
+
+from sqlalchemy import Date, Float, ForeignKey, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.models._common import Base, IdMixin, TimestampMixin, enum_check
@@ -62,6 +64,36 @@ class DataField(IdMixin, TimestampMixin, Base):
 
     __table_args__ = (
         UniqueConstraint("field_code", "region", "delay", "universe", name="field_config"),
+        enum_check("category", FieldCategory),
+        enum_check("field_type", FieldType),
+    )
+
+
+class DataFieldSnapshot(IdMixin, TimestampMixin, Base):
+    """Append-only historical snapshot of field catalog crowding."""
+
+    __tablename__ = "data_field_snapshots"
+
+    field_code: Mapped[str] = mapped_column(String(128), nullable=False, index=True)
+    dataset_id: Mapped[int | None] = mapped_column(ForeignKey("datasets.id", ondelete="SET NULL"))
+
+    category: Mapped[str] = mapped_column(String(32), nullable=False, default=FieldCategory.PRICE)
+    field_type: Mapped[str] = mapped_column(String(16), nullable=False, default=FieldType.MATRIX)
+
+    coverage: Mapped[float | None] = mapped_column(Float)
+    user_count: Mapped[int | None] = mapped_column(Integer)
+    alpha_count: Mapped[int | None] = mapped_column(Integer)
+
+    delay: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    region: Mapped[str] = mapped_column(String(16), nullable=False, default="USA")
+    universe: Mapped[str] = mapped_column(String(32), nullable=False, default="TOP3000")
+    instrument_type: Mapped[str] = mapped_column(String(32), nullable=False, default="EQUITY")
+    as_of_date: Mapped[date] = mapped_column(Date, nullable=False, index=True)
+
+    __table_args__ = (
+        UniqueConstraint(
+            "field_code", "region", "delay", "universe", "as_of_date", name="field_snapshot_config_as_of"
+        ),
         enum_check("category", FieldCategory),
         enum_check("field_type", FieldType),
     )

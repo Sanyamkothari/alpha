@@ -33,11 +33,13 @@ def test_all_tables_created(engine) -> None:
     # Asserted exactly, not as a floor: a table reappearing here means a deleted
     # model got re-imported into app.models without a migration.
     assert sorted(names) == [
+        "alpha_field_snapshot",
         "alpha_metrics",
         "alpha_status_history",
         "alphas",
         "brain_fetch_log",
         "categories",
+        "data_field_snapshots",
         "data_fields",
         "datasets",
         "field_tags",

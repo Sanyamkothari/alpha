@@ -12,6 +12,7 @@ from pathlib import Path
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+import os
 import sys
 
 IS_FROZEN: bool = getattr(sys, "frozen", False)
@@ -20,7 +21,11 @@ IS_FROZEN: bool = getattr(sys, "frozen", False)
 if IS_FROZEN:
     BUNDLE_DIR: Path = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parents[1]))
     REPO_ROOT: Path = BUNDLE_DIR
-    USER_DATA_DIR: Path = Path.home() / ".alpha_research"
+    USER_DATA_DIR: Path = (
+        Path(os.environ["ALPHA_DATA_DIR"])
+        if "ALPHA_DATA_DIR" in os.environ
+        else Path.home() / ".alpha_research"
+    )
     DATABASE_DIR: Path = USER_DATA_DIR / "database"
     OPERATORS_DIR: Path = BUNDLE_DIR / "operators" if (BUNDLE_DIR / "operators").exists() else BUNDLE_DIR / "app" / "operators"
     FIELDS_DIR: Path = BUNDLE_DIR / "fields" if (BUNDLE_DIR / "fields").exists() else BUNDLE_DIR / "app" / "fields"
@@ -29,8 +34,12 @@ if IS_FROZEN:
 else:
     BACKEND_DIR: Path = Path(__file__).resolve().parents[1]  # .../alpha/backend
     REPO_ROOT: Path = BACKEND_DIR.parent  # .../alpha
-    USER_DATA_DIR: Path = REPO_ROOT
-    DATABASE_DIR: Path = REPO_ROOT / "database"
+    USER_DATA_DIR: Path = (
+        Path(os.environ["ALPHA_DATA_DIR"])
+        if "ALPHA_DATA_DIR" in os.environ
+        else REPO_ROOT
+    )
+    DATABASE_DIR: Path = USER_DATA_DIR / "database"
     OPERATORS_DIR: Path = REPO_ROOT / "operators"
     FIELDS_DIR: Path = REPO_ROOT / "fields"
     TEMPLATES_DIR: Path = REPO_ROOT / "templates"
@@ -90,16 +99,29 @@ class Settings(BaseSettings):
     brain_poll_seconds: float = 10.0
 
     @property
-    def brain_configured(self) -> bool:
-        return bool(self.brain_email and self.brain_password)
+    def effective_database_dir(self) -> Path:
+        if getattr(sys, "frozen", False):
+            base = (
+                Path(os.environ["ALPHA_DATA_DIR"])
+                if "ALPHA_DATA_DIR" in os.environ
+                else Path.home() / ".alpha_research"
+            )
+        else:
+            base = (
+                Path(os.environ["ALPHA_DATA_DIR"])
+                if "ALPHA_DATA_DIR" in os.environ
+                else Path(__file__).resolve().parents[2]
+            )
+        return base / "database"
 
     @property
     def effective_database_url(self) -> str:
         """Resolve the DB URL, defaulting to an absolute SQLite path."""
         if self.database_url:
             return self.database_url
-        DATABASE_DIR.mkdir(parents=True, exist_ok=True)
-        return f"sqlite:///{(DATABASE_DIR / 'wq.db').as_posix()}"
+        db_dir = self.effective_database_dir
+        db_dir.mkdir(parents=True, exist_ok=True)
+        return f"sqlite:///{(db_dir / 'wq.db').as_posix()}"
 
     @property
     def is_sqlite(self) -> bool:

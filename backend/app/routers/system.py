@@ -24,17 +24,17 @@ STAGES = [
     {"id": "validator", "name": "Expression Validator (compiler)", "stage": 0, "implemented": True},
     {"id": "alpha-library", "name": "Alpha Library", "stage": 0, "implemented": True},
     {"id": "result-import", "name": "Simulation Result Importer", "stage": 0, "implemented": True},
-    {"id": "field-catalog", "name": "Real BRAIN Field Catalog", "stage": 1, "implemented": False},
-    {"id": "sim-runner", "name": "Simulation Runner (batch)", "stage": 2, "implemented": False},
-    {"id": "constructor", "name": "Family Constructor (grid)", "stage": 3, "implemented": False},
-    {"id": "filter", "name": "Plateau + Correlation Filter", "stage": 4, "implemented": False},
+    {"id": "field-catalog", "name": "Real BRAIN Field Catalog", "stage": 1, "implemented": True},
+    {"id": "sim-runner", "name": "Simulation Runner (batch)", "stage": 2, "implemented": True},
+    {"id": "constructor", "name": "Family Constructor (grid)", "stage": 3, "implemented": True},
+    {"id": "filter", "name": "Plateau + Correlation Filter", "stage": 4, "implemented": True},
     {
         "id": "allocator",
         "name": "Allocator (bandit + forced exploration)",
         "stage": 5,
-        "implemented": False,
+        "implemented": True,
     },
-    {"id": "report", "name": "Daily Shortlist Report", "stage": 6, "implemented": False},
+    {"id": "report", "name": "Daily Shortlist Report", "stage": 6, "implemented": True},
 ]
 
 
@@ -49,4 +49,4 @@ def banner() -> dict:
 
 @router.get("/modules")
 def modules() -> dict:
-    return {"modules": STAGES, "current_stage": 1}
+    return {"modules": STAGES, "current_stage": 6}

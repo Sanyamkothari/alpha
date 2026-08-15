@@ -13,20 +13,25 @@ See STRATEGY.md Rule 2 and Rule 5.
 
 from __future__ import annotations
 
+from datetime import date, datetime
+
 from sqlalchemy import (
     Boolean,
+    Date,
+    DateTime,
     Float,
     ForeignKey,
     Integer,
     String,
     Text,
     UniqueConstraint,
+    func,
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.types import JSONType
 from app.models._common import Base, IdMixin, TimestampMixin, enum_check
-from app.models.enums import AlphaStatus, MutationType
+from app.models.enums import AlphaStatus, MutationType, OutcomeSource, PlatformOutcome
 
 
 class Alpha(IdMixin, TimestampMixin, Base):
@@ -73,9 +78,18 @@ class Alpha(IdMixin, TimestampMixin, Base):
 
     comments: Mapped[str | None] = mapped_column(Text)
 
+    # ---- Platform Outcome (post-submission review) ----
+    platform_outcome: Mapped[str | None] = mapped_column(String(16))
+    outcome_date: Mapped[date | None] = mapped_column(Date)
+    outcome_note: Mapped[str | None] = mapped_column(Text)
+    outcome_source: Mapped[str | None] = mapped_column(String(16))
+
     # ---- Relationships ----
     parent: Mapped[Alpha | None] = relationship(remote_side="Alpha.id", backref="children")
     status_history: Mapped[list[AlphaStatusHistory]] = relationship(
+        back_populates="alpha", cascade="all, delete-orphan"
+    )
+    field_snapshots: Mapped[list[AlphaFieldSnapshot]] = relationship(
         back_populates="alpha", cascade="all, delete-orphan"
     )
 
@@ -83,6 +97,8 @@ class Alpha(IdMixin, TimestampMixin, Base):
         UniqueConstraint("expression_hash", name="alpha_expression_hash"),
         enum_check("status", AlphaStatus),
         enum_check("mutation_type", MutationType),
+        enum_check("platform_outcome", PlatformOutcome),
+        enum_check("outcome_source", OutcomeSource),
     )
 
 
@@ -105,4 +121,31 @@ class AlphaStatusHistory(IdMixin, TimestampMixin, Base):
     __table_args__ = (
         enum_check("from_status", AlphaStatus),
         enum_check("to_status", AlphaStatus),
+    )
+
+
+class AlphaFieldSnapshot(IdMixin, TimestampMixin, Base):
+    """Point-in-time snapshot of field crowding when an alpha was registered."""
+
+    __tablename__ = "alpha_field_snapshot"
+
+    alpha_id: Mapped[int] = mapped_column(
+        ForeignKey("alphas.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    field_code: Mapped[str] = mapped_column(String(128), nullable=False, index=True)
+    field_id: Mapped[int | None] = mapped_column(
+        ForeignKey("data_fields.id", ondelete="SET NULL"), nullable=True
+    )
+    user_count: Mapped[int | None] = mapped_column(Integer)
+    alpha_count: Mapped[int | None] = mapped_column(Integer)
+    coverage: Mapped[float | None] = mapped_column(Float)
+    captured_at: Mapped[datetime] = mapped_column(
+        DateTime, server_default=func.now(), nullable=False
+    )
+    is_approximate: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+
+    alpha: Mapped[Alpha] = relationship(back_populates="field_snapshots")
+
+    __table_args__ = (
+        UniqueConstraint("alpha_id", "field_code", name="alpha_field_unique"),
     )

@@ -354,6 +354,38 @@ table.data td.t{font-family:var(--font-ui)}
   </div>
 </div>
 
+<div class="scrim" id="outcomeOverlay">
+  <div class="sheet" style="max-width:480px">
+    <div style="display:flex;align-items:baseline;gap:12px">
+      <h2 id="outcomeTitle">Record Platform Outcome</h2><span class="spacer"></span>
+      <button class="btn" onclick="closeOutcome()">Esc</button>
+    </div>
+    <form id="outcomeForm" onsubmit="submitOutcome(event)" style="margin-top:16px;display:flex;flex-direction:column;gap:12px">
+      <input type="hidden" id="outcomeAlphaId">
+      <div>
+        <label style="display:block;font-size:12px;margin-bottom:4px;font-weight:600">Platform Review Outcome</label>
+        <select id="outcomeSelect" class="btn" style="width:100%;text-align:left;padding:8px" required>
+          <option value="accepted">Accepted</option>
+          <option value="rejected">Rejected</option>
+          <option value="in_review">In Review</option>
+        </select>
+      </div>
+      <div>
+        <label style="display:block;font-size:12px;margin-bottom:4px;font-weight:600">Outcome Date</label>
+        <input type="date" id="outcomeDate" class="btn" style="width:100%;text-align:left;padding:8px" required>
+      </div>
+      <div>
+        <label style="display:block;font-size:12px;margin-bottom:4px;font-weight:600">Note / Reason</label>
+        <textarea id="outcomeNote" style="width:100%;height:80px;background:var(--bg);color:var(--fg);border:1px solid var(--border);border-radius:4px;padding:8px;font-family:inherit;font-size:13px" placeholder="e.g. platform rejection reason, self-correlation, etc."></textarea>
+      </div>
+      <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:8px">
+        <button type="button" class="btn" onclick="closeOutcome()">Cancel</button>
+        <button type="submit" class="btn primary">Save Outcome</button>
+      </div>
+    </form>
+  </div>
+</div>
+
 <div class="scrim" id="helpOverlay">
   <div class="sheet" style="max-width:560px">
     <h2>Keyboard</h2>
@@ -898,19 +930,65 @@ async function showLibrary(){
 }
 async function showPortfolio(){
   const d=await api("/ui/portfolio"); S.portfolio=d.portfolio||[];
-  $("#pfTable").innerHTML=`<tr><th>#</th><th>Status</th><th>Sharpe</th><th>Fitness</th>
-    <th>Turnover</th><th>Settings</th><th>Expression</th></tr>`+
-    (S.portfolio.length?S.portfolio.map(r=>`<tr>
+  $("#pfTable").innerHTML=`<tr><th>#</th><th>Status</th><th>Outcome</th><th>Sharpe</th><th>Fitness</th>
+    <th>Turnover</th><th>Settings</th><th>Expression</th><th>Action</th></tr>`+
+    (S.portfolio.length?S.portfolio.map(r=>{
+      const outcomeBadge = r.platform_outcome === "accepted"
+        ? `<span style="background:var(--ok);color:var(--bg);padding:2px 6px;border-radius:3px;font-weight:700;font-size:11px">accepted</span>`
+        : r.platform_outcome === "rejected"
+        ? `<span style="background:var(--bad,#e53935);color:#fff;padding:2px 6px;border-radius:3px;font-weight:700;font-size:11px" title="${r.outcome_note||''}">rejected</span>`
+        : r.platform_outcome === "in_review"
+        ? `<span style="background:var(--warn,#fb8c00);color:#fff;padding:2px 6px;border-radius:3px;font-weight:700;font-size:11px">in review</span>`
+        : `<span class="faint">—</span>`;
+      return `<tr>
       <td>${r.alpha_id}</td>
       <td class="t">${r.status==="submitted"?"<b>submitted</b>":"cleared, not sent"}</td>
+      <td class="t">${outcomeBadge}</td>
       <td>${r.sharpe===null?"—":r.sharpe.toFixed(2)}</td>
       <td>${r.fitness===null?"—":r.fitness.toFixed(2)}</td>
       <td>${r.turnover===null?"—":r.turnover.toFixed(3)}</td>
       <td>${r.neutralization||"NONE"} · decay ${r.decay??0}</td>
-      <td style="max-width:420px;overflow:hidden;text-overflow:ellipsis">${r.expression}</td>
-      </tr>`).join("")
-      :`<tr><td colspan="7" class="t faint">Nothing submitted yet. Press <b>s</b> on a
+      <td style="max-width:360px;overflow:hidden;text-overflow:ellipsis">${r.expression}</td>
+      <td><button class="btn" style="padding:2px 8px;font-size:11px" onclick="openOutcome(${r.alpha_id}, '${r.platform_outcome||''}', '${r.outcome_date||''}', '${(r.outcome_note||'').replace(/'/g, "\\'")}')">${r.platform_outcome?'edit':'set outcome'}</button></td>
+      </tr>`;
+    }).join("")
+      :`<tr><td colspan="9" class="t faint">Nothing submitted yet. Press <b>s</b> on a
         shortlisted alpha after you paste it into BRAIN.</td></tr>`);
+}
+
+function openOutcome(alphaId, outcome="", dt="", note=""){
+  $("#outcomeAlphaId").value = alphaId;
+  $("#outcomeTitle").textContent = `Alpha #${alphaId} — Platform Review Outcome`;
+  $("#outcomeSelect").value = outcome || "accepted";
+  $("#outcomeDate").value = dt || new Date().toISOString().split("T")[0];
+  $("#outcomeNote").value = note || "";
+  $("#outcomeOverlay").classList.add("on");
+}
+function closeOutcome(){ $("#outcomeOverlay").classList.remove("on"); }
+
+async function submitOutcome(e){
+  e.preventDefault();
+  const id = parseInt($("#outcomeAlphaId").value, 10);
+  const outcome = $("#outcomeSelect").value;
+  const dt = $("#outcomeDate").value;
+  const note = $("#outcomeNote").value;
+  try {
+    await api(`/alphas/${id}/outcome`, {
+      method: "POST",
+      body: JSON.stringify({
+        platform_outcome: outcome,
+        outcome_date: dt || null,
+        outcome_note: note || null,
+        outcome_source: "manual"
+      })
+    });
+    closeOutcome();
+    toast(`#${id} outcome recorded: ${outcome}`);
+    if (S.view === "portfolio") showPortfolio();
+    else if (S.view === "morning") renderQueue();
+  } catch(err) {
+    toast(`Failed to record outcome: ${err.message}`);
+  }
 }
 async function showDatasets(){
   if(!S.datasets.length) S.datasets=(await api("/ui/datasets")).datasets||[];
@@ -950,7 +1028,8 @@ function paintThemeBtn(){
 }
 paintThemeBtn();
 const KEYS=[["j / k","next / previous candidate"],["c","copy expression + settings + caveats"],
-  ["s","record that YOU submitted it"],["x","drop"],["⏎","surface inspector"],
+  ["s","record that YOU submitted it"],["o","record platform outcome (accepted/rejected)"],
+  ["x","drop"],["⏎","surface inspector"],
   ["[ ]","step through the family's surfaces"],["d","residual — own minus neighbour median"],
   ["g","cycle metric: sharpe → fitness → turnover"],["v","toggle neighbourhood dimming"],
   ["y","copy a TSV audit row"],["n","launch the top allocator suggestion"],
@@ -989,8 +1068,12 @@ addEventListener("keydown",e=>{
   // Escape and ? are global; everything else acts on the Morning queue and must
   // not fire while another view is showing — otherwise j/k move an invisible
   // selection and Enter pops an overlay over the wrong page.
-  if(k==="Escape"){closeSurface();closeHelp();disarm();return;}
+  if(k==="Escape"){closeSurface();closeHelp();closeOutcome();disarm();return;}
   if(k==="?"){$("#helpOverlay").classList.add("on");return;}
+  if(k==="o"){
+    if(S.view==="morning"){const r=cur(); if(r) openOutcome(r.alpha_id); return;}
+    if(S.view==="portfolio"&&S.portfolio.length){openOutcome(S.portfolio[0].alpha_id); return;}
+  }
   if(S.view!=="morning") return;
   if(k==="j"){S.i=Math.min(S.i+1,n-1);S.cell=null;S.si=0;renderQueue();}
   else if(k==="k"){S.i=Math.max(S.i-1,0);S.cell=null;S.si=0;renderQueue();}

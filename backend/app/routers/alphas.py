@@ -7,14 +7,16 @@ parses a human-pasted BRAIN block — it never contacts the platform.
 
 from __future__ import annotations
 
+from datetime import date
+
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.db import get_db
-from app.models.alphas import Alpha
-from app.models.enums import ImportSource
+from app.models.alphas import Alpha, AlphaStatusHistory
+from app.models.enums import ImportSource, OutcomeSource, PlatformOutcome
 from app.models.results import AlphaMetric, SimulationImport
 from app.services.alpha_library import (
     AlphaSettings,
@@ -77,6 +79,10 @@ class AlphaOut(BaseModel):
     universe: str
     delay: int
     generation: int
+    platform_outcome: str | None = None
+    outcome_date: date | None = None
+    outcome_note: str | None = None
+    outcome_source: str | None = None
 
     model_config = {"from_attributes": True}
 
@@ -119,6 +125,21 @@ class AlphaDetailOut(AlphaOut):
 class StatusIn(BaseModel):
     to_status: str
     note: str | None = None
+
+
+class OutcomeIn(BaseModel):
+    platform_outcome: PlatformOutcome
+    outcome_date: date | None = None
+    outcome_note: str | None = None
+    outcome_source: OutcomeSource = OutcomeSource.MANUAL
+
+
+class OutcomeOut(BaseModel):
+    alpha_id: int
+    platform_outcome: str
+    outcome_date: date | None
+    outcome_note: str | None
+    outcome_source: str
 
 
 class ResultIn(BaseModel):
@@ -275,6 +296,39 @@ def set_status(alpha_id: int, body: StatusIn, db: Session = Depends(get_db)) -> 
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return AlphaOut.model_validate(alpha)
+
+
+@router.post("/{alpha_id}/outcome", response_model=OutcomeOut)
+def set_outcome(alpha_id: int, body: OutcomeIn, db: Session = Depends(get_db)) -> OutcomeOut:
+    """Record a WorldQuant BRAIN post-submission platform review outcome."""
+    alpha = _get_alpha(db, alpha_id)
+    outcome_val = body.platform_outcome.value
+    source_val = body.outcome_source.value
+    outcome_dt = body.outcome_date or date.today()
+
+    alpha.platform_outcome = outcome_val
+    alpha.outcome_date = outcome_dt
+    alpha.outcome_note = body.outcome_note
+    alpha.outcome_source = source_val
+
+    # Audit trail in alpha_status_history
+    hist_note = f"outcome:{outcome_val}" + (f": {body.outcome_note}" if body.outcome_note else "")
+    entry = AlphaStatusHistory(
+        alpha_id=alpha.id,
+        from_status=alpha.status,
+        to_status=alpha.status,
+        note=hist_note,
+    )
+    db.add(entry)
+    db.flush()
+
+    return OutcomeOut(
+        alpha_id=alpha.id,
+        platform_outcome=outcome_val,
+        outcome_date=outcome_dt,
+        outcome_note=body.outcome_note,
+        outcome_source=source_val,
+    )
 
 
 @router.post("/{alpha_id}/results", response_model=ResultOut, status_code=201)

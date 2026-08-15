@@ -28,7 +28,7 @@ Usage:
     python -m scripts.fetch_brain_catalog --skip-operators
 """
 
-from __future__ import annotations
+from datetime import date
 
 import argparse
 import sys
@@ -38,7 +38,7 @@ from sqlalchemy import delete, select
 
 from app.db import session_scope
 from app.models.enums import FieldCategory, FieldType
-from app.models.fields import DataField, Dataset
+from app.models.fields import DataField, DataFieldSnapshot, Dataset
 from app.services.brain import BrainClient
 
 log = structlog.get_logger("fetch_brain_catalog")
@@ -92,8 +92,10 @@ def fetch(
     delay: int,
     universe: str,
     skip_operators: bool = False,
+    as_of: date | None = None,
 ) -> dict[str, int]:
-    counts = {"datasets": 0, "fields": 0, "operators": 0, "unmapped_categories": 0}
+    counts = {"datasets": 0, "fields": 0, "snapshots": 0, "operators": 0, "unmapped_categories": 0}
+    as_of_date = as_of or date.today()
 
     with BrainClient() as brain:
         datasets = brain.data_sets(region=region, delay=delay, universe=universe)
@@ -105,7 +107,7 @@ def fetch(
         operators = [] if skip_operators else brain.operators()
 
     with session_scope() as db:
-        # Replace only this (region, delay, universe) slice.
+        # Replace current-state data_fields for this (region, delay, universe) slice.
         db.execute(
             delete(DataField).where(
                 DataField.region == region,
@@ -118,6 +120,16 @@ def fetch(
                 Dataset.region == region,
                 Dataset.delay == delay,
                 Dataset.universe == universe,
+            )
+        )
+        # For historical snapshots, replace only today's snapshot for this config if re-run on the same day.
+        # This keeps all prior historical snapshot dates completely intact.
+        db.execute(
+            delete(DataFieldSnapshot).where(
+                DataFieldSnapshot.region == region,
+                DataFieldSnapshot.delay == delay,
+                DataFieldSnapshot.universe == universe,
+                DataFieldSnapshot.as_of_date == as_of_date,
             )
         )
         db.flush()
@@ -151,30 +163,57 @@ def fetch(
             ):
                 counts["unmapped_categories"] += 1
 
+            ds_id = code_to_dataset.get(ds_code).id if ds_code in code_to_dataset else None
+            field_type_val = _field_type_for(payload)
+            coverage_val = payload.get("coverage")
+            user_cnt = payload.get("userCount")
+            alpha_cnt = payload.get("alphaCount")
+            delay_val = payload.get("delay", delay)
+            region_val = payload.get("region", region)
+            universe_val = payload.get("universe", universe)
+
+            # 1. Write current-state table
             db.add(
                 DataField(
                     field_code=code,
                     description=payload.get("description"),
-                    dataset_id=(
-                        code_to_dataset.get(ds_code).id if ds_code in code_to_dataset else None
-                    ),
+                    dataset_id=ds_id,
                     category=category,
-                    field_type=_field_type_for(payload),
-                    coverage=payload.get("coverage"),
-                    user_count=payload.get("userCount"),
-                    alpha_count=payload.get("alphaCount"),
-                    delay=payload.get("delay", delay),
-                    region=payload.get("region", region),
-                    universe=payload.get("universe", universe),
+                    field_type=field_type_val,
+                    coverage=coverage_val,
+                    user_count=user_cnt,
+                    alpha_count=alpha_cnt,
+                    delay=delay_val,
+                    region=region_val,
+                    universe=universe_val,
                     instrument_type="EQUITY",
                 )
             )
             counts["fields"] += 1
 
+            # 2. Append dated historical snapshot
+            db.add(
+                DataFieldSnapshot(
+                    field_code=code,
+                    dataset_id=ds_id,
+                    category=category,
+                    field_type=field_type_val,
+                    coverage=coverage_val,
+                    user_count=user_cnt,
+                    alpha_count=alpha_cnt,
+                    delay=delay_val,
+                    region=region_val,
+                    universe=universe_val,
+                    instrument_type="EQUITY",
+                    as_of_date=as_of_date,
+                )
+            )
+            counts["snapshots"] += 1
+
     if operators:
         counts["operators"] = _refresh_operators(operators)
 
-    log.info("catalog_fetch_complete", region=region, delay=delay, universe=universe, **counts)
+    log.info("catalog_fetch_complete", region=region, delay=delay, universe=universe, as_of_date=str(as_of_date), **counts)
     return counts
 
 

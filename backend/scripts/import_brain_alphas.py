@@ -26,7 +26,7 @@ from sqlalchemy import select
 from app.db import session_scope
 from app.models.alphas import Alpha
 from app.models.enums import ImportSource
-from app.services.alpha_library import AlphaSettings, expression_hash
+from app.services.alpha_library import AlphaSettings, expression_hash, stamp_alpha_field_snapshots
 from app.services.brain import BrainClient
 from app.services.brain.client import normalize_is_block
 from app.services.result_import import import_result
@@ -111,6 +111,8 @@ def run(limit: int | None = None, dry_run: bool = False) -> dict[str, int]:
             )
             db.add(alpha)
             db.flush()
+
+            stamp_alpha_field_snapshots(db, alpha, result.features.get("distinct_fields") if result.features else None)
 
             import_result(
                 db,
