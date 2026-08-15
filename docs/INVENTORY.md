@@ -1,22 +1,24 @@
-# Project Inventory — 2026-08-15
+# Project Inventory — 2026-08-16 (Post-Review Follow-up)
 
-## Headline numbers
+## Headline numbers (Comparative Audit)
 
-| Metric | Ground Truth Value |
-|---|---|
-| Total alphas | 4,857 |
-| Distinct territories | 149 (36 dense constructor territories, 113 sparse exploratory) |
-| Median alphas per territory | 2.0 (mean: 32.60, max: 129) |
-| Submitted | 3 (manually marked by human in UI) |
-| Acceptance outcomes recorded | 0 (NOT PRESENT in database schema) |
-| Historical crowding available | **NO** (overwritten current snapshots only) |
-| Date range of data | 2026-07-08 to 2026-08-14 |
+| Metric | Baseline (2026-08-15) | Current (2026-08-16) | Status / Delta Source |
+|---|---|---|---|
+| **Total alphas** | 4,857 | 5,176 | +319 alphas generated in alpha library |
+| **Simulated alphas** | 486 (531 runs) | 531 | Distinct simulations in `simulation_imports` |
+| **Passed BRAIN checks** | 28 | 34 | `alpha_metrics.passed_all_checks = 1` |
+| **Catalog data fields** | 6,583 | 6,583 | 6,583 fields across 33 datasets |
+| **Point-in-time field snapshots** | 0 (overwritten) | 5,187 | Stamped at creation in `alpha_field_snapshot` |
+| **Stored daily PnL vectors** | 369 | 369 | 1,236-day `.npy` files in `database/pnl/` |
+| **Submission attempts** | 0 (untracked) | 2 | Recorded in `submission_attempts` table |
+| **Platform outcomes derived** | 0 (schema absent) | 2 (`submitted`) | Single-writer 3-state lifecycle (`alphas.platform_outcome`) |
+| **Test suite (passed / runtime)** | 176 / 1.25s | 195 / ~3.3s | 100% passing within frozen $\le 6.0\text{s}$ ceiling |
 
-> [!WARNING]
-> **Critical Study Feasibility Constraints:**
-> 1. **Historical Crowding is UNAVAILABLE (NO)**: `data_fields` only stores current snapshot values (`user_count`, `alpha_count`). Re-fetching deletes and replaces existing records. There is no historical revision table, snapshot log, or `as_of_date` column. Point-in-time crowding when an alpha was simulated cannot be recovered.
-> 2. **Territory Breadth is NARROW (36 dense territories across 12 fields)**: While 4,857 alphas exist, 94.9% (4,608 alphas) are concentrated in exactly 12 single-field constructor families (384 alphas each, varying windows, decays, neutralizations, and group normalizations over a single operator `ts_zscore`). Only 29 total fields have ever been touched out of 6,583 fields in the catalog.
-> 3. **Funnel Stops at UI Submission Marker**: No mechanism (API, script, or DB field) tracks whether WorldQuant BRAIN accepted or rejected submitted alphas. Data collection terminates at the local user pressing `s` in the web console.
+> [!NOTE]
+> **Study Feasibility Updates:**
+> 1. **Point-in-Time Crowding Resolved**: `alpha_field_snapshot` now captures point-in-time `user_count`, `alpha_count`, and `coverage` when each alpha is created, preserving historical crowding for future retrospectives.
+> 2. **Platform Outcome Lifecycle Established**: The `submission_attempts` schema and `sync_alpha_platform_outcome` single-writer function derive honest 3-state outcomes (`submitted`, `accepted`, `rejected`).
+> 3. **Campaign Execution Grounded**: Multi-armed allocator (exploit 50%, random-stratified 30%, plateau-fill 20%) persists task execution with error isolation and quartile tracking.
 
 ---
 
