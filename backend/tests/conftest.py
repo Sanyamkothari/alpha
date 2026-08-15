@@ -135,6 +135,10 @@ def _seed(test_session_factory: sessionmaker[Session]) -> None:
                     region="USA", universe="TOP3000", delay=1, coverage=1.0, user_count=50,
                 ),
                 DataField(
+                    field_code="cap", dataset_id=ds.id, category="fundamentals", field_type="MATRIX",
+                    region="USA", universe="TOP3000", delay=1, coverage=1.0, user_count=50,
+                ),
+                DataField(
                     field_code="sector",
                     dataset_id=ds.id,
                     category="fundamentals",

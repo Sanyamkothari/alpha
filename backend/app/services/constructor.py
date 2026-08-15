@@ -363,7 +363,7 @@ def expand(
     for ts_op, cs_op, group, neutralization, truncation, universe in configs:
         if (family_key, neutralization, truncation) in submitted_slices:
             continue
-        if len(out) + surface_size > max_candidates:
+        if out and len(out) >= max_candidates:
             break
 
         def _depth1_builder(window, _ts=ts_op, _cs=cs_op, _grp=group):
@@ -392,7 +392,7 @@ def expand(
             axes.depth2_pairs, cross_sections, groups,
             axes.neutralizations, axes.truncations,
         ):
-            if len(out) + surface_size > max_candidates:
+            if out and len(out) >= max_candidates:
                 break
 
             def _depth2_builder(
@@ -429,32 +429,37 @@ def expand(
             out.extend(surface)
 
     # ------------------------------------------------------------------
-    # Layer 3: Multi-field (ts_corr) when a secondary field is available
+    # Layer 3: Multi-field signal templates (ts_corr)
     # ------------------------------------------------------------------
-    if spec.secondary_field and kb.field_type(spec.secondary_field) is not None:
+    if spec.secondary_field and not spec.operator_family:
         for cs_op, group, neutralization, truncation in itertools.product(
             cross_sections, groups, axes.neutralizations, axes.truncations,
         ):
-            if len(out) + surface_size > max_candidates:
+            if out and len(out) >= max_candidates:
                 break
 
-            def _corr_builder(window, _cs=cs_op, _grp=group):
-                primary = _base_node(spec)
-                secondary: Node = Field(spec.secondary_field)  # type: ignore[arg-type]
-                corr_node = OperatorCall(
-                    "ts_corr", [primary, secondary, Number(float(window), True)]
+            def _corr_builder(
+                window, _cs=cs_op, _grp=group, _sec=spec.secondary_field,
+            ):
+                node = OperatorCall(
+                    "ts_corr",
+                    [
+                        _base_node(spec),
+                        Field(name=_sec),
+                        Number(float(window), True),
+                    ],
                 )
-                return _wrap_cross_section(corr_node, _cs, _grp)
+                return _wrap_cross_section(node, _cs, _grp)
 
             grid_extra = {
-                "ts": "ts_corr", "secondary": spec.secondary_field,
-                "cs": cs_op, "group": group, "depth": 1,
+                "ts": f"ts_corr({spec.field_code},{spec.secondary_field})",
+                "cs": cs_op, "group": group, "depth": 1, "multi_field": True,
                 "neutralization": neutralization, "truncation": truncation,
             }
             surface, rej = _emit_surface(
                 spec, kb, family_key, base_settings, axes,
                 _corr_builder,
-                ("ts_corr", spec.secondary_field, cs_op, group, neutralization, truncation),
+                ("ts_corr", cs_op, group, neutralization, truncation),
                 seen, grid_extra,
                 arm=arm, campaign_task_id=campaign_task_id,
             )
@@ -464,8 +469,8 @@ def expand(
     log.info(
         "family_expanded",
         family=family_key,
-        emitted=len(out),
+        emitted=min(len(out), max_candidates),
         rejected=rejected,
-        truncated=False,
+        truncated=len(out) > max_candidates,
     )
-    return out
+    return out[:max_candidates]
