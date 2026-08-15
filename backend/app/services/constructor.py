@@ -216,7 +216,6 @@ def _emit_surface(
     base_settings: AlphaSettings,
     axes: GridAxes,
     node_builder,
-    config_key: tuple,
     seen: set[str],
     grid_extra: dict,
     arm: str | None = None,
@@ -246,8 +245,8 @@ def _emit_surface(
             continue
         seen.add(key)
 
-        # Turnover pre-filter: fundamental fields at w <= 5 with d == 0 systematically
-        # produce >95% turnover (untradeable), but retain w=5, d=0 as a probe point
+        # Turnover pre-filter: fundamental fields at w < 5 with d == 0 systematically
+        # produce >95% turnover (untradeable); retain w=5, d=0 as probe point on standard grids.
         if spec.effective_backfill and window < 5 and decay == 0:
             continue
 
@@ -275,6 +274,14 @@ def _emit_surface(
     surface_size = len(axes.windows) * len(axes.decays)
     if len(surface) == surface_size:
         return surface, rejected
+    log.warning(
+        "incomplete_surface_discarded",
+        family=family_key,
+        emitted=len(surface),
+        expected=surface_size,
+        rejected=rejected,
+        grid=grid_extra,
+    )
     return [], rejected
 
 
@@ -363,7 +370,7 @@ def expand(
     for ts_op, cs_op, group, neutralization, truncation, universe in configs:
         if (family_key, neutralization, truncation) in submitted_slices:
             continue
-        if out and len(out) >= max_candidates:
+        if len(out) + surface_size > max_candidates:
             break
 
         def _depth1_builder(window, _ts=ts_op, _cs=cs_op, _grp=group):
@@ -377,7 +384,7 @@ def expand(
         }
         surface, rej = _emit_surface(
             spec, kb, family_key, base_settings, axes,
-            _depth1_builder, (ts_op, cs_op, group, neutralization, truncation, universe),
+            _depth1_builder,
             seen, grid_extra,
             arm=arm, campaign_task_id=campaign_task_id,
         )
@@ -388,11 +395,13 @@ def expand(
     # Layer 2: Depth-2 templates (nested operator pairs)
     # ------------------------------------------------------------------
     if not spec.operator_family:  # Only explore depth-2 if operator family is unconstrained
-        for (outer_op, inner_op), cs_op, group, neutralization, truncation in itertools.product(
+        for (outer_op, inner_op), cs_op, group, neutralization, truncation, universe in itertools.product(
             axes.depth2_pairs, cross_sections, groups,
-            axes.neutralizations, axes.truncations,
+            axes.neutralizations, axes.truncations, axes.universes,
         ):
-            if out and len(out) >= max_candidates:
+            if (family_key, neutralization, truncation) in submitted_slices:
+                continue
+            if len(out) + surface_size > max_candidates:
                 break
 
             def _depth2_builder(
@@ -417,11 +426,11 @@ def expand(
             grid_extra = {
                 "ts": f"{outer_op}({inner_op})", "cs": cs_op, "group": group,
                 "depth": 2, "neutralization": neutralization, "truncation": truncation,
+                "universe": universe,
             }
             surface, rej = _emit_surface(
                 spec, kb, family_key, base_settings, axes,
                 _depth2_builder,
-                (outer_op, inner_op, cs_op, group, neutralization, truncation),
                 seen, grid_extra,
                 arm=arm, campaign_task_id=campaign_task_id,
             )
@@ -432,10 +441,12 @@ def expand(
     # Layer 3: Multi-field signal templates (ts_corr)
     # ------------------------------------------------------------------
     if spec.secondary_field and not spec.operator_family:
-        for cs_op, group, neutralization, truncation in itertools.product(
-            cross_sections, groups, axes.neutralizations, axes.truncations,
+        for cs_op, group, neutralization, truncation, universe in itertools.product(
+            cross_sections, groups, axes.neutralizations, axes.truncations, axes.universes,
         ):
-            if out and len(out) >= max_candidates:
+            if (family_key, neutralization, truncation) in submitted_slices:
+                continue
+            if len(out) + surface_size > max_candidates:
                 break
 
             def _corr_builder(
@@ -460,11 +471,11 @@ def expand(
                 "multi_field": True,
                 "neutralization": neutralization,
                 "truncation": truncation,
+                "universe": universe,
             }
             surface, rej = _emit_surface(
                 spec, kb, family_key, base_settings, axes,
                 _corr_builder,
-                ("ts_corr", cs_op, group, neutralization, truncation),
                 seen, grid_extra,
                 arm=arm, campaign_task_id=campaign_task_id,
             )
@@ -474,8 +485,8 @@ def expand(
     log.info(
         "family_expanded",
         family=family_key,
-        emitted=min(len(out), max_candidates),
+        emitted=len(out),
         rejected=rejected,
-        truncated=len(out) > max_candidates,
+        truncated=False,
     )
-    return out[:max_candidates]
+    return out

@@ -102,16 +102,12 @@ class SimulationSettings:
 
 
 def normalize_is_block(is_block: dict[str, Any]) -> dict[str, Any]:
-    """Convert an ``is`` block into the units the importer expects.
+    """Pass-through copy of raw BRAIN ``is`` simulation metrics payload.
 
-    Only ``margin`` needs touching: BRAIN reports it as a fraction of notional
-    while ``alpha_metrics.margin_bps`` stores basis points. Left unconverted a
-    3.35 bps margin lands in the database as 0.000335 — wrong by 10,000x, and
-    wrong quietly, which is worse.
+    Margin conversion to basis points is unified in ``result_import._margin_to_bps``
+    so that API and CSV/paste import paths apply a single conversion rule without
+    double-scaling.
     """
-    # Margin conversion now lives in result_import._margin_to_bps, so BOTH the
-    # API path and the paste/CSV path apply exactly one rule. Converting here as
-    # well would double it to 100,000,000x.
     return dict(is_block)
 
 
