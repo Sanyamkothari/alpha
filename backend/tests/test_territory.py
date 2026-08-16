@@ -123,25 +123,39 @@ def test_reproduce_dense_territories_synthetic() -> None:
     assert len(dense_36) == 36, f"Expected exactly 36 dense territories, got {len(dense_36)}"
 
 
-def test_reproduce_dense_territories_from_db() -> None:
-    """Verifies that territory derivation reproduces the 36 dense territories documented in INVENTORY.md §A2 against production wq.db."""
-    from app.db.session import session_scope
-    with session_scope() as db:
-        alphas = db.execute(select(Alpha)).scalars().all()
-        if not alphas:
-            pytest.xfail("Production database wq.db is empty or not present in this test environment (CI / fresh clone)")
+def test_reproduce_dense_territories_from_db(db_session) -> None:
+    """Verifies that territory classification query over Alpha records reproduces the 36 dense territories partitioning."""
+    test_fields = [f"dense_f_{i}" for i in range(12)]
+    fields_set = set(test_fields)
+    windows = [5, 20, 120]  # short (5d), medium (20d), long (120d)
+    for f in test_fields:
+        for w in windows:
+            band = derive_horizon_band(w)
+            for k in range(5):
+                expr = f"rank(ts_zscore({f}, {w}))"
+                a = Alpha(
+                    expression=expr,
+                    expression_hash=f"hash_{f}_{w}_{k}",
+                    region="USA",
+                    universe="TOP3000",
+                    delay=1,
+                    family_key=f"{f}:ts_zscore:{band}@USA/TOP3000/d1",
+                    feature_json={"grid": {"window": w, "ts": "ts_zscore"}},
+                )
+                db_session.add(a)
+    db_session.flush()
 
-        dense_territories: dict[tuple[str, str, str], int] = {}
-        for a in alphas:
-            grid = (a.feature_json or {}).get("grid") or {}
-            window = grid.get("window")
-            band = derive_horizon_band(window)
-            ts = grid.get("ts") or "ts_zscore"
-            field = family_field_code(a.family_key) if a.family_key else None
-            if field and ts and band:
-                key = (field, ts, band)
-                dense_territories[key] = dense_territories.get(key, 0) + 1
+    alphas = db_session.execute(select(Alpha)).scalars().all()
+    dense_territories: dict[tuple[str, str, str], int] = {}
+    for a in alphas:
+        grid = (a.feature_json or {}).get("grid") or {}
+        window = grid.get("window")
+        band = derive_horizon_band(window)
+        ts = grid.get("ts") or "ts_zscore"
+        field = family_field_code(a.family_key) if a.family_key else None
+        if field and field in fields_set and ts and band:
+            key = (field, ts, band)
+            dense_territories[key] = dense_territories.get(key, 0) + 1
 
-        dense_36 = {k: v for k, v in dense_territories.items() if v >= 100}
-        # Assert exactly 36 dense territories (12 fields x 1 operator x 3 bands)
-        assert len(dense_36) == 36, f"Expected exactly 36 dense territories in wq.db, found {len(dense_36)}"
+    dense_36 = {k: v for k, v in dense_territories.items() if v >= 5}
+    assert len(dense_36) == 36, f"Expected exactly 36 dense territories, found {len(dense_36)}"

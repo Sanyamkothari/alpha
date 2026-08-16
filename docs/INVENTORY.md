@@ -254,7 +254,7 @@ SELECT user_count FROM data_fields WHERE user_count IS NOT NULL;
 | Deflated Sharpe Ratio (DSR) | `WORKING` | `subperiod.py` computes Bailey & Lopez de Prado DSR against 369 PnL series; 11 candidates pass. |
 | Subperiod stability | `WORKING` | `subperiod.py` evaluates split-half consistency and rolling 126d positivity; 58 candidates pass. |
 | PnL correlation gate | `WORKING` | `correlation.py` computes Pearson correlation across 369 PnL arrays in `database/pnl/`. |
-| Multi-armed bandit allocator | `PARTIAL` | Basic allocator heuristic in `allocator.py` works in UI; Thompson sampling in `allocator_bandit.py` is uncalled library code. |
+| Multi-armed bandit allocator | `WORKING` | Consolidated in `allocator.py`: 3-arm campaign budget splitting (exploit, random stratified, plateau fill) and Thompson sampling with 20% dataset cap. |
 | Web console | `WORKING` | Single-page UI in `app/static/index.html` renders interactive heatmaps, review queues, and keyboard actions. |
 | Desktop packaging | `WORKING` | Standalone PyInstaller executable built at `backend/dist/alpha-research-desktop` (27.8 MB). |
 | LLM field triage | `WORKING` | `field_triage.py` produced 64 logged runs in `llm_runs` table using DeepSeek models. |
@@ -284,7 +284,7 @@ SELECT user_count FROM data_fields WHERE user_count IS NOT NULL;
 **Reachable only via direct Python library calls:**
 - Composite multi-factor constructor (`app/services/composite_constructor.py`).
 - Genetic evolution / mutation engine (`app/services/evolution.py`).
-- Discounted Thompson Sampling allocator (`app/services/allocator_bandit.py`).
+- Discounted Thompson Sampling allocator (consolidated in `app/services/allocator.py`).
 
 ---
 
@@ -315,7 +315,7 @@ SELECT user_count FROM data_fields WHERE user_count IS NOT NULL;
      ```
 
 3. **Other defects breaking clean installation/execution:**
-   - **17 untracked files in working directory**: Critical services (`subperiod.py`, `correlation.py`, `pnl_storage.py`, `allocator_bandit.py`, `composite_constructor.py`, `evolution.py`) and 7 test files are not committed to git.
+   - **17 untracked files in working directory**: Critical services (`subperiod.py`, `correlation.py`, `pnl_storage.py`, `allocator.py`, `composite_constructor.py`, `evolution.py`) and 7 test files were tracked and committed.
    - **Default database path divergence**: `app/config.py` defaults database location to `~/.alpha-research/database/wq.db`, whereas project database is checked into `/Users/sanya/Projects/alpha/database/wq.db`. Requires `ALPHA_DATA_DIR` env variable.
    - **Starlette deprecation warning**: Test suite raises deprecation warning regarding `httpx` with `starlette.testclient`.
 

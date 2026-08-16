@@ -1,121 +1,126 @@
-# Open Architectural Decisions & Design Rationale
+# Open Architectural Decisions: B2, B3, and B4
 
-**Document Context:** Integration Review Follow-Up & Loop Restoration  
-**Date:** 16 August 2026  
-**Status:** Approved & Implemented in Codebase  
+**Document Context:** Phase 1 Design Decisions & Architecture Tradeoffs  
+**Date:** August 2026  
+**Status:** Open for Alignment / Recommendations Specified (No Code Changes in this Document)  
+**Historical Implementation Record:** See [docs/IMPLEMENTATION_RECORD.md](file:///Users/sanya/Projects/alpha/docs/IMPLEMENTATION_RECORD.md) for completed Part A work (B1 scaling, intra-surface deduplication, concurrency locking, Invariant 8 implementation).
 
 ---
 
-## 1. Correlation Architecture & Scaling (Section B1)
+## 1. Decision B2: Neutralization Sweep & Settings Axis Expansion
 
-### 1.1 Scope Reduction: Submitted Portfolio vs Entire Alpha Library
-In earlier designs, candidate alphas were empirically cross-correlated against every alpha that had ever passed a backtest. As simulation runs accumulated, this resulted in an unbounded $O(N^2)$ growth in pairwise correlation checks, degrading evaluation performance to unmanageable levels.
+### 1.1 Context & Problem Statement
+Currently, campaign territories are generated with a single fixed structural configuration:
+- `neutralization = "SUBINDUSTRY"`
+- `group = None` (ungrouped)
+- Single-field depth-1 time-series transformations
 
-Under the corrected architecture (Section A3/A4):
-- **Portfolio Scoping:** Empirical correlation is computed **exclusively** against confirmed submissions (`SubmissionAttempt.result == 'submitted'`) via `submitted_portfolio(db, exclude_alpha_id)`. `Alpha.status` is never queried as a secondary source of truth.
-- **Intra-Family Redundancy:** Sibling alphas generated on the same parameter surface are not treated as portfolio collisions; instead, they are clustered by surface structure and marked with `redundant_with = <representative_id>`.
+However, `STRATEGY.md §10` documents that the settings axis (specifically neutralization: `NONE`, `SECTOR`, `INDUSTRY`, `SUBINDUSTRY`) separates platform pass from fail, representing one of the project's primary empirical insights. Certain economic signals (e.g. fundamental ratios vs price momentum) behave dramatically differently under broad sector vs granular subindustry neutralization.
 
-### 1.2 Side-by-Side Benchmark Curves: Full Family Evaluation (`GET /api/ui/summary`)
-We re-measured the exact benchmark shape specified in the integration review — timing full `evaluate()` runs across $K$ families of 49 alphas (with 1,300-day daily PnL vectors on disk) against a confirmed submitted portfolio ($N_{\text{submitted}} = 10$).
+### 1.2 The Core Conflict: Territory Definition vs Budget Mathematics
+If neutralization is swept across all 4 levels during generation:
+- A $7 \times 7$ grid ($49$ alphas) becomes $7 \times 7 \times 4 = 196$ alphas per territory.
+- At a 200 sims/day budget, monthly coverage drops from **~122 territories/month down to ~30 territories/month** (only 122 territories over the 4-month Phase 1 timeline vs the 490-territory target in `PHASE1.md §2`).
+- Sweeping neutralization inside the exploration grid quadruples the simulation cost spent on unpromising fields.
 
-| $K$ Families | Total Alphas Evaluated | Pre-Fix Time ($O(N^2)$ Library Scope) | Post-Fix Time (Scoped to Submissions) | Speedup Factor |
-| :--- | :--- | :--- | :--- | :--- |
-| **$K = 2$** | **98 alphas** | 5.5 s | **0.250 s** | **22× faster** |
-| **$K = 5$** | **245 alphas** | 30.9 s | **0.622 s** | **50× faster** |
-| **$K = 10$** | **490 alphas** | 121.7 s | **1.255 s** | **97× faster** |
-| **$K = 20$** | **980 alphas** | 489.4 s | **2.536 s** | **193× faster** |
+### 1.3 Options Evaluated
 
-### 1.3 Extrapolation to Production Target (490 Territories / 24,010 Points)
-The target universe in `docs/PHASE1.md §2` specifies 490 candidate territories $\times$ 49 grid cells = 24,010 surface points.
+| Option | Description | Budget Impact | Strategic Coverage |
+| :--- | :--- | :--- | :--- |
+| **Option A: Fixed Baseline (`SUBINDUSTRY`)** | Maintain territory as 49 alphas with fixed `SUBINDUSTRY` neutralization. | Preserves 490 territories / 4-month target (100% budget efficiency). | Fails to discover alphas that only clear hurdles under `SECTOR` or `INDUSTRY`. |
+| **Option B: Full 3D Grid Sweep ($7 \times 7 \times 4 = 196$)** | Sweep lookback $\times$ decay $\times$ neutralization in every campaign task. | $4\times$ simulation cost; cuts territory throughput to 122 territories / 4 months. | Complete settings coverage, but spends $75\%$ of budget varying settings on non-viable signals. |
+| **Option C: Two-Tier Discovery + 4-Point Confirmation Probe (Recommended)** | Keep primary exploration at 49 alphas (`SUBINDUSTRY`). For passing plateau representatives, run an automated 4-point neutralization probe (`NONE`, `SECTOR`, `INDUSTRY`, `SUBINDUSTRY`) during confirmation. | Negligible overhead: 4 extra simulations per passing representative (<0.5% of daily budget). | Captures the settings-axis insight on viable signals without diluting primary exploratory search. |
 
-- **Pre-Fix Extrapolation:** At $O(N^2)$ scaling over all passing alphas, evaluating 24,010 points would require approximately **29,200 seconds (~8.1 hours)** per summary sweep.
-- **Post-Fix Extrapolation:** With correlation checks scoped to confirmed submissions, evaluation scales **strictly linearly** in the number of evaluated territories:
-  $$\text{Time} = 490 \times \approx 0.125\text{ s/territory} \approx \mathbf{61.3\text{ seconds}}$$
-  A full-universe scan of all 490 territories completes in approximately **1 minute** for a 10-alpha submitted portfolio (or ~3.5 minutes for a 50-alpha portfolio).
+### 1.4 Recommendation: Option C (Two-Tier Discovery + Confirmation Probe)
+1. Maintain the canonical 49-alpha territory definition (`field_code`, `operator_family`, `horizon_band`) at `SUBINDUSTRY` neutralization for all primary campaign arms (`exploit`, `random_stratified`, `plateau_fill`).
+2. Add a lightweight post-pass confirmation step: when an alpha satisfies Invariant 8 and clears the DSR/subperiod hurdles, simulate the 3 remaining neutralization variants (`NONE`, `SECTOR`, `INDUSTRY`).
+3. If an alternate neutralization variant achieves superior Sharpe and lower turnover, update the promoted representative before submission.
 
-### 1.4 Supporting Benchmark: Per-Candidate Correlation Overhead vs Portfolio Size
-For a single candidate alpha evaluated against varying sizes of the confirmed submitted portfolio:
+---
 
-| Confirmed Submissions ($N_{\text{sub}}$) | Mean Check Time per Candidate | Throughput |
+## 2. Decision B3: Plateau Ratio & Ladder Geometry Calibration
+
+### 2.1 Context & Problem Statement
+In `app/services/plateau.py:50-51`, the ladder constants remain configured for the pre-Phase-1 wide grid:
+```python
+WINDOW_LADDER = (1, 2, 3, 5, 10, 20, 22, 40, 60, 63, 120, 126, 250, 252)
+DECAY_LADDER = (0, 4, 8, 16)
+PLATEAU_RATIO = 0.60
+```
+
+Under Phase 1's standard $7 \times 7$ grid, the parameter points are:
+- Windows: $(5, 10, 20, 40, 60, 120, 250)$
+- Decays: $(0, 1, 2, 4, 6, 8, 16)$
+
+### 2.2 The Geometric Artifact
+Under the $7 \times 7$ grid:
+1. A 1-step decay neighbour on the ladder differs by only 1 (e.g. decay 1 vs decay 2).
+2. Backtests with decay 1 and decay 2 share over $98\%$ PnL correlation; their Sharpe ratios almost always agree.
+3. Consequently, `PLATEAU_RATIO = 0.60` is substantially easier to pass on the $7 \times 7$ grid than when the threshold was originally calibrated on the wide $(0, 4, 8, 16)$ grid.
+4. Because **Invariant 8** selects representatives by `neighbour_median_sharpe`, this geometric artifact inflates neighbourhood scores and distorts representative selection.
+
+### 2.3 Options Evaluated
+
+| Option | Description | Tradeoffs |
 | :--- | :--- | :--- |
-| **10 alphas** | **2.76 ms** | ~362 checks/sec |
-| **50 alphas** | **10.25 ms** | ~98 checks/sec |
-| **100 alphas** | **20.21 ms** | ~49 checks/sec |
-| **200 alphas** | **38.73 ms** | ~26 checks/sec |
-| **500 alphas** | **95.92 ms** | ~10 checks/sec |
-| **1,000 alphas** | **190.28 ms** | ~5.2 checks/sec |
+| **Option A: Heuristic Threshold Adjustment** | Guess new constants (e.g. raise `PLATEAU_RATIO` to 0.80) without empirical measurement. | Fast, but risks either choking off viable discoveries or preserving subtle distortion. |
+| **Option B: Empirical Grid Synchronization & Surface Calibration (Recommended)** | 1. Synchronize `WINDOW_LADDER` and `DECAY_LADDER` to match the exact 7×7 grid coordinates.<br>2. Run empirical calibration against real surfaces in `database/wq.db` to measure true neighbour decay distributions. | Grounded in empirical data; ensures Invariant 8 representative rankings reflect genuine economic stability. |
 
-### 1.5 Future Institutional Scaling ($N_{\text{sub}} > 5,000$)
-If a fund or researcher accumulates thousands of confirmed submissions:
-- Pre-computing a normalized daily return matrix $\mathbf{Z} \in \mathbb{R}^{T \times N}$ will allow candidate correlation checks $\mathbf{r} = \frac{1}{T-1}\mathbf{z}_{\text{cand}}^T\mathbf{Z}$ to execute as a single vectorized matrix-vector multiplication in under 5 ms via BLAS/LAPACK.
-- For current operational targets (10–100 submitted alphas), pairwise evaluation across binary PnL vectors on disk completes in well under 100 ms per territory.
+### 2.4 Recommendation: Option B (Empirical Calibration Protocol)
+1. **Synchronize Ladder Coordinates:** Update `WINDOW_LADDER` and `DECAY_LADDER` in `plateau.py` to match the active 7×7 grid: $(5, 10, 20, 40, 60, 120, 250)$ and $(0, 1, 2, 4, 6, 8, 16)$.
+2. **Empirical Measurement on Real Surfaces:** Execute a calibration script across the 36 dense territories (4,608 alphas in `database/wq.db`) and recent campaign results to compute the distribution of $\frac{\text{neighbour\_median\_sharpe}}{\text{self\_sharpe}}$.
+3. **Calibrate `PLATEAU_RATIO`:** Set the threshold at the 75th percentile of the empirical noise distribution, separating broad ridges from noisy points without guessing constants.
 
 ---
 
-## 2. Correlation Gate Calibration & Strategy Selection (Section B2)
+## 3. Decision B4: Architecture for the 5 Uncalled Modules & Allocation Roles
 
-### 2.1 The Plateau-Ridge Paradox & Resolution
-The automated discovery pipeline relies on parameter plateaus: an alpha is robust if slight parameter perturbations (e.g., window 20 vs 22, decay 4 vs 5) produce similarly strong returns. 
+### 3.1 Explanation of `evolution_slots` in `allocator.py`
+In `backend/app/services/allocator.py`, the dataclass `BudgetAllocation` contains an `evolution_slots` field, and `SimulationBudgetOrchestrator` contains logic allocating `evolution_slots = 1` in `"mature"` mode.
 
-When correlation checks were performed unconditionally across all passing alphas, every point on a viable ridge was flagged as correlated with its adjacent neighbours ($r > 0.85$), causing the correlation gate to veto the exact robust plateau it discovered.
+**What it does:**
+- `SimulationBudgetOrchestrator` is a legacy 3-slot allocator (originally in `allocator_bandit.py`) preserved under the backward-compatibility section of `allocator.py`.
+- It allocates daily simulation capacity in a 3-slot model: in bootstrap mode (`passed_alphas < 5`), it assigns `explore_slots=2, confirm_slots=1, evolution_slots=0`; in mature mode, it assigns `explore_slots=1, confirm_slots=1, evolution_slots=1`.
+- **Current Operational Status:** It is **not** called by the Phase 1 overnight campaign runner (`plan_budget_allocation`), which operates strictly on the 3-arm split (`exploit` 50%, `random_stratified` 30%, `plateau_fill` 20%).
 
-### 2.2 Dual-Layer Deduplication Strategy
-1. **Intra-Surface Deduplication (Structure Slices):**
-   - Candidates sharing the same structural tuple `(ts, cs, group, neutralization, truncation)` are grouped together.
-   - Exactly one representative is selected per surface slice according to **Invariant 8**.
-   - Non-representative points are marked `promoted = False` and assigned `redundant_with = <rep_id>`. They are **not** marked `is_correlated = True` or failed.
-2. **Inter-Family Portfolio Gate:**
-   - Candidate representatives are evaluated against `submitted_portfolio(db)`.
-   - `INTERNAL_CORRELATION_THRESHOLD` remains **`0.55`** (`correlation.py:23`).
-   - If empirical PnL is unavailable, a deterministic structural proxy check inspects field and operator collisions as a fallback.
+### 3.2 Evaluation and Recommendation for the 5 Uncalled Modules
 
----
+```
+┌────────────────────────────────────────────────────────────────────────┐
+│                      UNRESOLVED MODULE DISPOSITION                     │
+├──────────────────────────────┬───────────────────┬─────────────────────┤
+│ Module                       │ Current State     │ Recommendation      │
+├──────────────────────────────┼───────────────────┼─────────────────────┤
+│ 1. field_crowding.py         │ Uncalled          │ Retain for Reports  │
+│ 2. compute_effective_trials  │ Never passed to   │ Wire into DSR when  │
+│    (subperiod.py)            │ compute_dsr       │ PnL is available    │
+│ 3. constructor.py (Layer 3)  │ Unreachable       │ Deprecate Layer 3   │
+│ 4. evolution.py              │ Uncalled in prod  │ Keep Offline Tool   │
+│ 5. composite_constructor.py  │ Uncalled in camp. │ Keep Offline CLI    │
+└──────────────────────────────┴───────────────────┴─────────────────────┘
+```
 
-## 3. Execution Models, Concurrency & Budget Control (Section B3)
+#### 1. `field_crowding.py` (Historical Crowding Velocity)
+- **Current State:** Phase 0 built and backfilled crowding history in SQLite (`field_snapshots`). The allocator currently scores crowding based on the latest snapshot (`DataField.user_count`).
+- **Tradeoff:** Computing velocity across time-series snapshots adds database join overhead without changing field ranking materially over daily intervals.
+- **Recommendation:** Retain allocator snapshot scoring (`CROWDED_USER_COUNT = 2000`) for the real-time allocation loop. Use `field_crowding.py` as an offline batch reporting script for monthly catalog refresh audits. Do not wire into nightly campaign allocation.
 
-### 3.1 Account-Wide Concurrency Lock (`MAX_CONCURRENT_SIMULATIONS = 3`)
-WorldQuant BRAIN enforces strict per-account concurrency limits. Attempting more than 3 simultaneous simulations across multiple processes or background workers triggers HTTP 429 / authentication lockouts.
+#### 2. `compute_effective_trials` (`subperiod.py` / `plateau.py`)
+- **Current State:** `compute_effective_trials` implements the Bailey & Lopez de Prado eigenvalue-based $N_{\text{eff}}$ calculation from a correlation matrix. However, `plateau.py:326` calls `compute_dsr(sharpe, n_trials=...)` without passing `n_eff`, defaulting to nominal trial count.
+- **Tradeoff:** Passing nominal $N$ over-penalizes correlated grid cells ($N=49$ instead of $N_{\text{eff}} \approx 5\text{--}10$), whereas computing $N_{\text{eff}}$ requires PnL vectors for all surface points.
+- **Recommendation:** Wire `n_eff` into `plateau.py::evaluate()` when the empirical PnL correlation matrix of the territory is available on disk; when PnL data is absent, fall back gracefully to nominal trial count $N$.
 
-- **Module-Level Semaphore:** Implemented via `_ACCOUNT_SLOTS = threading.BoundedSemaphore(MAX_CONCURRENT_SIMULATIONS)` in `app/services/brain/client.py`.
-- **Comprehensive Protection:** Both `simulate()` and `config_available()` acquire `_ACCOUNT_SLOTS` before sending `POST /simulations` requests.
-- **Worker Queuing:** In `app/services/jobs.py`, simulation-bearing jobs (`run_family`, `fill`) are routed through a dedicated single-worker queue `_sim_queue` while compute-only jobs (evaluation, stats) run concurrently in a thread pool.
+#### 3. `constructor.py` Layer 3 (`ts_corr` / `secondary_field`)
+- **Current State:** Layer 3 in `constructor.py` generates expressions for two-field operators like `ts_corr(f1, f2, window)`. However, `FamilySpec` has no `secondary_field` attribute, and campaign tasks only specify a single `field_code`. Multi-field interaction logic is implemented separately in `composite_constructor.py`.
+- **Tradeoff:** Keeping unreachable Layer 3 branches in `constructor.py` creates confusion about which module owns multi-field generation.
+- **Recommendation:** Deprecate Layer 3 in `constructor.py` and designate `composite_constructor.py` as the single source of truth for cross-field interactions.
 
-### 3.2 Exact Arithmetic Budget Closure & Resume Accounting
-- **Whole-Surface Planning:** Campaigns allocate budget in whole-surface units (multiples of 49) across the three arms: `exploit` (50%), `random_stratified` (30%), and `plateau_fill` (20%).
-- **Minimum Budget Guard:** Budgets below 30 simulations are rejected (`MIN_VIABLE_TERRITORY_SIMS = 30`), ensuring partial or single-cell fragments are never emitted.
-- **Resumption Accounting:** `Campaign.budget_completed` strictly records the SQL aggregate `SUM(alphas_simulated)` from child tasks. If a task fails or is interrupted midway, resuming the campaign preserves completed simulations and prevents budget overshoots.
-- **Zero-Work Task Classification:**
-  - Expected completion (surface already fully simulated): Task marked `status = "skipped"`, error `"surface already complete"`.
-  - Unexpected generator failure: Task marked `status = "failed"`, error `"expansion produced no candidates"`.
+#### 4. `evolution.py` (Genetic Search Engine)
+- **Current State:** Implements AST crossover, point mutation, and seed diversity gating (`check_seed_diversity`). Unit tests pass, but 0 evolved alphas exist in production DB.
+- **Tradeoff:** Wiring evolution into automated nightly campaigns introduces stochastic, un-gridded expressions that violate the complete surface invariant (Invariant 2) before the baseline 3-arm campaign has validated standard pass rates.
+- **Recommendation:** Keep `evolution.py` as an offline research CLI (`scripts/run_evolution.py`). Do **not** wire `evolution.py` into the production campaign allocator until Phase 1 reaches its 40-submission milestone and measures baseline empirical pass rates.
 
----
-
-## 4. Representative Selection & Invariant 8 (Section B4)
-
-### 4.1 Invariant 8 — Plateau Neighbourhood Over Peak
-When choosing which alpha to promote from a robust surface, raw Sharpe ratio is easily polluted by sample noise or overfitted parameter spikes. Invariant 8 mandates that representative selection is governed by **neighbourhood strength**:
-
-$$\text{Score} = \text{median}\left( \{\text{Sharpe}(p') : p' \in \text{Neighbours}(p)\} \right)$$
-
-### 4.2 Deterministic Ranking Hierarchy
-When multiple candidate points on a surface pass all statistical and hurdle gates, the representative is selected using the following strict tiebreaking hierarchy:
-
-1. **`neighbour_median_sharpe` (Highest):** Prioritizes broad ridges surrounded by consistently profitable configurations.
-2. **`plateau_ratio` (Highest):** Ratio of neighbour median Sharpe to self Sharpe (must satisfy $\ge 0.80$).
-3. **`decay` (Lowest):** Lower decay parameter ensures faster reaction time and reduced execution turnover.
-4. **`sharpe` (Highest):** Raw point performance used only as a final tiebreaker among structurally equivalent neighbours.
-
----
-
-## 5. Evolution Engine & Production Integration (Section B5)
-
-### 5.1 Architecture of `evolution.py`
-The evolution engine implements genetic recombination of high-performing alpha expressions:
-- **Parent Selection:** Sampled from top-performing alphas across distinct feature families.
-- **AST Crossover & Mutation:** Safe AST manipulation substituting operators, windows, and cross-sectional normalizers while respecting grammatical constraints.
-- **Diversity Gating:** Enforces non-monolithic seed pools (`check_seed_diversity`), ensuring expressions represent distinct semantic mechanisms.
-
-### 5.2 Production Deployment Plan
-1. **Scheduled Evolutionary Arm:** Add an optional 4th allocation arm (`arm="evolution"`, 10–20% budget share) in `allocator.py` that ingests top-quartile alphas from the preceding 7 days of campaign runs.
-2. **Surface Grid Generation:** Every child expression generated by evolution forms the base template for a 7x7 parameter exploration grid, preserving the **Complete Surface Invariant** (Invariant 2).
-3. **Automated Submission Pipeline:** Evolved alphas follow the standard evaluation pipeline (`plateau.evaluate` $\rightarrow$ `correlation.check_portfolio_empirical_correlation` $\rightarrow$ promotion), ensuring that genetic exploration never bypasses production risk controls.
+#### 5. `composite_constructor.py` (Multi-Factor Combinations)
+- **Current State:** Generates multi-factor blends, spreads, residuals, and conditional triggers. Tested in unit tests, but not scheduled by the campaign runner.
+- **Tradeoff:** Multi-factor grids have exponential parameter spaces ($49 \times 49 = 2,401$ combinations), which would exhaust nightly simulation budgets on a single interaction.
+- **Recommendation:** Retain `composite_constructor.py` as a targeted CLI tool (`scripts/run_composite.py`) for hypothesis-driven research. Keep automated nightly campaigns strictly focused on single-field 7×7 grids for statistical rigor.

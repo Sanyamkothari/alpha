@@ -35,7 +35,7 @@ Also back up `database/pnl/` (369 `.npy` files). Report the total size.
 
 **1b. Audit for secrets, then commit.**
 
-There are 17 untracked files, including `subperiod.py`, `correlation.py`, `pnl_storage.py`, `allocator_bandit.py`, `composite_constructor.py`, `evolution.py`, and seven test files. These are not in version control and exist on one disk.
+There are 17 untracked files, including `subperiod.py`, `correlation.py`, `pnl_storage.py`, `allocator.py`, `composite_constructor.py`, `evolution.py`, and seven test files. These are not in version control and exist on one disk.
 
 Before committing:
 

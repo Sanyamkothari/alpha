@@ -42,3 +42,9 @@ dist/
 build/
 backend/dist/
 backend/build/
+
+# Archives & Binaries
+*.zip
+*.tar.gz
+*.tgz
+

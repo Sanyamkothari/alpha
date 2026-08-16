@@ -87,7 +87,8 @@ backend/
 │   │   ├── plateau.py               2D surface plateau filter & DSR multiple testing
 │   │   ├── subperiod.py             In-sample / out-of-sample stability validation
 │   │   ├── correlation.py           Empirical PnL Pearson correlation & proxy fallback
-│   │   ├── allocator_bandit.py      Multi-armed bandit dataset allocation (20% cap)
+│   │   ├── allocator.py             Multi-armed bandit allocation, 3-arm campaigns & diversity caps
+│   │   ├── campaign_runner.py       Resumable DB-checkpointed overnight campaign executor
 │   │   ├── field_triage.py          LLM semantic dataset triage & slot filling
 │   │   └── simulation_runner.py     Async batch runner with concurrency caps
 │   ├── models/           SQLAlchemy ORM (16 tables: alphas, metrics, fields, pnl, logs)
@@ -97,7 +98,7 @@ backend/
 │   └── seeds/            Operator knowledge base seeds (102 operators + signatures)
 ├── scripts/              CLI workflows (run_family, report, fetch_catalog, build_desktop)
 ├── migrations/           Alembic database migrations
-└── tests/                190+ unit and integration tests (fast, isolated SQLite)
+└── tests/                220+ unit and integration tests (fast, isolated SQLite)
 fields/                   Field catalog samples and fixtures
 operators/                Operator definitions, signatures, and type constraints
 docs/                     Architecture, study validation, operating guides, decision records

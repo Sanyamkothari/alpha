@@ -128,7 +128,7 @@ A revisit threshold is established: query caching and surface indexing will only
 The Next-Up allocator was rebuilt to operate at whole-surface territory granularity:
 1. **Territory Identity**: Defined as `(field_code, operator_family, horizon_band)` where lookback windows are partitioned into `short` (1–10d), `medium` (11–63d), and `long` (64d+).
 2. **Exact Budget Arithmetic Closure**: The allocator guarantees $\sum \text{task.target\_simulations} = B$ for all $B \ge 49$, allocating any remainder $+1$ to existing tasks rather than creating stunted sub-30 tasks.
-3. **Minimum Viable Task Size**: `MIN_VIABLE_TERRITORY_SIMS = 30` (aligned with `MIN_TRIALS_FOR_DSR = 30`).
+3. **Minimum Viable Task Size**: `MIN_VIABLE_TERRITORY_SIMS = 49` (aligned with standard 7×7 grid unit size).
 4. **Saturation Cap**: Replaced the global field blacklist with `MAX_TERRITORIES_PER_FIELD_OP = 3` per `(field_code, operator_family)`.
 5. **Crowding Scoping**: `CROWDED_USER_COUNT = 2000` is scoped strictly to the exploit arm, preserving Q4 sampling in the random stratified calibration arm.
 6. **Reproducible Seeding**: Added nullable `seed` column to `Campaign` via migration `c3d4e5f6a1b2`, ensuring deterministic campaign task generation with `random.Random(seed)`.

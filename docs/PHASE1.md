@@ -71,7 +71,7 @@ Allocations partition daily simulation capacity across three strategic arms with
    - Explicitly includes crowded fields (e.g. `close`, `volume`, $48,000+$ users) as clean negative controls.
    - Tagged in console/UI as: `🔬 Calibration (expected to fail — required for validation study)`.
    - Seeded reproducibly via `seed` parameter and `random.Random(seed)`.
-3. **Plateau Fill Arm (20%)**: Completes incomplete surfaces for families showing promising ridge behavior. Minimum viable territory size is $30$ simulations (tied to `MIN_TRIALS_FOR_DSR = 30`).
+3. **Plateau Fill Arm (20%)**: Completes incomplete surfaces for families showing promising ridge behavior. Minimum viable territory size is $49$ simulations (tied to standard $7 \times 7$ grid unit size).
 
 ---
 

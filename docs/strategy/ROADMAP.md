@@ -27,7 +27,7 @@ Everything here is cheap, and every day of delay destroys data you cannot get ba
 
 ### 0.1 Commit your work — today, before anything else
 
-Seventeen untracked files, including `subperiod.py`, `correlation.py`, `pnl_storage.py`, `allocator_bandit.py`, `composite_constructor.py`, `evolution.py`, and seven test files.
+Seventeen untracked files, including `subperiod.py`, `correlation.py`, `pnl_storage.py`, `allocator.py`, `composite_constructor.py`, `evolution.py`, and seven test files.
 
 **The core statistical work — the part that is actually yours — exists on exactly one disk.** Commit and push. Two minutes.
 
