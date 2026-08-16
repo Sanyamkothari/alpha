@@ -31,13 +31,13 @@ The README describes intended capability. These are measured numbers. Trust thes
 | Passed BRAIN checks | 28 |
 | Passed DSR | 11 |
 | Promoted | 16 |
-| **Submitted to BRAIN** | **4** (`zqNXMEZE`, `N1bkwYGw`, `VkGeJGrM`, `xANpg6OW`) |
+| **Submitted to BRAIN** | **6** (`zqNXMEZE`, `N1bkwYGw`, `VkGeJGrM`, `xANpg6OW`, `O0GKYG0R`, `QPGpqGbG`) |
 | **Accepted / paid** | **0 known** |
 | Fields touched | 32 of 6,583 (0.49%) |
 | Operator families used | 1 (`ts_zscore`) before Phase 1 |
 | Throughput | ~13 sims/day against a 200–500/day design target |
 
-**The premise "this system produces good alphas" is unproven.** Four submissions cleared BRAIN's gate, which proves the loop closes. It does not establish a rate.
+**The premise "this system produces good alphas" is unproven.** Six submissions cleared BRAIN's gate, which proves the loop closes. It does not establish a rate.
 
 ### The single-template problem
 
@@ -91,6 +91,7 @@ No billing, accounts, multi-user features, crowding map, network layer, fertilit
 
 ```
 docs/
+├── GOLD_LEVEL_GUIDE.md          10K Gold level targets, daily points & expansion rules
 ├── PHASE1_OPERATING_GUIDE.md    what the human does weekly, and stop conditions
 ├── INVENTORY.md                 ground-truth survey of code and data
 ├── PHASE0.md                    instrumentation work
