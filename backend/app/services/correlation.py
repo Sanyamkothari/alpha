@@ -7,6 +7,9 @@ with fallback to structural hashing when empirical PnL is unavailable.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
+from dataclasses import dataclass
+
 import numpy as np
 import structlog
 from sqlalchemy import select
@@ -122,6 +125,129 @@ def check_portfolio_empirical_correlation(
         return True, struct_collision, max_corr
 
     return False, None, max_corr
+
+
+@dataclass
+class ClusterAssignment:
+    """Where one candidate landed in a mutual-correlation clustering pass."""
+
+    alpha_id: int
+    representative_id: int | None  # None => this candidate IS a cluster representative
+    correlation: float | None  # max |rho| measured against representatives, None if unmeasured
+    # 'empirical' => at least one comparison was actually computed.
+    # 'unmeasured' => none was possible: no stored PnL, no representative sharing
+    # enough trading days, or nothing ranked ahead of it to compare against. The
+    # first candidate in the list is always 'unmeasured' for that last reason.
+    method: str
+
+
+def _series_map(
+    store: PnLStore, alpha_ids: Sequence[int]
+) -> dict[int, tuple[set[str], dict[str, float]]]:
+    """Load each alpha's daily PnL once, as a date set plus a date -> value lookup.
+
+    Built up front because the clustering pass below is O(n^2) in comparisons:
+    rebuilding the date map inside the inner loop turns a cheap scan into a
+    visible pause on the morning summary.
+    """
+    out: dict[int, tuple[set[str], dict[str, float]]] = {}
+    for aid in alpha_ids:
+        loaded = store.load_pnl(aid)
+        if loaded is None:
+            continue
+        dates, arr = loaded
+        if len(dates) != len(arr):
+            continue
+        out[aid] = (set(dates), {d: float(v) for d, v in zip(dates, arr, strict=True)})
+    return out
+
+
+def cluster_by_correlation(
+    alpha_ids: Sequence[int],
+    *,
+    pnl_store: PnLStore | None = None,
+    threshold: float = INTERNAL_CORRELATION_THRESHOLD,
+    min_overlap: int = MIN_COMMON_TRADING_DAYS,
+) -> list[ClusterAssignment]:
+    """Group candidates that are the same alpha in BRAIN's eyes.
+
+    Takes no ``Session`` — unlike its siblings in this module it reads nothing
+    but stored PnL, and the comparison is between the candidates handed to it
+    rather than against anything in the database.
+
+    ``plateau.evaluate`` de-duplicates only *within* one family's structure slice,
+    so two promoted candidates built on the same data field with a different
+    time-series operator or a different neutralization reach the review queue
+    looking independent. On daily PnL — which is what BRAIN's SELF_CORRELATION
+    check actually measures — they are frequently the same alpha, and the second
+    one submitted is the one that gets rejected.
+
+    Greedy in the order given, so pass ``alpha_ids`` already ranked best-first:
+    the first member of a cluster becomes its representative and the rest are
+    attributed to it.
+
+    Correlation is never fabricated. A candidate whose PnL is missing, or which
+    never reaches ``min_overlap`` common days against any representative, is
+    returned as its own representative with ``method='unmeasured'`` — absent
+    evidence of collision is not evidence of independence, and the caller is
+    told which of the two it has.
+    """
+    store = pnl_store or get_pnl_store()
+    series = _series_map(store, alpha_ids)
+
+    assignments: list[ClusterAssignment] = []
+    representatives: list[int] = []
+
+    for aid in alpha_ids:
+        candidate = series.get(aid)
+        if candidate is None:
+            representatives.append(aid)
+            assignments.append(ClusterAssignment(aid, None, None, "unmeasured"))
+            continue
+
+        cand_dates, cand_map = candidate
+        best_rho: float | None = None
+        best_rep: int | None = None
+
+        for rep in representatives:
+            other = series.get(rep)
+            if other is None:
+                continue
+            _, other_map = other
+            common = sorted(cand_dates.intersection(other_map))
+            if len(common) < min_overlap:
+                continue
+            c_vec = np.fromiter(
+                (cand_map[d] for d in common), dtype=np.float64, count=len(common)
+            )
+            o_vec = np.fromiter(
+                (other_map[d] for d in common), dtype=np.float64, count=len(common)
+            )
+            rho = abs(compute_pairwise_correlation(c_vec, o_vec))
+            if best_rho is None or rho > best_rho:
+                best_rho, best_rep = rho, rep
+
+        if best_rho is not None and best_rep is not None and best_rho >= threshold:
+            assignments.append(ClusterAssignment(aid, best_rep, best_rho, "empirical"))
+            continue
+
+        representatives.append(aid)
+        assignments.append(
+            ClusterAssignment(
+                aid,
+                None,
+                best_rho,
+                "empirical" if best_rho is not None else "unmeasured",
+            )
+        )
+
+    log.info(
+        "correlation_clustered",
+        candidates=len(alpha_ids),
+        representatives=len(representatives),
+        threshold=threshold,
+    )
+    return assignments
 
 
 def ensure_alpha_pnl(

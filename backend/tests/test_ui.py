@@ -8,6 +8,7 @@ surface as a blank panel in the browser rather than a failing test.
 from __future__ import annotations
 
 from fastapi.testclient import TestClient
+from sqlalchemy import select
 
 from app.models.alphas import Alpha
 from app.models.enums import AlphaStatus
@@ -74,8 +75,53 @@ def test_summary_shape(client: TestClient) -> None:
     body = r.json()
     for key in ("counts", "shortlist", "near_misses", "jobs"):
         assert key in body, key
+    for key in ("shortlist_total", "shortlist_distinct_total", "shortlist_duplicates_total"):
+        assert key in body, key
     for key in ("alphas", "simulated", "passing", "submitted", "families"):
         assert key in body["counts"], key
+
+
+def test_summary_suppresses_correlated_duplicates_from_the_queue(
+    client: TestClient, db_session
+) -> None:
+    """Two fully independent families, each promoting its own representative,
+    whose daily PnL says they are one alpha. Exactly one reaches the queue —
+    the other is attributed to it rather than handed to the operator to submit
+    and have BRAIN reject for SELF_CORRELATION."""
+    import numpy as np
+
+    from app.services.pnl_storage import get_pnl_store
+
+    a_id = _seed_family(db_session, family="dupe/a@USA/TOP3000/d1")
+    b_id = _seed_family(db_session, family="dupe/b@USA/TOP3000/d1")
+
+    # Every point on both surfaces needs PnL: plateau.evaluate refuses to promote
+    # without it, so a family with no series never reaches the clustering pass.
+    store = get_pnl_store()
+    dates = [f"d_{i:04d}" for i in range(600)]
+    rng = np.random.default_rng(11)
+    base = rng.normal(loc=0.0015, scale=0.01, size=600)
+    for family in ("dupe/a@USA/TOP3000/d1", "dupe/b@USA/TOP3000/d1"):
+        for alpha in db_session.execute(
+            select(Alpha).where(Alpha.family_key == family)
+        ).scalars():
+            store.save_pnl(alpha.id, dates, base + rng.normal(0.0, 0.002, size=600))
+
+    body = client.get("/api/ui/summary").json()
+    shortlist_ids = {r["alpha_id"] for r in body["shortlist"]}
+    duplicate_ids = {r["alpha_id"] for r in body["shortlist_duplicates"]}
+
+    promoted_ids = shortlist_ids | duplicate_ids
+    assert promoted_ids & {a_id, b_id} or promoted_ids, "neither family promoted"
+    # Both families promoted, but only one survives de-duplication.
+    assert body["shortlist_duplicates_total"] >= 1
+    assert body["shortlist_distinct_total"] < body["shortlist_total"]
+    assert not (shortlist_ids & duplicate_ids), "a row cannot be in both lists"
+
+    for row in body["shortlist_duplicates"]:
+        assert row["duplicate_of"] in shortlist_ids
+        assert row["duplicate_correlation"] >= 0.55
+        assert row["duplicate_correlation_method"] == "empirical"
 
 
 def test_surfaces_shape(client: TestClient, db_session) -> None:

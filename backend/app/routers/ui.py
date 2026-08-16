@@ -30,6 +30,7 @@ from app.models.enums import AlphaStatus, SubmissionResult
 from app.models.results import AlphaMetric
 from app.services.allocator import dataset_stats, suggest
 from app.services.alpha_library import transition_status
+from app.services.correlation import cluster_by_correlation
 from app.services.jobs import RunFamilyParams, registry, run_family_job
 from app.services.plateau import DECAY_LADDER, WINDOW_LADDER, evaluate, load_surface
 from app.services.spend import summary as spend_summary
@@ -138,6 +139,34 @@ def summary(db: Session = Depends(get_db)) -> dict:
     promoted.sort(key=lambda r: r["sharpe"] or 0, reverse=True)
     near.sort(key=lambda r: r["sharpe"] or 0, reverse=True)
 
+    # Cross-family duplicate suppression.
+    #
+    # `evaluate()` keeps one representative per (ts, cs, group, neutralization,
+    # truncation) slice *within a family*, and this loop walks families
+    # independently — so a field mined across several operators and
+    # neutralizations arrives here as several separately-promoted candidates
+    # that score alike because they are the same signal. BRAIN judges them on
+    # daily PnL and rejects the second one submitted for SELF_CORRELATION.
+    #
+    # Sorted best-first above, so the strongest member of each cluster is the
+    # one that keeps its place in the queue. Statistical verdicts are untouched:
+    # this groups what is already promoted, it does not re-judge anything.
+    assignments = cluster_by_correlation([r["alpha_id"] for r in promoted])
+    rows_by_id = {r["alpha_id"]: r for r in promoted}
+    distinct: list[dict] = []
+    duplicates: list[dict] = []
+    for assignment in assignments:
+        row = rows_by_id.get(assignment.alpha_id)
+        if row is None:
+            continue
+        row["duplicate_of"] = assignment.representative_id
+        row["duplicate_correlation"] = assignment.correlation
+        row["duplicate_correlation_method"] = assignment.method
+        if assignment.representative_id is None:
+            distinct.append(row)
+        else:
+            duplicates.append(row)
+
     return {
         "counts": {
             "alphas": total,
@@ -145,13 +174,22 @@ def summary(db: Session = Depends(get_db)) -> dict:
             "passing": passing,
             "submitted": submitted,
             "families": len(_families(db)),
+            "unresolved_attempts": unresolved_attempts,
         },
         # Counts BEFORE the display cap. Returning len(promoted[:25]) as the
         # "promoted" number turns a 40-survivor morning into "25 survived".
         "shortlist_total": len(promoted),
+        # How many of those are worth acting on. Lower than shortlist_total
+        # whenever a field promoted more than one shape of the same signal.
+        "shortlist_distinct_total": len(distinct),
         "near_misses_total": len(near),
-        "shortlist": promoted[:25],
+        "shortlist_duplicates_total": len(duplicates),
+        "shortlist": distinct[:25],
         "near_misses": near[:15],
+        # Suppressed, not discarded. Hiding them outright would repeat the bug
+        # this fix exists to close: a queue that silently drops candidates is
+        # how you stop noticing that one field is producing all of them.
+        "shortlist_duplicates": duplicates[:15],
         "jobs": [j.as_dict() for j in registry().list()[:8]],
     }
 

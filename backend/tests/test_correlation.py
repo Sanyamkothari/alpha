@@ -17,6 +17,7 @@ import pytest
 from app.models.alphas import Alpha, SubmissionAttempt
 from app.models.enums import AlphaStatus
 from app.services.correlation import (
+    cluster_by_correlation,
     compute_correlation_matrix,
     compute_pairwise_correlation,
     check_portfolio_empirical_correlation,
@@ -179,6 +180,144 @@ def test_structural_fallback_when_pnl_missing(db_session, tmp_path) -> None:
     is_corr, reason, _ = check_portfolio_empirical_correlation(db_session, cand_alpha.id, pnl_store=store)
     assert is_corr
     assert "structural correlation collision" in (reason or "")
+
+
+def _correlated_pair(n: int = 600, seed: int = 7) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """A base series, a near-copy of it, and an independent series."""
+    rng = np.random.default_rng(seed)
+    base = rng.normal(loc=0.001, scale=0.01, size=n)
+    twin = base + rng.normal(loc=0.0, scale=0.003, size=n)  # rho ~ 0.95
+    other = rng.normal(loc=0.001, scale=0.01, size=n)  # rho ~ 0.0
+    return base, twin, other
+
+
+def test_cluster_collapses_the_same_signal_wearing_two_shapes(tmp_path, db_session) -> None:
+    """The failure this fix exists to close: two separately-promoted candidates
+    that BRAIN sees as one alpha. The weaker one must be attributed, not shown."""
+    store = PnLStore(base_dir=tmp_path / "pnl")
+    rows = []
+    for tag in ("zscore_shape", "rank_shape"):
+        a = Alpha(expression=f"rank({tag})", expression_hash=f"clust_{tag}", is_valid=True)
+        db_session.add(a)
+        rows.append(a)
+    db_session.flush()
+
+    dates = [f"d_{i:04d}" for i in range(600)]
+    base, twin, _ = _correlated_pair()
+    store.save_pnl(rows[0].id, dates, base)
+    store.save_pnl(rows[1].id, dates, twin)
+
+    # Passed best-first, so the first is the one that keeps its place.
+    assignments = cluster_by_correlation([rows[0].id, rows[1].id], pnl_store=store)
+    by_id = {a.alpha_id: a for a in assignments}
+
+    assert by_id[rows[0].id].representative_id is None
+    assert by_id[rows[1].id].representative_id == rows[0].id
+    assert by_id[rows[1].id].method == "empirical"
+    assert by_id[rows[1].id].correlation is not None
+    assert by_id[rows[1].id].correlation >= 0.55
+
+
+def test_cluster_keeps_genuinely_independent_candidates(tmp_path, db_session) -> None:
+    store = PnLStore(base_dir=tmp_path / "pnl")
+    rows = []
+    for tag in ("indep_a", "indep_b"):
+        a = Alpha(expression=f"rank({tag})", expression_hash=f"clust_{tag}", is_valid=True)
+        db_session.add(a)
+        rows.append(a)
+    db_session.flush()
+
+    dates = [f"d_{i:04d}" for i in range(600)]
+    base, _, other = _correlated_pair()
+    store.save_pnl(rows[0].id, dates, base)
+    store.save_pnl(rows[1].id, dates, other)
+
+    assignments = cluster_by_correlation([rows[0].id, rows[1].id], pnl_store=store)
+    assert all(a.representative_id is None for a in assignments)
+    # The first candidate has nothing ahead of it to be compared against, so no
+    # measurement happened; the second was measured and found independent.
+    assert assignments[0].method == "unmeasured"
+    assert assignments[1].method == "empirical"
+    assert assignments[1].correlation is not None
+    assert assignments[1].correlation < 0.55
+
+
+def test_cluster_reports_unmeasured_rather_than_assuming_independence(
+    tmp_path, db_session
+) -> None:
+    """No PnL means no evidence of collision, which is not evidence of its absence.
+    The candidate survives, but the caller is told the number is missing."""
+    store = PnLStore(base_dir=tmp_path / "pnl")
+    a = Alpha(expression="rank(unmeasured)", expression_hash="clust_unmeasured", is_valid=True)
+    db_session.add(a)
+    db_session.flush()
+
+    assignments = cluster_by_correlation([a.id], pnl_store=store)
+    assert assignments[0].representative_id is None
+    assert assignments[0].correlation is None
+    assert assignments[0].method == "unmeasured"
+
+
+def test_cluster_respects_the_overlap_hurdle(tmp_path, db_session) -> None:
+    """Below the common-day floor the pair is unmeasurable, so neither is suppressed."""
+    store = PnLStore(base_dir=tmp_path / "pnl")
+    rows = []
+    for tag in ("short_a", "short_b"):
+        a = Alpha(expression=f"rank({tag})", expression_hash=f"clust_{tag}", is_valid=True)
+        db_session.add(a)
+        rows.append(a)
+    db_session.flush()
+
+    # Identical series, but only 200 shared days — under the 500-day floor.
+    dates = [f"d_{i:04d}" for i in range(200)]
+    base = np.random.default_rng(3).normal(size=200)
+    store.save_pnl(rows[0].id, dates, base)
+    store.save_pnl(rows[1].id, dates, base)
+
+    assignments = cluster_by_correlation([rows[0].id, rows[1].id], pnl_store=store)
+    assert all(a.representative_id is None for a in assignments)
+    assert assignments[1].method == "unmeasured"
+
+
+def test_cluster_fires_on_alphas_written_by_the_production_writer(tmp_path, db_session) -> None:
+    """CLAUDE.md: a new exclusion must be shown to fire on rows the production
+    writer created, not on hand-built fixtures. Same field, two shapes — exactly
+    the pattern ``constructor.py`` emits across its operator axis."""
+    from app.services.alpha_library import AlphaSettings, create_alpha
+
+    store = PnLStore(base_dir=tmp_path / "pnl")
+    settings = AlphaSettings(region="USA", universe="TOP3000", delay=1, neutralization="SUBINDUSTRY")
+
+    first = create_alpha(
+        db_session,
+        "rank(ts_zscore(close, 22))",
+        settings,
+        family_key="close:ts_zscore:medium@USA/TOP3000/d1",
+        source="constructor",
+    )
+    second = create_alpha(
+        db_session,
+        "zscore(ts_rank(close, 22))",
+        settings,
+        family_key="close:ts_rank:medium@USA/TOP3000/d1",
+        source="constructor",
+    )
+    db_session.flush()
+
+    assert first.created and second.created
+    # Different expressions, different families, different structural slices —
+    # nothing upstream of this pass would connect them.
+    assert first.alpha.family_key != second.alpha.family_key
+    assert first.alpha.expression_hash != second.alpha.expression_hash
+
+    dates = [f"d_{i:04d}" for i in range(600)]
+    base, twin, _ = _correlated_pair()
+    store.save_pnl(first.alpha.id, dates, base)
+    store.save_pnl(second.alpha.id, dates, twin)
+
+    assignments = cluster_by_correlation([first.alpha.id, second.alpha.id], pnl_store=store)
+    by_id = {a.alpha_id: a for a in assignments}
+    assert by_id[second.alpha.id].representative_id == first.alpha.id
 
 
 def test_correlation_matrix_vectorization() -> None:

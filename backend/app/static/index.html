@@ -295,6 +295,10 @@ table.data td.t{font-family:var(--font-ui)}
           <summary id="missSummary">Cleared BRAIN's checks but not promoted</summary>
           <div id="misses"></div>
         </details>
+        <details class="acc" id="dupeAcc">
+          <summary id="dupeSummary">Same signal as a candidate above</summary>
+          <div id="dupes"></div>
+        </details>
       </div>
       <aside>
         <div class="panel"><h3>Runs</h3><div id="runs"></div></div>
@@ -582,7 +586,7 @@ async function poll(){
   renderQueue();
 }
 
-function render(){renderStats();renderVerdict();renderQueue();renderMisses();renderRuns();renderSugs();renderSpend();}
+function render(){renderStats();renderVerdict();renderQueue();renderMisses();renderDupes();renderRuns();renderSugs();renderSpend();}
 
 /* Each counter is a destination. They read as navigation, so they behave as
    navigation — a number that invites a click and does nothing is worse than no
@@ -612,7 +616,11 @@ function renderStats(){
   }
 }
 function renderVerdict(){
-  const n=S.summary.shortlist_total ?? S.summary.shortlist.length, c=S.summary.counts;
+  /* The queue count is the DISTINCT count, not everything that survived the
+     filter. Promoting four shapes of one signal is not four submissions — it is
+     one submission and three SELF_CORRELATION rejections. */
+  const n=S.summary.shortlist_distinct_total ?? S.summary.shortlist_total ?? S.summary.shortlist.length;
+  const dupes=S.summary.shortlist_duplicates_total ?? 0, c=S.summary.counts;
   const bar=S.summary.shortlist[0]?.haircut_bar??S.summary.near_misses[0]?.haircut_bar;
   if(n===0 && c.simulated===0){
     // A first-time operator has not failed — they have not started. Telling them
@@ -630,9 +638,12 @@ function renderVerdict(){
         bar?` · bar was ${fx(bar)}`:""}.<br>That is the normal outcome for most batches.</p>`;
     $("#missAcc").open=true;
   }else{
-    $("#verdict").innerHTML=`<div class="big">${n} survived.</div>
+    $("#verdict").innerHTML=`<div class="big">${n} distinct survived.</div>
       <p>From ${c.simulated} simulated across ${c.families} famil${c.families===1?"y":"ies"}${
-        bar?`. Bar was ${fx(bar)} after the multiple-testing haircut`:""}.</p>`;
+        bar?`. Bar was ${fx(bar)} after the multiple-testing haircut`:""}.${
+        dupes?`<br>${dupes} more survived the filter but track a candidate already
+        in this queue — submitting them costs a slot and returns a
+        SELF_CORRELATION rejection.`:""}</p>`;
   }
 }
 function cur(){return S.summary?.shortlist?.[S.i];}
@@ -854,6 +865,23 @@ function moveTip(e){const t=$("#tip");
   t.style.left=x+"px"; t.style.top=y+"px";}
 function hideTip(){$("#tip").style.display="none";}
 addEventListener("mousemove",e=>{if($("#tip").style.display==="block") moveTip(e);});
+
+/* Suppressed from the queue because their daily PnL tracks a candidate already
+   in it — the same comparison BRAIN's SELF_CORRELATION check makes. Listed
+   rather than dropped: when one field is quietly producing the whole morning,
+   this panel is where that becomes visible. */
+function renderDupes(){
+  const d=S.summary.shortlist_duplicates||[];
+  const total=S.summary.shortlist_duplicates_total ?? d.length;
+  $("#dupeAcc").style.display = total ? "" : "none";
+  $("#dupeSummary").textContent=`Same signal as a candidate above (${total})`;
+  $("#dupes").innerHTML=d.length?d.map(r=>{
+    const rho=r.duplicate_correlation!=null?r.duplicate_correlation.toFixed(2):"—";
+    return `<div class="miss"><span class="sh">${fx(r.sharpe)}</span>
+      <span><span class="why">tracks #${r.duplicate_of} at &rho; ${rho}</span>
+        <span class="ex">${r.expression}</span></span><span></span></div>`;
+  }).join(""):`<p class="faint" style="font-size:12px;padding:8px 0">none</p>`;
+}
 
 function renderMisses(){
   const m=S.summary.near_misses||[];
