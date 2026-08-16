@@ -41,20 +41,20 @@ If neutralization is swept across all 4 levels during generation:
 ## 2. Decision B3: Plateau Ratio & Ladder Geometry Calibration
 
 ### 2.1 Context & Problem Statement
-In `app/services/plateau.py:50-51`, the ladder constants remain configured for the pre-Phase-1 wide grid:
+In `app/services/plateau.py:50-51`, the fallback coordinate ladders (used when a surface is empty, while `_neighbours` dynamically derives ladders from populated surface points) and plateau threshold are defined as:
 ```python
-WINDOW_LADDER = (1, 2, 3, 5, 10, 20, 22, 40, 60, 63, 120, 126, 250, 252)
-DECAY_LADDER = (0, 4, 8, 16)
-PLATEAU_RATIO = 0.60
+WINDOW_LADDER: tuple[int, ...] = (5, 10, 22, 63, 126, 252)
+DECAY_LADDER: tuple[int, ...] = (0, 4, 8, 16)
+PLATEAU_RATIO = 0.6
 ```
 
-Under Phase 1's standard $7 \times 7$ grid, the parameter points are:
+Under Phase 1's standard $7 \times 7$ grid, the populated surface parameter points are:
 - Windows: $(5, 10, 20, 40, 60, 120, 250)$
 - Decays: $(0, 1, 2, 4, 6, 8, 16)$
 
 ### 2.2 The Geometric Artifact
-Under the $7 \times 7$ grid:
-1. A 1-step decay neighbour on the ladder differs by only 1 (e.g. decay 1 vs decay 2).
+When `_neighbours` dynamically derives coordinates from a populated $7 \times 7$ surface:
+1. A 1-step decay neighbour on the surface differs by only 1 (e.g. decay 1 vs decay 2).
 2. Backtests with decay 1 and decay 2 share over $98\%$ PnL correlation; their Sharpe ratios almost always agree.
 3. Consequently, `PLATEAU_RATIO = 0.60` is substantially easier to pass on the $7 \times 7$ grid than when the threshold was originally calibrated on the wide $(0, 4, 8, 16)$ grid.
 4. Because **Invariant 8** selects representatives by `neighbour_median_sharpe`, this geometric artifact inflates neighbourhood scores and distorts representative selection.
@@ -64,12 +64,11 @@ Under the $7 \times 7$ grid:
 | Option | Description | Tradeoffs |
 | :--- | :--- | :--- |
 | **Option A: Heuristic Threshold Adjustment** | Guess new constants (e.g. raise `PLATEAU_RATIO` to 0.80) without empirical measurement. | Fast, but risks either choking off viable discoveries or preserving subtle distortion. |
-| **Option B: Empirical Grid Synchronization & Surface Calibration (Recommended)** | 1. Synchronize `WINDOW_LADDER` and `DECAY_LADDER` to match the exact 7×7 grid coordinates.<br>2. Run empirical calibration against real surfaces in `database/wq.db` to measure true neighbour decay distributions. | Grounded in empirical data; ensures Invariant 8 representative rankings reflect genuine economic stability. |
+| **Option B: Empirical Plateau Calibration & Fallback Ladder Alignment (Recommended)** | 1. Primary: Run empirical calibration of `PLATEAU_RATIO` against real surfaces in `database/wq.db` to measure true neighbour decay distributions.<br>2. Secondary: Synchronize fallback `WINDOW_LADDER` and `DECAY_LADDER` constants to match active $7 \times 7$ coordinates for consistency. | Grounded in empirical data; ensures Invariant 8 representative rankings reflect genuine economic stability. |
 
 ### 2.4 Recommendation: Option B (Empirical Calibration Protocol)
-1. **Synchronize Ladder Coordinates:** Update `WINDOW_LADDER` and `DECAY_LADDER` in `plateau.py` to match the active 7×7 grid: $(5, 10, 20, 40, 60, 120, 250)$ and $(0, 1, 2, 4, 6, 8, 16)$.
-2. **Empirical Measurement on Real Surfaces:** Execute a calibration script across the 36 dense territories (4,608 alphas in `database/wq.db`) and recent campaign results to compute the distribution of $\frac{\text{neighbour\_median\_sharpe}}{\text{self\_sharpe}}$.
-3. **Calibrate `PLATEAU_RATIO`:** Set the threshold at the 75th percentile of the empirical noise distribution, separating broad ridges from noisy points without guessing constants.
+1. **Primary Calibration Target (`PLATEAU_RATIO`):** Execute a calibration script across the 36 dense territories (4,608 alphas in `database/wq.db`) and recent campaign results to compute the distribution of $\frac{\text{neighbour\_median\_sharpe}}{\text{self\_sharpe}}$. Set `PLATEAU_RATIO` at the 75th percentile of the empirical noise distribution to separate broad ridges from noisy points without guessing constants.
+2. **Secondary Fallback Consistency:** Align fallback `WINDOW_LADDER` and `DECAY_LADDER` constants in `plateau.py` to $(5, 10, 20, 40, 60, 120, 250)$ and $(0, 1, 2, 4, 6, 8, 16)$ so fallback behavior matches dynamically derived surfaces.
 
 ---
 
