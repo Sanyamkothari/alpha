@@ -108,19 +108,20 @@ def test_budget_arithmetic_closure_property(db_session, budget: int) -> None:
     task_sum = sum(t.target_simulations for t in plan.tasks)
     assert task_sum == budget, f"Budget {budget} failed exact closure: task sum = {task_sum}"
 
-    # Verify no stunted tasks below minimum viable sims (except plateau_fill completions)
+    # Verify all tasks have positive allocation
     for t in plan.tasks:
         assert t.target_simulations > 0
-        if t.arm != "plateau_fill":
-            assert t.target_simulations >= MIN_VIABLE_TERRITORY_SIMS, (
-                f"Task {t.field_code} under arm {t.arm} has only {t.target_simulations} sims (< {MIN_VIABLE_TERRITORY_SIMS})"
-            )
 
 
-def test_sub_minimum_budget_raises(db_session) -> None:
-    """Budgets below minimum viable territory budget must raise ValueError (W1)."""
-    with pytest.raises(ValueError):
-        plan_budget_allocation(db_session, total_simulations=20)
+def test_sub_minimum_budget_handled_gracefully(db_session) -> None:
+    """Budgets below 49 are handled with exact closure rather than crashing (R2)."""
+    plan = plan_budget_allocation(db_session, total_simulations=20)
+    assert sum(t.target_simulations for t in plan.tasks) == 20
+    assert plan.total_simulations == 20
+
+    empty_plan = plan_budget_allocation(db_session, total_simulations=0)
+    assert empty_plan.total_simulations == 0
+    assert empty_plan.tasks == []
 
 
 def test_deterministic_seeding(db_session) -> None:

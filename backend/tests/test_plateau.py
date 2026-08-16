@@ -8,7 +8,7 @@ rejected, and a broad ridge is promoted. The spike case is the one that matters
 
 from __future__ import annotations
 
-from app.models.alphas import Alpha
+from app.models.alphas import Alpha, SubmissionAttempt
 from app.models.results import AlphaMetric, SimulationImport
 from app.services.plateau import (
     BASE_SHARPE_BAR,
@@ -144,6 +144,8 @@ def test_portfolio_correlation_blocks_promotion(db_session) -> None:
         feature_json={"structural_hash": "shash-close_sub_test-zscore", "grid": {"window": 22, "decay": 4}},
     )
     db_session.add(submitted_alpha)
+    db_session.flush()
+    db_session.add(SubmissionAttempt(alpha_id=submitted_alpha.id, result="submitted"))
     db_session.flush()
 
     for w in WINDOW_LADDER:

@@ -14,7 +14,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from app.models.alphas import Alpha
+from app.models.alphas import Alpha, SubmissionAttempt
 from app.models.enums import AlphaStatus
 from app.services.correlation import (
     compute_correlation_matrix,
@@ -78,7 +78,9 @@ def test_sub_500_day_overlap_rejection(tmp_path, db_session) -> None:
         is_valid=True,
     )
     db_session.add_all([a1, a2])
-    db_session.commit()
+    db_session.flush()
+    db_session.add(SubmissionAttempt(alpha_id=a1.id, result="submitted"))
+    db_session.flush()
 
     # Only 200 common dates (< 500 minimum overlap)
     dates = [f"day_{i:04d}" for i in range(200)]
@@ -118,6 +120,8 @@ def test_portfolio_correlation_gate_threshold(tmp_path, db_session) -> None:
         is_valid=True,
     )
     db_session.add_all([port_alpha, cand_high, cand_low])
+    db_session.flush()
+    db_session.add(SubmissionAttempt(alpha_id=port_alpha.id, result="submitted"))
     db_session.flush()
 
     dates = [f"d_{i:04d}" for i in range(600)]
@@ -167,6 +171,8 @@ def test_structural_fallback_when_pnl_missing(db_session, tmp_path) -> None:
         is_valid=True,
     )
     db_session.add_all([port_alpha, cand_alpha])
+    db_session.flush()
+    db_session.add(SubmissionAttempt(alpha_id=port_alpha.id, result="submitted"))
     db_session.flush()
 
     # Empirical PnL missing -> must fallback to structural check

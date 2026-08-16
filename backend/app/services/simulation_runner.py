@@ -41,11 +41,6 @@ class BatchResult:
     passed_all_checks: int = 0
     errors: list[str] = field(default_factory=list)
 
-    @property
-    def errored(self) -> list[str]:
-        """Alias for errors."""
-        return self.errors
-
     def as_dict(self) -> dict[str, Any]:
         return {
             "simulated": self.simulated,

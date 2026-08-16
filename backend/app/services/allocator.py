@@ -73,10 +73,10 @@ NEGLECTED_USER_COUNT = 5
 # Maximum territories explored per (field_code, operator_family) pair
 MAX_TERRITORIES_PER_FIELD_OP = 3
 
-# Minimum viable territory simulations (tied to MIN_TRIALS_FOR_DSR = 30 in plateau.py)
-MIN_VIABLE_TERRITORY_SIMS = 30
 DEFAULT_SIMS_PER_TERRITORY = 49
+SURFACE_SIZE = 49
 MIN_VIABLE_CAMPAIGN_BUDGET = 49
+MIN_VIABLE_TERRITORY_SIMS = 49
 
 
 @dataclass
@@ -613,9 +613,15 @@ def plan_budget_allocation(
     2. Whole-surface territory granularity (expansion always operates on whole surfaces).
     3. Reproducible seeding via explicit Random instance.
     """
-    if total_simulations < MIN_VIABLE_TERRITORY_SIMS:
-        raise ValueError(
-            f"total_simulations ({total_simulations}) must be at least {MIN_VIABLE_TERRITORY_SIMS}"
+    if total_simulations <= 0:
+        return BudgetPlan(
+            total_simulations=0,
+            exploit_simulations=0,
+            random_stratified_simulations=0,
+            plateau_fill_simulations=0,
+            tasks=[],
+            quartile_boundaries=[],
+            seed=seed,
         )
 
     rng = random.Random(seed)
@@ -853,7 +859,7 @@ def plan_budget_allocation(
         for t in sorted(tasks, key=lambda x: x.target_simulations, reverse=True):
             if excess <= 0:
                 break
-            can_reduce = max(0, t.target_simulations - (MIN_VIABLE_TERRITORY_SIMS if len(tasks) > 1 else 1))
+            can_reduce = max(0, t.target_simulations - 1)
             reduction = min(excess, can_reduce)
             t.target_simulations -= reduction
             excess -= reduction

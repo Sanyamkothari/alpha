@@ -51,13 +51,17 @@ def build_db(path):
 print("=" * 70)
 print("FINDING 1 — campaign_runner references BatchResult.errored")
 print("=" * 70)
-from app.services.simulation_runner import BatchResult
-try:
-    _ = len(BatchResult().errored)
-    print("  FIXED — no AttributeError")
-except AttributeError as e:
-    print(f"  REPRODUCED: {type(e).__name__}: {e}")
-    print(f"  BatchResult fields: {list(BatchResult.__dataclass_fields__)}")
+import inspect
+from app.services import campaign_runner, simulation_runner
+src = inspect.getsource(campaign_runner)
+has_errored_ref = ".errored" in src
+has_errored_attr = hasattr(simulation_runner.BatchResult, "errored")
+if has_errored_ref:
+    print("  REPRODUCED: campaign_runner still references .errored")
+elif has_errored_attr:
+    print("  REPRODUCED: BatchResult still provides .errored shim")
+else:
+    print("  FIXED — campaign_runner uses .simulated/.passed_all_checks and BatchResult has no .errored shim")
 
 print()
 print("=" * 70)
@@ -85,17 +89,14 @@ print("=" * 70)
 from app.services.allocator import plan_budget_allocation
 with SF() as db:
     for budget in (200, 100, 50, 20):
-        try:
-            plan = plan_budget_allocation(db, total_simulations=budget)
-            planned = sum(t.target_simulations for t in plan.tasks)
-            arms = {}
-            for t in plan.tasks:
-                arms[t.arm] = arms.get(t.arm, 0) + t.target_simulations
-            print(f"  budget={budget:>3}  declared="
-                  f"{plan.exploit_simulations}/{plan.random_stratified_simulations}"
-                  f"/{plan.plateau_fill_simulations}  ->  planned {planned:>3}  {arms}")
-        except ValueError as exc:
-            print(f"  budget={budget:>3}  ->  rejected by minimum budget guard ({exc})")
+        plan = plan_budget_allocation(db, total_simulations=budget)
+        planned = sum(t.target_simulations for t in plan.tasks)
+        arms = {}
+        for t in plan.tasks:
+            arms[t.arm] = arms.get(t.arm, 0) + t.target_simulations
+        print(f"  budget={budget:>3}  declared="
+              f"{plan.exploit_simulations}/{plan.random_stratified_simulations}"
+              f"/{plan.plateau_fill_simulations}  ->  planned {planned:>3}  {arms}")
 
 print()
 print("=" * 70)

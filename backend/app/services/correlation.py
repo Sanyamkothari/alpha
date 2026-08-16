@@ -25,13 +25,11 @@ MIN_COMMON_TRADING_DAYS = 500
 
 
 def submitted_portfolio(db: Session, exclude_alpha_id: int | None = None) -> list[Alpha]:
-    """Confirmed submissions from submission_attempts (result == 'submitted') or Alpha.status == 'submitted'."""
+    """Confirmed submissions from submission_attempts (result == 'submitted')."""
     q = (
         select(Alpha)
-        .outerjoin(SubmissionAttempt, SubmissionAttempt.alpha_id == Alpha.id)
-        .where(
-            (SubmissionAttempt.result == "submitted") | (Alpha.status == AlphaStatus.SUBMITTED.value)
-        )
+        .join(SubmissionAttempt, SubmissionAttempt.alpha_id == Alpha.id)
+        .where(SubmissionAttempt.result == "submitted")
         .distinct()
     )
     if exclude_alpha_id is not None:
