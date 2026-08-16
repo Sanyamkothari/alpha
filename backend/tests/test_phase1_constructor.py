@@ -51,7 +51,7 @@ def test_self_correlation_ground_truth(db_session, tmp_path):
         db_session,
         "rank(ts_zscore(close, 20))",
         AlphaSettings(),
-        family_key="close@USA/TOP3000/d1",
+        family_key="cand_unique_close@USA/TOP3000/d1",
     ).alpha
 
     # With no submitted alphas yet or unmeasured PnL, returns none or unmeasured
@@ -65,7 +65,7 @@ def test_self_correlation_ground_truth(db_session, tmp_path):
         db_session,
         "rank(ts_zscore(volume, 20))",
         AlphaSettings(),
-        family_key="volume@USA/TOP3000/d1",
+        family_key="cand_unique_volume@USA/TOP3000/d1",
     ).alpha
 
     # Add confirmed submission attempt
@@ -74,7 +74,7 @@ def test_self_correlation_ground_truth(db_session, tmp_path):
         result="submitted",
     )
     db_session.add(attempt)
-    db_session.commit()
+    db_session.flush()
 
     # With submitted alpha present but no PnL and no structural collision, returns unmeasured
     corr, target_id, method = compute_max_self_correlation_with_submitted(

@@ -71,8 +71,8 @@ class FakeBrainClient:
             },
         }
 
-    def get_json(self, path: str, *args, **kwargs) -> Any:
+    def get_json(self, path: str, *args: Any, **kwargs: Any) -> Any:
         """Mock GET JSON for recordsets and endpoints."""
         if "daily-pnl" in path:
-            return [[f"2026-01-{i+1:02d}", 100.0 * (1 if i % 2 == 0 else -0.5)] for i in range(30)]
+            return {"records": [[f"2026-01-{i+1:02d}", 100.0 * (1 if i % 2 == 0 else -0.5)] for i in range(30)]}
         return {}

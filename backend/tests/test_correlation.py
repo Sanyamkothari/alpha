@@ -118,7 +118,7 @@ def test_portfolio_correlation_gate_threshold(tmp_path, db_session) -> None:
         is_valid=True,
     )
     db_session.add_all([port_alpha, cand_high, cand_low])
-    db_session.commit()
+    db_session.flush()
 
     dates = [f"d_{i:04d}" for i in range(600)]
     np.random.seed(42)
@@ -152,7 +152,7 @@ def test_structural_fallback_when_pnl_missing(db_session, tmp_path) -> None:
     port_alpha = Alpha(
         expression="rank(ts_delta(close, 5))",
         expression_hash="struct_fall_port",
-        family_key="close@USA/TOP3000/d1",
+        family_key="close_struct_fall@USA/TOP3000/d1",
         feature_json={"structural_hash": "struct_abc123"},
         status=AlphaStatus.SUBMITTED.value,
         is_valid=True,
@@ -161,13 +161,13 @@ def test_structural_fallback_when_pnl_missing(db_session, tmp_path) -> None:
     cand_alpha = Alpha(
         expression="zscore(ts_delta(close, 5))",
         expression_hash="struct_fall_cand",
-        family_key="close@USA/TOP3000/d1",
+        family_key="close_struct_fall@USA/TOP3000/d1",
         feature_json={"structural_hash": "struct_abc123"},
         status=AlphaStatus.TESTING.value,
         is_valid=True,
     )
     db_session.add_all([port_alpha, cand_alpha])
-    db_session.commit()
+    db_session.flush()
 
     # Empirical PnL missing -> must fallback to structural check
     is_corr, reason, _ = check_portfolio_empirical_correlation(db_session, cand_alpha.id, pnl_store=store)

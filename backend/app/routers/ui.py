@@ -70,6 +70,7 @@ def _verdict_row(v: Any, db: Session) -> dict[str, Any]:
         "is_correlated": getattr(v, "is_correlated", False),
         "correlation_collision": getattr(v, "correlation_collision", None),
         "promoted": v.promoted,
+        "redundant_with": getattr(v, "redundant_with", None),
         "dsr": getattr(v, "dsr", None),
         "dsr_passed": getattr(v, "dsr_passed", None),
         "gate_mode": getattr(v, "gate_mode", "COLD_START_FALLBACK"),
@@ -126,9 +127,13 @@ def summary(db: Session = Depends(get_db)) -> dict:
             if not (v.promoted or v.clears_bar):
                 continue
             row = _verdict_row(v, db)
+            row["_family"] = family
             if row.get("status") in ACTIONED:
                 continue
-            (promoted if v.promoted else near).append(row)
+            if v.promoted:
+                promoted.append(row)
+            elif not getattr(v, "redundant_with", None):
+                near.append(row)
 
     promoted.sort(key=lambda r: r["sharpe"] or 0, reverse=True)
     near.sort(key=lambda r: r["sharpe"] or 0, reverse=True)

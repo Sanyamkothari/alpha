@@ -12,7 +12,7 @@ import structlog
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.models.alphas import Alpha
+from app.models.alphas import Alpha, SubmissionAttempt
 from app.models.enums import AlphaStatus
 from app.services.plateau import check_portfolio_correlation as check_structural_proxy
 from app.services.pnl_storage import PnLStore, get_pnl_store
@@ -22,6 +22,21 @@ log = structlog.get_logger("correlation")
 # Stricter internal threshold than BRAIN's 0.70 to preserve safety buffer
 INTERNAL_CORRELATION_THRESHOLD = 0.55
 MIN_COMMON_TRADING_DAYS = 500
+
+
+def submitted_portfolio(db: Session, exclude_alpha_id: int | None = None) -> list[Alpha]:
+    """Confirmed submissions from submission_attempts (result == 'submitted') or Alpha.status == 'submitted'."""
+    q = (
+        select(Alpha)
+        .outerjoin(SubmissionAttempt, SubmissionAttempt.alpha_id == Alpha.id)
+        .where(
+            (SubmissionAttempt.result == "submitted") | (Alpha.status == AlphaStatus.SUBMITTED.value)
+        )
+        .distinct()
+    )
+    if exclude_alpha_id is not None:
+        q = q.where(Alpha.id != exclude_alpha_id)
+    return list(db.execute(q).scalars().all())
 
 
 def compute_pairwise_correlation(arr1: np.ndarray, arr2: np.ndarray) -> float:
@@ -60,16 +75,7 @@ def check_portfolio_empirical_correlation(
         return False, None, None
 
     if portfolio is None:
-        portfolio = list(
-            db.execute(
-                select(Alpha).where(
-                    Alpha.status.in_([AlphaStatus.SUBMITTED.value, AlphaStatus.PASSED.value]),
-                    Alpha.id != alpha_id,
-                )
-            )
-            .scalars()
-            .all()
-        )
+        portfolio = submitted_portfolio(db, exclude_alpha_id=alpha_id)
 
     cand_pnl_data = store.load_pnl(alpha_id)
 
@@ -183,29 +189,15 @@ def compute_max_self_correlation_with_submitted(
     'structural_proxy', 'unmeasured', or 'none'.
     Returns None for max_correlation when PnL series is unmeasured (never fabricates synthetic 0.20 or 0.85).
     """
-    from app.models.alphas import SubmissionAttempt
-
     store = pnl_store or get_pnl_store()
     candidate = db.get(Alpha, alpha_id)
     if candidate is None:
         return None, None, "none"
 
-    # Confirmed submitted alphas via submission_attempts (User Directive 1: Single Source of Truth)
-    submitted_alphas = list(
-        db.execute(
-            select(Alpha)
-            .join(SubmissionAttempt, SubmissionAttempt.alpha_id == Alpha.id)
-            .where(SubmissionAttempt.result == "submitted", Alpha.id != alpha_id)
-        )
-        .scalars()
-        .all()
-    )
-
+    submitted_alphas = submitted_portfolio(db, exclude_alpha_id=alpha_id)
     if not submitted_alphas:
         return 0.0, None, "none"
 
-    # Ensure candidate PnL is present (User Directive 2)
-    ensure_alpha_pnl(db, alpha_id, store)
     cand_pnl_data = store.load_pnl(alpha_id)
 
     max_corr = 0.0
@@ -217,7 +209,6 @@ def compute_max_self_correlation_with_submitted(
         cand_date_map = dict(zip(cand_dates, cand_pnl))
 
         for sub_alpha in submitted_alphas:
-            ensure_alpha_pnl(db, sub_alpha.id, store)
             sub_pnl_data = store.load_pnl(sub_alpha.id)
             if sub_pnl_data is None:
                 continue
@@ -241,13 +232,10 @@ def compute_max_self_correlation_with_submitted(
     if had_empirical_match:
         return max_corr, colliding_alpha_id, "empirical"
 
-    # Fallback to structural proxy check (User Directive 2)
+    # Fallback to structural proxy check
     is_struct_corr, struct_collision = check_structural_proxy(db, alpha_id, portfolio=submitted_alphas)
     target_id = submitted_alphas[0].id if submitted_alphas else None
     if is_struct_corr:
-        # Near-duplicate / same family structural proxy estimate: correlation magnitude is unmeasured (None)
         return None, target_id, "structural_proxy"
 
-    # When no structural collision is detected and PnL is unmeasured, return (None, None, "unmeasured")
-    # Fabricating a synthetic numeric value (0.20 or 0.85) would distort submission gating.
     return None, None, "unmeasured"

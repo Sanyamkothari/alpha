@@ -527,9 +527,11 @@ def suggest(
             chosen_horizon: str | None = None
             chosen_tkey: str | None = None
 
-            # Try candidate operators ordered by: untried on this field first, then standard transforms
-            candidate_ops = [op for op in DEFAULT_TS_TRANSFORMS if op not in tried_for_field] + [
-                op for op in DEFAULT_TS_TRANSFORMS if op in tried_for_field
+            # Try candidate operators ordered by: rotated untried on this field first, then rotated standard transforms
+            op_idx = len(out) % len(DEFAULT_TS_TRANSFORMS)
+            rotated_ops = list(DEFAULT_TS_TRANSFORMS[op_idx:]) + list(DEFAULT_TS_TRANSFORMS[:op_idx])
+            candidate_ops = [op for op in rotated_ops if op not in tried_for_field] + [
+                op for op in rotated_ops if op in tried_for_field
             ]
 
             for op in candidate_ops:
@@ -581,18 +583,11 @@ def suggest(
                     coverage=f.coverage,
                     posterior_score=None,
                     binding_constraint=f"dataset_cap({per_dataset_cap})" if dataset_suggest_count[stat.dataset_code] >= per_dataset_cap else None,
-                    self_corr_headroom=None,  # F5: unmeasured; not fabricated
+                    self_corr_headroom=None,
                 )
             )
 
-    if not out:
-        log.info(
-            "allocator_empty_suggestions",
-            reason="all_candidates_exceed_crowding_ceiling_or_saturated",
-            total_datasets=len(stats),
-        )
-
-    log.info("allocator_suggested", n=len(out), datasets=len({s.dataset_code for s in out}))
+    log.info("allocator_suggested", n=len(out), datasets=len(dataset_suggest_count))
     return out
 
 
@@ -614,21 +609,16 @@ def plan_budget_allocation(
     """Computes a 3-way budget allocation across exploit (50%), random stratified (30%), and plateau fill (20%).
 
     Guarantees:
-    1. Exact Arithmetic Closure: sum of task targets == total_simulations for any B >= MIN_VIABLE_CAMPAIGN_BUDGET.
-    2. Whole-surface territory granularity (no stunted territories below MIN_VIABLE_TERRITORY_SIMS, except plateau_fill).
+    1. Exact Arithmetic Closure: sum of task targets == total_simulations for any positive budget.
+    2. Whole-surface territory granularity (expansion always operates on whole surfaces).
     3. Reproducible seeding via explicit Random instance.
     """
-    if total_simulations < MIN_VIABLE_CAMPAIGN_BUDGET:
+    if total_simulations < MIN_VIABLE_TERRITORY_SIMS:
         raise ValueError(
-            f"Budget {total_simulations} is below minimum viable territory budget {MIN_VIABLE_CAMPAIGN_BUDGET}"
+            f"total_simulations ({total_simulations}) must be at least {MIN_VIABLE_TERRITORY_SIMS}"
         )
 
     rng = random.Random(seed)
-
-    arm_shares = arms or {"exploit": 0.50, "random_stratified": 0.30, "plateau_fill": 0.20}
-    exploit_budget = int(total_simulations * arm_shares.get("exploit", 0.50))
-    random_budget = int(total_simulations * arm_shares.get("random_stratified", 0.30))
-    plateau_budget = total_simulations - exploit_budget - random_budget
 
     has_cap = (
         db.execute(
@@ -638,11 +628,58 @@ def plan_budget_allocation(
     )
     default_denom = "cap" if has_cap else None
 
+    # Query existing simulated counts by family to find incomplete surfaces (joined to AlphaMetric)
+    sim_counts = dict(
+        db.execute(
+            select(Alpha.family_key, func.count(distinct(AlphaMetric.alpha_id)))
+            .join(AlphaMetric, AlphaMetric.alpha_id == Alpha.id)
+            .where(
+                Alpha.family_key.is_not(None),
+                Alpha.region == region,
+                Alpha.delay == delay,
+                Alpha.universe == universe,
+            )
+            .group_by(Alpha.family_key)
+        ).all()
+    )
+    valid_matrix_fields = set(
+        db.execute(
+            select(DataField.field_code)
+            .where(
+                DataField.region == region,
+                DataField.delay == delay,
+                DataField.field_type == "MATRIX",
+            )
+        ).scalars().all()
+    )
+    incomplete_families = [
+        fkey for fkey, count in sim_counts.items()
+        if 0 < count < sims_per_territory and family_field_code(str(fkey)) in valid_matrix_fields
+    ]
+
+    arm_shares = arms or {"exploit": 0.50, "random_stratified": 0.30, "plateau_fill": 0.20}
+    declared_exploit = int(total_simulations * arm_shares.get("exploit", 0.50))
+    declared_random = int(total_simulations * arm_shares.get("random_stratified", 0.30))
+    declared_plateau = total_simulations - declared_exploit - declared_random
+
+    if not incomplete_families:
+        exploit_share = arm_shares.get("exploit", 0.50) + arm_shares.get("plateau_fill", 0.20)
+        random_share = arm_shares.get("random_stratified", 0.30)
+        fill_share = 0.0
+    else:
+        exploit_share = arm_shares.get("exploit", 0.50)
+        random_share = arm_shares.get("random_stratified", 0.30)
+        fill_share = arm_shares.get("plateau_fill", 0.20)
+
+    exploit_budget = int(total_simulations * exploit_share)
+    random_budget = int(total_simulations * random_share)
+    plateau_budget = total_simulations - exploit_budget - random_budget
+
     tasks: list[AllocationTask] = []
     used_territory_keys: set[str] = set()
 
     # ------------------------------------------------------------------
-    # 1. Exploit Arm (50%)
+    # 1. Exploit Arm
     # ------------------------------------------------------------------
     suggestions: list[Suggestion] = []
     n_exploit_territories = max(1, exploit_budget // sims_per_territory) if total_simulations >= (2 * sims_per_territory) else 1
@@ -669,14 +706,14 @@ def plan_budget_allocation(
                 wrapper_shape=s.wrapper_shape,
                 horizon_band=s.horizon_band,
                 denominator=s.denominator,
-                target_simulations=sims_per_territory,
+                target_simulations=min(total_simulations, sims_per_territory),
                 reason=f"Exploit uncrowded research territory: {s.reason}",
                 posterior_score=None,
             )
         )
 
     # ------------------------------------------------------------------
-    # 2. Random Stratified Arm (30%) — 4 Crowding Quartiles (Protocol v2)
+    # 2. Random Stratified Arm — 4 Crowding Quartiles (Protocol v2)
     # ------------------------------------------------------------------
     all_fields = db.execute(
         select(DataField.field_code, DataField.user_count, Dataset.dataset_code)
@@ -755,24 +792,9 @@ def plan_budget_allocation(
             )
 
     # ------------------------------------------------------------------
-    # 3. Plateau Fill Arm (20%) & Closure (R2)
+    # 3. Plateau Fill Arm (requests full surface; create_alpha dedupes)
     # ------------------------------------------------------------------
-    if plateau_budget >= MIN_VIABLE_TERRITORY_SIMS:
-        # Bulk query existing simulations by family to prevent N+1 queries
-        sim_counts = dict(
-            db.execute(
-                select(Alpha.family_key, func.count(distinct(AlphaMetric.alpha_id)))
-                .join(AlphaMetric, AlphaMetric.alpha_id == Alpha.id)
-                .where(
-                    Alpha.family_key.is_not(None),
-                    Alpha.region == region,
-                    Alpha.delay == delay,
-                    Alpha.universe == universe,
-                )
-                .group_by(Alpha.family_key)
-            ).all()
-        )
-
+    if plateau_budget > 0 and incomplete_families:
         field_to_dataset = dict(
             db.execute(
                 select(DataField.field_code, Dataset.dataset_code)
@@ -781,46 +803,24 @@ def plan_budget_allocation(
             ).all()
         )
 
-        remaining_plateau = plateau_budget
-        for fkey, count in sim_counts.items():
-            if remaining_plateau <= 0:
-                break
-            if 0 < count < sims_per_territory:
-                needed = min(remaining_plateau, sims_per_territory - count)
-                fcode = family_field_code(str(fkey))
-                dscode = field_to_dataset.get(fcode, "fundamentals")
-                tasks.append(
-                    AllocationTask(
-                        arm="plateau_fill",
-                        field_code=fcode,
-                        dataset_code=dscode,
-                        operator_family="ts_zscore",
-                        wrapper_shape="rank",
-                        horizon_band="medium",
-                        denominator=default_denom,
-                        target_simulations=needed,
-                        reason=f"Complete surface for promising family {fkey} ({count}/{sims_per_territory} simulated)",
-                    )
-                )
-                remaining_plateau -= needed
-
-        # If plateau budget remains, allocate reserve whole-surface tasks
-        if remaining_plateau >= MIN_VIABLE_TERRITORY_SIMS and suggestions:
-            reserve_sug = suggestions[-1]
+        for fkey in incomplete_families:
+            count = sim_counts.get(fkey, 0)
+            fcode = family_field_code(str(fkey))
+            dscode = field_to_dataset.get(fcode, "fundamentals")
             tasks.append(
                 AllocationTask(
                     arm="plateau_fill",
-                    field_code=reserve_sug.field_code,
-                    dataset_code=reserve_sug.dataset_code,
-                    operator_family="ts_delta",
-                    wrapper_shape="zscore",
-                    horizon_band="long",
+                    field_code=fcode,
+                    dataset_code=dscode,
+                    operator_family="ts_zscore",
+                    wrapper_shape="rank",
+                    horizon_band="medium",
                     denominator=default_denom,
-                    target_simulations=remaining_plateau,
-                    reason=f"Plateau fill budget allocated to reserve candidate {reserve_sug.field_code}",
+                    target_simulations=sims_per_territory,
+                    reason=f"Complete surface for promising family {fkey} ({count}/{sims_per_territory} simulated)",
                 )
             )
-            remaining_plateau = 0
+            break
 
     # ------------------------------------------------------------------
     # Exact Arithmetic Closure (R2)
@@ -853,7 +853,7 @@ def plan_budget_allocation(
         for t in sorted(tasks, key=lambda x: x.target_simulations, reverse=True):
             if excess <= 0:
                 break
-            can_reduce = max(0, t.target_simulations - (MIN_VIABLE_TERRITORY_SIMS if (t.arm != "plateau_fill" and len(tasks) > 1) else 1))
+            can_reduce = max(0, t.target_simulations - (MIN_VIABLE_TERRITORY_SIMS if len(tasks) > 1 else 1))
             reduction = min(excess, can_reduce)
             t.target_simulations -= reduction
             excess -= reduction
@@ -868,9 +868,9 @@ def plan_budget_allocation(
 
     return BudgetPlan(
         total_simulations=total_simulations,
-        exploit_simulations=exploit_budget,
-        random_stratified_simulations=random_budget,
-        plateau_fill_simulations=plateau_budget,
+        exploit_simulations=declared_exploit,
+        random_stratified_simulations=declared_random,
+        plateau_fill_simulations=declared_plateau,
         tasks=tasks,
         quartile_boundaries=quartile_boundaries,
         seed=seed,

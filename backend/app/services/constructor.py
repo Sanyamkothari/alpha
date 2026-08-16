@@ -630,11 +630,21 @@ def expand(
             rejected += rej
             out.extend(surface)
 
-    log.info(
-        "family_expanded",
-        family=family_key,
-        emitted=len(out),
-        rejected=rejected,
-        truncated=False,
-    )
+    if max_candidates > 0 and len(out) == 0:
+        log.warning(
+            "family_expanded_zero_candidates",
+            family=family_key,
+            emitted=0,
+            rejected=rejected,
+            max_candidates=max_candidates,
+            surface_size=surface_size,
+        )
+    else:
+        log.info(
+            "family_expanded",
+            family=family_key,
+            emitted=len(out),
+            rejected=rejected,
+            truncated=False,
+        )
     return out

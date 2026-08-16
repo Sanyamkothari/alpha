@@ -97,6 +97,7 @@ class Verdict:
     dsr_passed: bool | None = None
     gate_mode: str = "COLD_START_FALLBACK"
     subperiod_passed: bool | None = None
+    redundant_with: int | None = None
     reasons: list[str] = dc_field(default_factory=list)
 
 
@@ -109,16 +110,8 @@ def check_portfolio_correlation(
         return False, None
 
     if portfolio is None:
-        portfolio = list(
-            db.execute(
-                select(Alpha).where(
-                    Alpha.status.in_([AlphaStatus.SUBMITTED.value, AlphaStatus.PASSED.value]),
-                    Alpha.id != alpha_id,
-                )
-            )
-            .scalars()
-            .all()
-        )
+        from app.services.correlation import submitted_portfolio
+        portfolio = submitted_portfolio(db, exclude_alpha_id=alpha_id)
 
     cand_features = candidate.feature_json or {}
     cand_struct = cand_features.get("structural_hash")
@@ -268,15 +261,8 @@ def evaluate(
     bar = haircut_bar(max(simulated_count, 1))
 
     if portfolio is None:
-        portfolio = list(
-            db.execute(
-                select(Alpha).where(
-                    Alpha.status.in_([AlphaStatus.SUBMITTED.value, AlphaStatus.PASSED.value])
-                )
-            )
-            .scalars()
-            .all()
-        )
+        from app.services.correlation import submitted_portfolio
+        portfolio = submitted_portfolio(db)
 
     pnl_store = pnl_store or get_pnl_store()
 
@@ -289,7 +275,7 @@ def evaluate(
     use_dsr = max_slice_trials >= MIN_TRIALS_FOR_DSR
     gate_mode = "DSR" if use_dsr else "COLD_START_FALLBACK"
 
-    verdicts: list[Verdict] = []
+    verdict_map: dict[int, tuple[SurfacePoint, Verdict, bool]] = {}
 
     for point in surface:
         reasons: list[str] = []
@@ -369,42 +355,81 @@ def evaluate(
                     and (point.fitness is None or point.fitness >= 1.0)
                 )
 
-        # Correlation gate (empirical with structural fallback)
+        # Correlation gate (empirical against confirmed submissions with structural fallback)
         is_corr, corr_collision, max_corr = check_portfolio_empirical_correlation(
             db, point.alpha_id, pnl_store=pnl_store, portfolio=portfolio
         )
         if is_corr and corr_collision:
             reasons.append(corr_collision)
 
-        promoted = clears and is_plateau and above_bar and dsr_passed and subperiod_passed and not is_corr
+        survives = clears and is_plateau and above_bar and dsr_passed and subperiod_passed and not is_corr
 
-        verdicts.append(
-            Verdict(
-                alpha_id=point.alpha_id,
-                expression=point.expression,
-                sharpe=point.sharpe,
-                fitness=point.fitness,
-                neighbour_median_sharpe=neigh_median,
-                plateau_ratio=ratio,
-                is_plateau=is_plateau,
-                neighbours_simulated=len(values),
-                neighbours_possible=possible,
-                clears_bar=clears,
-                haircut_bar=bar,
-                is_correlated=is_corr,
-                correlation_collision=corr_collision,
-                promoted=promoted,
-                family_size=simulated_count,
-                dsr=dsr_val,
-                dsr_passed=dsr_passed,
-                gate_mode=gate_mode,
-                subperiod_passed=subperiod_passed,
-                reasons=reasons,
-            )
+        v = Verdict(
+            alpha_id=point.alpha_id,
+            expression=point.expression,
+            sharpe=point.sharpe,
+            fitness=point.fitness,
+            neighbour_median_sharpe=neigh_median,
+            plateau_ratio=ratio,
+            is_plateau=is_plateau,
+            neighbours_simulated=len(values),
+            neighbours_possible=possible,
+            clears_bar=clears,
+            haircut_bar=bar,
+            is_correlated=is_corr,
+            correlation_collision=corr_collision,
+            promoted=False,  # Assigned via intra-family representative selection
+            family_size=simulated_count,
+            dsr=dsr_val,
+            dsr_passed=dsr_passed,
+            gate_mode=gate_mode,
+            subperiod_passed=subperiod_passed,
+            redundant_with=None,
+            reasons=reasons,
         )
+        verdict_map[point.alpha_id] = (point, v, survives)
 
+    # Intra-family redundancy & representative selection (Invariant 8: neighbourhood strength over peak)
+    # Group by structure: (ts, cs, group, neutralization, truncation)
+    slice_groups: dict[tuple, list[tuple[SurfacePoint, Verdict, bool]]] = defaultdict(list)
+    for point in surface:
+        if point.alpha_id in verdict_map:
+            slice_groups[point.structure].append(verdict_map[point.alpha_id])
+
+    for struct_key, items in slice_groups.items():
+        survivors = [item for item in items if item[2]]
+        if survivors:
+            # Rank candidate representatives by:
+            # 1. neighbour_median_sharpe (highest)
+            # 2. plateau_ratio (highest)
+            # 3. decay (lowest — cheaper turnover)
+            # 4. raw sharpe (highest — last tiebreaker)
+            survivors.sort(
+                key=lambda item: (
+                    item[1].neighbour_median_sharpe if item[1].neighbour_median_sharpe is not None else -999,
+                    item[1].plateau_ratio if item[1].plateau_ratio is not None else -999,
+                    -(item[0].decay if item[0].decay is not None else 0),
+                    item[1].sharpe if item[1].sharpe is not None else -999,
+                ),
+                reverse=True,
+            )
+            rep_point, rep_verdict, _ = survivors[0]
+            rep_verdict.promoted = True
+            rep_verdict.redundant_with = None
+
+            for other_point, other_verdict, _ in survivors[1:]:
+                other_verdict.promoted = False
+                other_verdict.redundant_with = rep_point.alpha_id
+                other_verdict.reasons.append(f"redundant with ridge representative #{rep_point.alpha_id}")
+
+    verdicts = [v for _, v, _ in verdict_map.values()]
     verdicts.sort(
-        key=lambda v: (v.promoted, v.sharpe if v.sharpe is not None else -99), reverse=True
+        key=lambda v: (
+            v.promoted,
+            v.neighbour_median_sharpe if v.neighbour_median_sharpe is not None else -99,
+            v.sharpe if v.sharpe is not None else -99,
+        ),
+        reverse=True,
     )
     log.info(
         "family_evaluated",

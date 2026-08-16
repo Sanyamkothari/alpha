@@ -9,11 +9,12 @@ Executes unattended overnight multi-territory simulation campaigns with:
 
 from __future__ import annotations
 
+import math
 from datetime import datetime
 from typing import Callable
 
 import structlog
-from sqlalchemy import select
+from sqlalchemy import distinct, func, select
 from sqlalchemy.orm import Session
 
 from app.db import session_scope
@@ -23,6 +24,7 @@ from app.models.results import AlphaMetric
 from app.services.allocator import plan_budget_allocation
 from app.services.alpha_library import AlphaSettings, create_alpha
 from app.services.constructor import Candidate, FamilySpec, expand
+from app.services.correlation import ensure_alpha_pnl
 from app.services.simulation_runner import pending_alpha_ids, run_batch
 
 log = structlog.get_logger("campaign_runner")
@@ -111,6 +113,10 @@ def execute_campaign(
         if not campaign:
             raise ValueError(f"Campaign #{campaign_id} not found")
         campaign.status = "running"
+        config = campaign.config_json or {}
+        camp_region = config.get("region", "USA")
+        camp_universe = config.get("universe", "TOP3000")
+        camp_delay = int(config.get("delay", 1))
         db.commit()
 
     total_simulated = 0
@@ -161,19 +167,48 @@ def execute_campaign(
                 mechanism=f"Campaign Task #{task_id} ({task_arm})",
                 grid_mode="standard",
             )
-            settings = AlphaSettings(region="USA", universe="TOP3000", delay=1)
+            settings = AlphaSettings(region=camp_region, universe=camp_universe, delay=camp_delay)
             family_key = spec.family_key(settings)
 
-            # 1. Expand Candidates (always expand at least 1 full 49-point surface for plateau integrity)
+            # 1. Expand Candidates (always round max_candidates UP to whole surface size)
+            surface_size = 49
+            expansion_candidates = math.ceil((task_budget or surface_size) / surface_size) * surface_size
             with session_scope() as db:
                 candidates = expand(
                     db,
                     spec,
                     base_settings=settings,
-                    max_candidates=max(task_budget or 49, 49),
+                    max_candidates=expansion_candidates,
                     arm=task_arm,
                     campaign_task_id=task_id,
                 )
+
+            # Check if expansion produced zero candidates (C3)
+            if len(candidates) == 0:
+                with session_scope() as db:
+                    existing_simulated = (
+                        db.scalar(
+                            select(func.count(distinct(AlphaMetric.alpha_id)))
+                            .join(Alpha, Alpha.id == AlphaMetric.alpha_id)
+                            .where(Alpha.family_key == family_key)
+                        )
+                        or 0
+                    )
+                    t = db.get(CampaignTask, task_id)
+                    if t:
+                        if existing_simulated >= surface_size:
+                            t.status = "skipped"
+                            t.error = "surface already complete"
+                        else:
+                            t.status = "failed"
+                            t.error = "expansion produced no candidates"
+                        db.commit()
+                log.warning(
+                    "campaign_task_zero_candidates",
+                    task_id=task_id,
+                    family_key=family_key,
+                )
+                continue
 
             # 2. Save Candidates into Alpha Library
             created_count = 0
@@ -203,11 +238,40 @@ def execute_campaign(
                 if ids:
                     batch_res = run_batch(ids)
                     sim_count = batch_res.simulated
+                    pass_count = batch_res.passed_all_checks
+                    # Post-batch PnL fetch for passing alphas
                     with session_scope() as db:
                         for aid in ids:
                             m = db.execute(select(AlphaMetric).where(AlphaMetric.alpha_id == aid)).scalars().first()
                             if m and m.passed_all_checks:
-                                pass_count += 1
+                                try:
+                                    ensure_alpha_pnl(db, aid, allow_remote_fetch=True)
+                                except Exception as exc:
+                                    log.warning("pnl_fetch_failed", alpha_id=aid, error=str(exc))
+                elif created_count == 0:
+                    with session_scope() as db:
+                        existing_simulated = (
+                            db.scalar(
+                                select(func.count(distinct(AlphaMetric.alpha_id)))
+                                .join(Alpha, Alpha.id == AlphaMetric.alpha_id)
+                                .where(Alpha.family_key == family_key)
+                            )
+                            or 0
+                        )
+                        t = db.get(CampaignTask, task_id)
+                        if t:
+                            if existing_simulated >= surface_size:
+                                t.status = "skipped"
+                                t.error = "surface already complete"
+                            else:
+                                t.status = "completed"
+                            db.commit()
+                    log.info(
+                        "campaign_task_already_simulated",
+                        task_id=task_id,
+                        family_key=family_key,
+                    )
+                    continue
 
             # 4. Checkpoint task and campaign status in SQLite
             with session_scope() as db:
@@ -216,9 +280,17 @@ def execute_campaign(
                     t.status = "completed"
                     t.alphas_simulated = sim_count
                     t.alphas_passed = pass_count
+                db.flush()
                 c = db.get(Campaign, campaign_id)
                 if c:
-                    c.budget_completed += sim_count
+                    c.budget_completed = (
+                        db.scalar(
+                            select(func.sum(CampaignTask.alphas_simulated)).where(
+                                CampaignTask.campaign_id == campaign_id
+                            )
+                        )
+                        or 0
+                    )
                 db.commit()
 
             total_simulated += sim_count
@@ -249,6 +321,14 @@ def execute_campaign(
         c = db.get(Campaign, campaign_id)
         if c:
             c.status = "completed"
+            c.budget_completed = (
+                db.scalar(
+                    select(func.sum(CampaignTask.alphas_simulated)).where(
+                        CampaignTask.campaign_id == campaign_id
+                    )
+                )
+                or 0
+            )
             db.commit()
 
     log.info(
