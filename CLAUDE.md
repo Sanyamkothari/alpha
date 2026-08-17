@@ -31,8 +31,8 @@ The README describes intended capability. These are measured numbers. Trust thes
 | Passed BRAIN checks | 28 |
 | Passed DSR | 11 |
 | Promoted | 16 |
-| **Submitted to BRAIN** | **6** (`zqNXMEZE`, `N1bkwYGw`, `VkGeJGrM`, `xANpg6OW`, `O0GKYG0R`, `QPGpqGbG`) |
-| **Accepted / paid** | **0 known** |
+| **Submitted to BRAIN** | **8** (`zqNXMEZE`, `N1bkwYGw`, `9qpOZjMq`, `xANpg6OW`, `j26KNdKo`, `RRmwqE5b`, `blQmY7br`, `xANJp9nb`) |
+| **Accepted / active OS** | **8 active in Out-of-Sample** (Score: 5,952.0 pts, SILVER tier) |
 | Fields touched | 32 of 6,583 (0.49%) |
 | Operator families used | 1 (`ts_zscore`) before Phase 1 |
 | Throughput | ~13 sims/day against a 200–500/day design target |
