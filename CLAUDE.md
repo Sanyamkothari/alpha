@@ -31,8 +31,8 @@ The README describes intended capability. These are measured numbers. Trust thes
 | Passed BRAIN checks | 28 |
 | Passed DSR | 11 |
 | Promoted | 16 |
-| **Submitted to BRAIN** | **8** (`zqNXMEZE`, `N1bkwYGw`, `9qpOZjMq`, `xANpg6OW`, `j26KNdKo`, `RRmwqE5b`, `blQmY7br`, `xANJp9nb`) |
-| **Accepted / active OS** | **8 active in Out-of-Sample** (Score: 5,952.0 pts, SILVER tier) |
+| **Submitted to BRAIN** | **9** (`zqNXMEZE`, `N1bkwYGw`, `9qpOZjMq`, `xANpg6OW`, `j26KNdKo`, `RRmwqE5b`, `blQmY7br`, `LLG0Y2p9`, `QP7Znjbg`) |
+| **Accepted / active OS** | **9 active in Out-of-Sample** (Score: 7,913.0 pts, SILVER tier, 2,087 pts to GOLD) |
 | Fields touched | 32 of 6,583 (0.49%) |
 | Operator families used | 1 (`ts_zscore`) before Phase 1 |
 | Throughput | ~13 sims/day against a 200–500/day design target |
@@ -91,6 +91,15 @@ No billing, accounts, multi-user features, crowding map, network layer, fertilit
 
 ```
 docs/
+├── BRAIN_CONSULTANT_ELIGIBILITY_FAQ.md consultant eligibility, onboarding steps & legal checklist
+├── BRAIN_KNOWLEDGE_BASE.md      8 platform submission gates, failure fixes & operator math
+├── FINANCE_BASICS_GUIDE.md      section 5.5 finance basics, long/short equity & CAPM (alpha vs beta)
+├── QUANTITATIVE_ANALYSIS_GUIDE.md section 4.5 statistical concepts, pillars & overfitting prevention
+├── HOW_TO_USE_THE_BRAIN_PLATFORM.md section 3.5 fast expressions, settings & operators
+├── METHODS_OF_ANALYZING_THE_STOCK_MARKET.md section 2.5 fundamental, technical & quant analysis
+├── RESEARCH_CONSULTANT_GUIDE.md section 1.5 Research Consultant onboarding & compensation
+├── WHAT_IS_WORLDQUANT_CHALLENGE_AND_HOW_IT_IS_SCORED.md support article FAQ & scoring breakdown
+├── WORLDQUANT_CHALLENGE_GUIDELINES.md official competition rules & compliance mapping
 ├── GOLD_LEVEL_GUIDE.md          10K Gold level targets, daily points & expansion rules
 ├── PHASE1_OPERATING_GUIDE.md    what the human does weekly, and stop conditions
 ├── INVENTORY.md                 ground-truth survey of code and data

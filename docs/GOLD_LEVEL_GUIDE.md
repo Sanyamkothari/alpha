@@ -118,7 +118,7 @@ A single proven fundamental anomaly or economic thesis can be systematically exp
 The engine enforces an empirical Pearson correlation gate ($r < 0.70$) across all active submissions:
 
 | # | Local DB ID | BRAIN ID | Expression | Lookback & Decay | Sharpe | Fitness | Turnover | Status |
-| :- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
+| :- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
 | **1** | [`#243`](file:///Users/sanya/Projects/alpha/database/wq.db) | `zqNXMEZE` | `rank(ts_zscore(divide(ts_backfill(liabilities,120),cap),5))` | Window 5d, Decay 4 | **1.91** | **1.00** | **58.25%** | **SUBMITTED (OS)** |
 | **2** | [`#2558`](file:///Users/sanya/Projects/alpha/database/wq.db) | `N1bkwYGw` | `rank(ts_zscore(divide(ts_backfill(max_reported_pretax_profit_quarterly_estimate,120),cap),63))` | Window 63d, Decay 0 | **1.71** | **1.01** | **22.81%** | **SUBMITTED (OS)** |
 | **3** | [`#4102`](file:///Users/sanya/Projects/alpha/database/wq.db) | `9qpOZjMq` | `rank(ts_zscore(divide(ts_backfill(anl4_fs_detail_estimates_basic_qf_delay1_v4_nd_cfps_high,120),cap),63))` | Window 63d, Decay 0 | **1.68** | **1.05** | **23.77%** | **SUBMITTED (OS)** |
@@ -126,23 +126,25 @@ The engine enforces an empirical Pearson correlation gate ($r < 0.70$) across al
 | **5** | [`#2569`](file:///Users/sanya/Projects/alpha/database/wq.db) | `j26KNdKo` | `rank(ts_zscore(divide(ts_backfill(max_reported_pretax_profit_quarterly_estimate,120),cap),252))` | Window 252d, Decay 16 | **1.43** | **1.02** | **4.47%** | **SUBMITTED (OS)** |
 | **6** | [`#5178`](file:///Users/sanya/Projects/alpha/database/wq.db) | `RRmwqE5b` | `rank(ts_zscore(divide(ts_backfill(anl4_fs_detail_estimate_1qf_v4_nd_sh_equity_mean,120),cap),63))` | Window 63d, Decay 4 | **1.30** | **1.03** | **14.02%** | **SUBMITTED (OS)** |
 | **7** | [`#5179`](file:///Users/sanya/Projects/alpha/database/wq.db) | `blQmY7br` | `rank(ts_zscore(divide(ts_backfill(ebit,120),cap),63))` | Window 63d, Decay 8 | **1.35** | **1.05** | **10.59%** | **SUBMITTED (OS)** |
-| **8** | [`#5180`](file:///Users/sanya/Projects/alpha/database/wq.db) | `xANJp9nb` | `rank(ts_zscore(divide(ts_backfill(anl4_afv4_eps_mean,120),close),252))` | Window 252d, Decay 16 | **1.77** | **1.43** | **4.55%** | **SUBMITTED (OS)** |
+| **8** | [`#5180`](file:///Users/sanya/Projects/alpha/database/wq.db) | `LLG0Y2p9` | `rank(ts_zscore(divide(ts_backfill(anl4_afv4_eps_mean,120),close),252))` | Window 252d, Decay 16 | **1.77** | **1.43** | **4.55%** | **SUBMITTED (OS)** |
+| **9** | [`#5188`](file:///Users/sanya/Projects/alpha/database/wq.db) | `QP7Znjbg` | `rank(ts_zscore(divide(ts_backfill(adj_net_income_avg,120),cap),126))` | Window 126d, Decay 8 | **1.63** | **1.19** | **7.35%** | **SUBMITTED (OS)** |
 
-### 3.1 Exact 8x8 Pairwise Empirical Correlation Matrix
+### 3.1 Exact 9x9 Pairwise Empirical Correlation Matrix
 *(Computed over 1,236 common historical trading days cached in [`database/pnl/`](file:///Users/sanya/Projects/alpha/database/pnl)):*
 
 ```
-             Alpha #243    Alpha #2558   Alpha #4102   Alpha #5177   Alpha #2569   Alpha #5178   Alpha #5179   Alpha #5180  
-Alpha #243      1.0000        0.1640        0.4789        0.0447        0.0210        0.6512       -0.0451        0.3484
-Alpha #2558     0.1640        1.0000        0.4947        0.5247        0.6484        0.2921        0.6690        0.4062
-Alpha #4102     0.4789        0.4947        1.0000        0.3799        0.3443        0.6686        0.4342        0.6090
-Alpha #5177     0.0447        0.5247        0.3799        1.0000        0.4294        0.1517        0.6502        0.3525
-Alpha #2569     0.0210        0.6484        0.3443        0.4294        1.0000        0.1712        0.5841        0.5081
-Alpha #5178     0.6512        0.2921        0.6686        0.1517        0.1712        1.0000        0.0909        0.6539
-Alpha #5179    -0.0451        0.6690        0.4342        0.6502        0.5841        0.0909        1.0000        0.3889
-Alpha #5180     0.3484        0.4062        0.6090        0.3525        0.5081        0.6539        0.3889        1.0000
+             zqNXMEZE  N1bkwYGw  9qpOZjMq  xANpg6OW  j26KNdKo  RRmwqE5b  blQmY7br  LLG0Y2p9  QP7Znjbg
+zqNXMEZE       1.0000    0.1640    0.4789    0.0447    0.0210    0.6512   -0.0451    0.3484    0.1861
+N1bkwYGw       0.1640    1.0000    0.4948    0.5247    0.6484    0.2921    0.6690    0.4062    0.6512
+9qpOZjMq       0.4789    0.4948    1.0000    0.3799    0.3443    0.6687    0.4342    0.6091    0.5833
+xANpg6OW       0.0447    0.5247    0.3799    1.0000    0.4294    0.1517    0.6502    0.3525    0.5032
+j26KNdKo       0.0210    0.6484    0.3443    0.4294    1.0000    0.1712    0.5841    0.5081    0.6571
+RRmwqE5b       0.6512    0.2921    0.6687    0.1517    0.1712    1.0000    0.0909    0.6539    0.4522
+blQmY7br      -0.0451    0.6690    0.4342    0.6502    0.5841    0.0909    1.0000    0.3889    0.6758
+LLG0Y2p9       0.3484    0.4062    0.6091    0.3525    0.5081    0.6539    0.3889    1.0000    0.6776
+QP7Znjbg       0.1861    0.6512    0.5833    0.5032    0.6571    0.4522    0.6758    0.6776    1.0000
 ```
-* **Every pair is $< 0.70$**, ensuring zero self-correlation failure penalties.
+* **Every pair is $< 0.70$** (Max pairwise correlation: **`0.6776`**), ensuring zero self-correlation failure penalties.
 
 ---
 
