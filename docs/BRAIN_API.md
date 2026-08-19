@@ -62,7 +62,7 @@ claim in the community-sourced sections below.
 | `GET /data-fields/{field_id}` | Individual field definition, matrix type, coverage, and user statistics |
 | `GET /operators` | **66 operators** — flat JSON array of `{name, category, scope, definition, description, level}` |
 | `GET /alphas/{alpha_id}` | Complete alpha definition with `stage`, `status`, `dateSubmitted`, `is` (in-sample metrics + checks), and `os` blocks |
-| `GET /alphas/{alpha_id}/recordsets/daily-pnl` | Date-aligned daily PnL series: `{"schema": ..., "records": [["YYYY-MM-DD", pnl_val], ...]}` |
+| `GET /alphas/{alpha_id}/recordsets/daily-pnl` | Date-aligned daily PnL series: `{"schema": ..., "records": [["YYYY-MM-DD", pnl_val], ...]}`. **Semantics Note:** BRAIN daily-pnl recordsets can be cumulative PnL curves or daily returns. The engine auto-detects cumulative curves (lag-1 autocorrelation > 0.99) and differences them at the storage boundary (`save_pnl(..., series_kind="auto")`) to recover stationary daily returns $\Delta P_t$. Standing Sharpe reconciliation (`verify_pnl_reconciliation`) recomputes $\text{SR} = \frac{\mu}{\sigma}\sqrt{252}$ and ensures $|\text{SR}_{\text{recomputed}} - \text{SR}_{\text{reported}}| \le 0.10$. Any unreconciled series fails closed and blocks promotion. |
 | `GET /alphas/{alpha_id}/recordsets/turnover` | Date-aligned daily Turnover series: `{"schema": ..., "records": [["YYYY-MM-DD", turnover_pct], ...]}` |
 | `GET /users/self/consultant` | **403 Forbidden** on Tutorial accounts (unlocks consultant contract status and payout management) |
 | `GET /alphas/{alpha_id}/correlations/prod` | **403 Forbidden** on Tutorial accounts (production pool correlation is restricted to higher consultant tiers) |

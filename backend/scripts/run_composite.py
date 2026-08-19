@@ -46,6 +46,10 @@ def save(candidates: list[Candidate]) -> dict[str, int]:
     return counts
 
 
+from scripts._cli import cli_main
+
+
+@cli_main
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--primary", required=True, help="primary field code")
@@ -61,7 +65,7 @@ def main() -> int:
     ap.add_argument("--secondary-denom", default=None)
     ap.add_argument("--mechanism", default="")
     ap.add_argument("--weight", type=float, default=0.5)
-    ap.add_argument("--arm", choices=["exploit", "random_stratified", "plateau_fill"], default=None)
+    ap.add_argument("--arm", choices=["exploit", "random_stratified", "plateau_fill", "composite"], default="composite")
     ap.add_argument("--max-candidates", type=int, default=49)
     ap.add_argument("--simulate", type=int, default=0)
     ap.add_argument("--region", default="USA")
@@ -69,6 +73,7 @@ def main() -> int:
     ap.add_argument("--delay", type=int, default=1)
     args = ap.parse_args()
 
+    settings = AlphaSettings(region=args.region, universe=args.universe, delay=args.delay)
     spec = CompositeSpec(
         primary_field=args.primary,
         secondary_field=args.secondary,
@@ -79,9 +84,8 @@ def main() -> int:
         mechanism=args.mechanism or f"{args.mode} composite: {args.primary}+{args.secondary}",
         weight=args.weight,
     )
-
-    settings = AlphaSettings(region=args.region, universe=args.universe, delay=args.delay)
     family_key = spec.family_key(settings)
+
 
     if args.simulate:
         from app.services.brain import BrainClient, SimulationSettings

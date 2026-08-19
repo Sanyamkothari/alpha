@@ -5,6 +5,11 @@ never sees this code: it picks the *field* and says why the field should predict
 returns; everything from there is deterministic AST assembly, so every emitted
 expression is valid by construction and hallucination is impossible.
 
+Stratified Sampling:
+Guarantees every operator family (ts_transform) and depth layer receives equal
+priority and coverage across the budget before repeating structural variants for
+the same operator.
+
 Two design choices worth stating, both driven by Rule 5:
 
 **The grid is dense where plateau analysis reads it.** Judging a candidate by its
@@ -17,28 +22,17 @@ decay and truncation move Sharpe by 0.3–0.6 on an unchanged expression, which 
 the single biggest reason the first 51 alphas failed: each idea was sampled at
 exactly one settings point. They are grid axes here, and they ride on the alpha
 row so the simulation runner reproduces them exactly.
-
-Depth-2 templates
------------------
-Depth-1 wraps a single ts-operator around the base node.  Depth-2 nests two
-time-series operators — e.g. ``ts_delta(ts_rank(x, inner), outer)`` — which
-captures *acceleration* and *regime-change* patterns that depth-1 cannot express.
-The inner window is always shorter than the outer to avoid redundant compositions.
-
-Multi-field families
---------------------
-When ``secondary_field`` is set, the constructor also emits ``ts_corr``
-variants — time-series correlation between the primary and secondary field.
-This opens an entirely new signal class (cross-field relationships) that the
-depth-1 template cannot reach.
 """
 
 from __future__ import annotations
 
+from collections import defaultdict
 import itertools
+import random
 from collections.abc import Iterable
 from dataclasses import dataclass
 from dataclasses import field as dc_field
+from typing import Any, Callable
 
 import structlog
 from sqlalchemy.orm import Session
@@ -52,13 +46,17 @@ from app.validator.validator import normalize
 
 log = structlog.get_logger("constructor")
 
-# Standard 7x7 grid (Task 1: default 49 alphas per territory)
+# Standard 7x7 grid (default 49 alphas per territory)
 STANDARD_WINDOWS: tuple[int, ...] = (5, 10, 20, 40, 60, 120, 250)
 STANDARD_DECAYS: tuple[int, ...] = (0, 1, 2, 4, 6, 8, 16)
 
 # Wide grid (opt-in via --grid wide)
 WIDE_WINDOWS: tuple[int, ...] = (5, 10, 22, 63, 126, 252)
 WIDE_DECAYS: tuple[int, ...] = (0, 4, 8, 16)
+
+# Coarse 3x3 screening grid (27 sims per 3-level sweep)
+COARSE_WINDOWS: tuple[int, ...] = (5, 20, 60)
+COARSE_DECAYS: tuple[int, ...] = (0, 4, 8)
 
 DEFAULT_WINDOWS: tuple[int, ...] = STANDARD_WINDOWS
 DEFAULT_DECAYS: tuple[int, ...] = STANDARD_DECAYS
@@ -93,12 +91,12 @@ DEFAULT_GROUPS: tuple[str | None, ...] = (None, "sector", "industry", "subindust
 
 DEFAULT_NEUTRALIZATIONS: tuple[str, ...] = ("SUBINDUSTRY", "INDUSTRY", "SECTOR", "MARKET", "NONE")
 
-DEFAULT_TRUNCATIONS: tuple[float, ...] = (0.08,)
+DEFAULT_TRUNCATIONS: tuple[float, ...] = (0.01, 0.08)
 
-# Universes to sweep — each is a distinct alpha on BRAIN.
+# Universes to sweep
 DEFAULT_UNIVERSES: tuple[str, ...] = ("TOP3000",)
 
-# Map field update frequency → backfill days.
+# Map field update frequency -> backfill days.
 FREQUENCY_BACKFILL: dict[str, int | None] = {
     "daily": None,       # no backfill — data arrives every day
     "weekly": 10,
@@ -107,6 +105,12 @@ FREQUENCY_BACKFILL: dict[str, int | None] = {
     "annual": 252,
     "unknown": 120,      # conservative fallback
 }
+
+
+@dataclass(frozen=True)
+class BudgetPolicy:
+    max_surfaces: int = 8
+    settings_per_structure: int = 1  # >1 only for confirmed structure sweeps
 
 
 @dataclass(frozen=True)
@@ -123,173 +127,122 @@ class GridAxes:
     universes: tuple[str, ...] = DEFAULT_UNIVERSES
 
 
-def derive_horizon_band(window: int | float | None) -> str | None:
-    """Derive horizon band from lookback window duration in trading days.
-
-    Bands:
-    - short: 1–10d (e.g. 5, 10)
-    - medium: 11–63d (e.g. 20, 22, 40, 60, 63)
-    - long: 64d+ (e.g. 120, 126, 250, 252)
-    """
-    if window is None:
+def derive_horizon_band(window: int | None) -> str | None:
+    """Map lookback window to canonical horizon band (short: 1–10d, medium: 11–63d, long: 64d+)."""
+    if window is None or window <= 0:
         return None
-    try:
-        w = int(window)
-    except (ValueError, TypeError):
-        return None
-    if 1 <= w <= 10:
+    if window <= 10:
         return "short"
-    if 11 <= w <= 63:
+    if window <= 63:
         return "medium"
-    if w >= 64:
-        return "long"
-    return None
+    return "long"
 
 
 @dataclass(frozen=True)
 class TerritorySignature:
-    """Normalized territory signature identifying research coordinates."""
-
     field_code: str
     operator_family: str
-    horizon_band: str | None  # 'short' | 'medium' | 'long' | None (None sweeps all horizons)
+    horizon_band: str | None
     region: str
     universe: str
     delay: int
 
 
-def parse_territory_signature(
-    key_or_spec: str | FamilySpec,
-    *,
-    default_region: str = "USA",
-    default_universe: str = "TOP3000",
-    default_delay: int = 1,
-) -> TerritorySignature:
-    """Parse any family_key, territory_key, or FamilySpec into a normalized TerritorySignature.
-
-    Handles:
-    - Canonical territory keys: {field}:{op}:{horizon}@{region}/{universe}/d{delay}
-    - Production candidate keys: {field}/{denom}:{op}:{wrap}:{horizon}@{region}/{universe}/d{delay}
-    - Legacy candidate keys: {field}/{denom}:{op}:{wrap}@{region}/{universe}/d{delay} (horizon=None -> sweeps all)
-    - Legacy single-family keys: {field}/{denom}@{region}/{universe}/d{delay} (horizon=None -> sweeps all)
-    - Composite keys: composite:{mechanism}:{f1}+{f2}@{region}/{universe}/d{delay}
-    """
-    if isinstance(key_or_spec, FamilySpec):
-        return TerritorySignature(
-            field_code=key_or_spec.field_code,
-            operator_family=key_or_spec.operator_family or "ts_zscore",
-            horizon_band=key_or_spec.horizon_band,
-            region=default_region,
-            universe=default_universe,
-            delay=default_delay,
-        )
-
-    s = str(key_or_spec).strip()
-    region, universe, delay = default_region, default_universe, default_delay
-    if "@" in s:
-        left, right = s.split("@", 1)
-        sim_parts = right.split("/")
-        if len(sim_parts) >= 1 and sim_parts[0]:
-            region = sim_parts[0]
-        if len(sim_parts) >= 2 and sim_parts[1]:
-            universe = sim_parts[1]
-        if len(sim_parts) >= 3 and sim_parts[2].startswith("d"):
-            try:
-                delay = int(sim_parts[2][1:])
-            except ValueError:
-                pass
-    else:
-        left = s
-
-    colon_parts = [p.strip() for p in left.split(":") if p.strip()]
-    if not colon_parts:
-        return TerritorySignature("unknown", "ts_zscore", None, region, universe, delay)
-
-    first_seg = colon_parts[0]
-    if first_seg == "composite" and len(colon_parts) >= 3:
-        field_part = colon_parts[2].split("+")[0]
-    else:
-        field_part = first_seg.split("/")[0]
-
-    field_code = field_part.strip() or "unknown"
-
-    op_family = "ts_zscore"
-    for part in colon_parts[1:]:
-        if part in DEFAULT_TS_TRANSFORMS or part.startswith("ts_"):
-            op_family = part
-            break
-
-    horizon_band = None
-    for part in colon_parts[1:]:
-        if part in {"short", "medium", "long"}:
-            horizon_band = part
-            break
-
-    return TerritorySignature(
-        field_code=field_code,
-        operator_family=op_family,
-        horizon_band=horizon_band,
-        region=region,
-        universe=universe,
-        delay=delay,
-    )
-
-
 def canonical_territory_key(
     field_code: str,
     operator_family: str,
-    horizon_band: str,
+    horizon_band: str | None,
     region: str = "USA",
     universe: str = "TOP3000",
     delay: int = 1,
 ) -> str:
-    """Canonical territory identity: field x operator_family x horizon_band x simulation config.
-
-    Denominator and wrapper shape are sub-axes within a territory, not part of the primary key.
-    """
-    return f"{field_code}:{operator_family}:{horizon_band}@{region}/{universe}/d{delay}"
+    """Generate canonical territory identifier: field:op:horizon@region/universe/d<delay>."""
+    h_str = horizon_band or "all"
+    return f"{field_code}:{operator_family}:{h_str}@{region}/{universe}/d{delay}"
 
 
-@dataclass(frozen=True)
+def parse_territory_signature(
+    key: str,
+    default_region: str = "USA",
+    default_universe: str = "TOP3000",
+    default_delay: int = 1,
+) -> TerritorySignature:
+    """Parse canonical or legacy territory key into structured signature."""
+    prefix, _, settings = key.partition("@")
+    reg, univ, del_str = default_region, default_universe, f"d{default_delay}"
+    if settings:
+        parts = settings.split("/")
+        if len(parts) >= 1 and parts[0]:
+            reg = parts[0]
+        if len(parts) >= 2 and parts[1]:
+            univ = parts[1]
+        if len(parts) >= 3 and parts[2].startswith("d"):
+            del_str = parts[2]
+    try:
+        delay = int(del_str.lstrip("d"))
+    except ValueError:
+        delay = default_delay
+
+    prefix_no_sec, _, _ = prefix.partition("+")
+    tokens = prefix_no_sec.split(":")
+    field_part = tokens[0]
+    base_field = field_part.split("/")[0]
+
+    op = "ts_zscore"
+    horizon: str | None = None
+    if len(tokens) >= 2 and tokens[1]:
+        op = tokens[1]
+    if len(tokens) >= 3 and tokens[2]:
+        h_cand = tokens[2].lower()
+        if h_cand in ("short", "medium", "long"):
+            horizon = h_cand
+
+    return TerritorySignature(
+        field_code=base_field,
+        operator_family=op,
+        horizon_band=horizon,
+        region=reg,
+        universe=univ,
+        delay=delay,
+    )
+
+
+@dataclass
 class FamilySpec:
-    """One economic mechanism."""
+    """Inputs to one family expansion."""
 
     field_code: str
     mechanism: str = ""
     denominator: str | None = None
+    frequency: str | None = None
+    backfill_days: int | None = None
     secondary_field: str | None = None
     operator_family: str | None = None
     wrapper_shape: str | None = None
     horizon_band: str | None = None
-    backfill_days: int | None = 120
-    frequency: str | None = None
-    grid_mode: str = "standard"  # "standard" (7x7=49) | "wide"
+    grid_mode: str = "standard"
     axes: GridAxes = dc_field(default_factory=GridAxes)
 
     @property
     def effective_backfill(self) -> int | None:
-        """Resolve backfill: frequency-driven when known, else the explicit value."""
-        if self.frequency and self.frequency in FREQUENCY_BACKFILL:
-            return FREQUENCY_BACKFILL[self.frequency]
+        if self.frequency:
+            return FREQUENCY_BACKFILL.get(self.frequency.lower(), self.backfill_days)
         return self.backfill_days
 
-    def family_key(self, settings: AlphaSettings | None = None) -> str:
-        """Identity of the family/territory, INCLUDING the simulation config."""
-        base = f"{self.field_code}/{self.denominator}" if self.denominator else self.field_code
-        if self.operator_family:
-            base = f"{base}:{self.operator_family}"
-        if self.wrapper_shape:
-            base = f"{base}:{self.wrapper_shape}"
-        if self.horizon_band:
-            base = f"{base}:{self.horizon_band}"
-        if self.secondary_field:
-            base = f"{base}+{self.secondary_field}"
-        s = settings or AlphaSettings()
-        return f"{base}@{s.region}/{s.universe}/d{s.delay}"
+    def family_key(self, base_settings: AlphaSettings | None = None) -> str:
+        s = base_settings or AlphaSettings()
+        denom = f"/{self.denominator}" if self.denominator else ""
+        sec = f"+{self.secondary_field}" if self.secondary_field else ""
+        op = f":{self.operator_family}" if self.operator_family else ""
+        wrap = f":{self.wrapper_shape}" if self.wrapper_shape else ""
+        hz = f":{self.horizon_band}" if self.horizon_band else ""
+        return f"{self.field_code}{denom}{sec}{op}{wrap}{hz}@{s.region}/{s.universe}/d{s.delay}"
 
 
 @dataclass
 class Candidate:
+    """One emitted alpha expression ready for insertion."""
+
     expression: str
     family_key: str
     grid: dict
@@ -300,36 +253,48 @@ class Candidate:
     campaign_task_id: int | None = None
 
 
+@dataclass
+class SurfaceConfig:
+    layer: int
+    ts_sig: str
+    grid_extra: dict
+    builder_fn: Callable[[int], Node]
+
+
 def _base_node(spec: FamilySpec) -> Node:
-    """The raw input: the field, optionally backfilled and ratio-normalized."""
-    node: Node = Field(spec.field_code)
-    backfill = spec.effective_backfill
-    if backfill:
-        # Fundamentals update quarterly; without a backfill the series is mostly
-        # NaN between reports and the time-series operators see almost nothing.
-        node = OperatorCall("ts_backfill", [node, Number(float(backfill), True)])
+    base: Node = Field(name=spec.field_code)
+    if spec.effective_backfill:
+        base = OperatorCall(
+            "ts_backfill",
+            [base, Number(float(spec.effective_backfill), True)],
+        )
     if spec.denominator:
-        node = OperatorCall("divide", [node, Field(spec.denominator)])
-    return node
+        denom: Node = Field(name=spec.denominator)
+        if spec.effective_backfill:
+            denom = OperatorCall(
+                "ts_backfill",
+                [denom, Number(float(spec.effective_backfill), True)],
+            )
+        base = OperatorCall("divide", [base, denom])
+    return base
 
 
 def _wrap_cross_section(node: Node, cs_op: str | None, group: str | None) -> Node:
-    if cs_op is None:
-        return node
-    if group:
-        return OperatorCall(f"group_{cs_op}", [node, Field(group)])
-    return OperatorCall(cs_op, [node])
+    if group is not None:
+        group_node = Field(name=group)
+        if cs_op == "rank":
+            return OperatorCall("group_rank", [node, group_node])
+        if cs_op == "zscore":
+            return OperatorCall("group_zscore", [node, group_node])
+        if cs_op == "normalize":
+            return OperatorCall("group_normalize", [node, group_node])
+        return OperatorCall("group_rank", [node, group_node])
+    if cs_op is not None:
+        return OperatorCall(cs_op, [node])
+    return node
 
 
-def _group_fields(
-    db: Session, kb: ValidatorKB, candidates: Iterable[str | None]
-) -> list[str | None]:
-    """Keep only group names that really are GROUP-typed fields.
-
-    ``group_*`` operators require a GROUP argument; the validator enforces it, so
-    emitting a variant against a MATRIX field would just burn a slot producing a
-    guaranteed rejection.
-    """
+def _group_fields(db: Session, kb: ValidatorKB, candidates: Iterable[str | None]) -> list[str | None]:
     out: list[str | None] = []
     for g in candidates:
         if g is None:
@@ -345,18 +310,13 @@ def _emit_surface(
     family_key: str,
     base_settings: AlphaSettings,
     axes: GridAxes,
-    node_builder,
+    node_builder: Callable[[int], Node],
     seen: set[str],
     grid_extra: dict,
     arm: str | None = None,
     campaign_task_id: int | None = None,
 ) -> tuple[list[Candidate], int]:
-    """Build a complete (window × decay) surface for one structural config.
-
-    Returns the candidate list and count of rejections. The surface is only
-    emitted if it is complete — partial surfaces are worse than useless for
-    plateau analysis.
-    """
+    """Build a complete (window x decay) surface for one structural config."""
     surface: list[Candidate] = []
     rejected = 0
     for window, decay in itertools.product(axes.windows, axes.decays):
@@ -374,11 +334,6 @@ def _emit_surface(
         if key in seen:
             continue
         seen.add(key)
-
-        # Turnover pre-filter: fundamental fields at w < 5 with d == 0 systematically
-        # produce >95% turnover (untradeable); retain w=5, d=0 as probe point on standard grids.
-        if spec.effective_backfill and window < 5 and decay == 0:
-            continue
 
         grid = dict(grid_extra, window=window, decay=decay)
         surface.append(
@@ -415,23 +370,54 @@ def _emit_surface(
     return [], rejected
 
 
+def select_surface_configs(
+    configs: list[SurfaceConfig],
+    budget_surfaces: int,
+    *,
+    rng: random.Random | None = None,
+) -> list[SurfaceConfig]:
+    """Round-robin across strata, shuffling within each stratum.
+
+    Stratum key: (layer, ts_sig). Guarantees every ts-transform and every
+    depth layer receives a surface before any stratum receives a second one.
+    """
+    if budget_surfaces <= 0 or not configs:
+        return []
+
+    r = rng or random.Random(42)
+    by_stratum: dict[tuple[int, str], list[SurfaceConfig]] = defaultdict(list)
+    for c in configs:
+        by_stratum[(c.layer, c.ts_sig)].append(c)
+
+    for s_list in by_stratum.values():
+        r.shuffle(s_list)
+
+    strata_keys = sorted(by_stratum.keys())
+    selected: list[SurfaceConfig] = []
+    strata_queues = {k: list(by_stratum[k]) for k in strata_keys}
+
+    while len(selected) < budget_surfaces and any(strata_queues.values()):
+        for k in strata_keys:
+            if len(selected) >= budget_surfaces:
+                break
+            if strata_queues[k]:
+                selected.append(strata_queues[k].pop(0))
+
+    return selected
+
+
 def expand(
     db: Session,
     spec: FamilySpec,
     *,
     base_settings: AlphaSettings | None = None,
     max_candidates: int = 400,
+    policy: BudgetPolicy | None = None,
     arm: str | None = None,
     campaign_task_id: int | None = None,
+    rng: random.Random | None = None,
 ) -> list[Candidate]:
-    """Enumerate the family, returning only validator-passing candidates.
-
-    Generates three layers of candidates (budget permitting):
-    1. **Depth-1** — the single-operator template
-    2. **Depth-2** — nested operator pairs (acceleration, regime-change)
-    3. **Multi-field** — ``ts_corr(primary, secondary, window)`` when a
-       secondary field is specified
-    """
+    """Enumerate the family using stratified sampling across operators and depths."""
     base_settings = base_settings or AlphaSettings()
     kb = ValidatorKB.from_session(
         db,
@@ -443,14 +429,8 @@ def expand(
 
     # Resolve grid ladders based on grid_mode if not explicitly customized
     if spec.grid_mode == "wide":
-        if axes.windows == STANDARD_WINDOWS:
-            windows = WIDE_WINDOWS
-        else:
-            windows = axes.windows
-        if axes.decays == STANDARD_DECAYS:
-            decays = WIDE_DECAYS
-        else:
-            decays = axes.decays
+        windows = WIDE_WINDOWS if axes.windows == STANDARD_WINDOWS else axes.windows
+        decays = WIDE_DECAYS if axes.decays == STANDARD_DECAYS else axes.decays
         axes = GridAxes(
             ts_transforms=axes.ts_transforms,
             depth2_pairs=axes.depth2_pairs,
@@ -496,9 +476,7 @@ def expand(
 
     groups = _group_fields(db, kb, axes.groups)
     family_key = spec.family_key(base_settings)
-    out: list[Candidate] = []
     seen: set[str] = set()
-    rejected = 0
 
     submitted_slices = set(
         (a.family_key, a.neutralization, a.truncation)
@@ -507,128 +485,142 @@ def expand(
     )
 
     surface_size = len(axes.windows) * len(axes.decays)
+    if surface_size <= 0:
+        return []
 
-    # ------------------------------------------------------------------
-    # Layer 1: Depth-1 templates (the original grid)
-    # ------------------------------------------------------------------
-    configs = itertools.product(
-        ts_transforms, cross_sections, groups,
-        axes.neutralizations, axes.truncations, axes.universes,
+    budget_surfaces = max(1, max_candidates // surface_size)
+    policy = policy or BudgetPolicy(max_surfaces=budget_surfaces, settings_per_structure=1)
+
+    settings_combinations = list(
+        itertools.product(axes.neutralizations, axes.truncations, axes.universes)
     )
-    for ts_op, cs_op, group, neutralization, truncation, universe in configs:
+    num_settings = min(len(settings_combinations), max(1, policy.settings_per_structure))
+
+    all_surface_configs: list[SurfaceConfig] = []
+
+    for settings_idx in range(num_settings):
+        neutralization, truncation, universe = settings_combinations[settings_idx]
         if (family_key, neutralization, truncation) in submitted_slices:
             continue
-        if len(out) + surface_size > max_candidates:
-            break
 
-        def _depth1_builder(window, _ts=ts_op, _cs=cs_op, _grp=group):
-            node = OperatorCall(_ts, [_base_node(spec), Number(float(window), True)])
-            return _wrap_cross_section(node, _cs, _grp)
+        # ------------------------------------------------------------------
+        # Layer 1: Depth-1 templates (the single-operator grid)
+        # ------------------------------------------------------------------
+        for ts_op, cs_op, group in itertools.product(ts_transforms, cross_sections, groups):
+            def make_depth1_builder(_ts=ts_op, _cs=cs_op, _grp=group):
+                def _builder(window: int) -> Node:
+                    node = OperatorCall(_ts, [_base_node(spec), Number(float(window), True)])
+                    return _wrap_cross_section(node, _cs, _grp)
+                return _builder
 
-        grid_extra = {
-            "ts": ts_op, "cs": cs_op, "group": group, "depth": 1,
-            "neutralization": neutralization, "truncation": truncation,
-            "universe": universe,
-        }
+            grid_extra = {
+                "ts": ts_op, "cs": cs_op, "group": group, "depth": 1,
+                "neutralization": neutralization, "truncation": truncation,
+                "universe": universe,
+            }
+            all_surface_configs.append(
+                SurfaceConfig(
+                    layer=1,
+                    ts_sig=ts_op,
+                    grid_extra=grid_extra,
+                    builder_fn=make_depth1_builder(),
+                )
+            )
+
+        # ------------------------------------------------------------------
+        # Layer 2: Depth-2 templates (nested operator pairs)
+        # ------------------------------------------------------------------
+        if not spec.operator_family:
+            for (outer_op, inner_op), cs_op, group in itertools.product(
+                axes.depth2_pairs, cross_sections, groups
+            ):
+                def make_depth2_builder(_outer=outer_op, _inner=inner_op, _cs=cs_op, _grp=group):
+                    def _builder(window: int) -> Node:
+                        inner_w = None
+                        for iw in sorted(axes.inner_windows, reverse=True):
+                            if iw < window:
+                                inner_w = iw
+                                break
+                        if inner_w is None:
+                            inner_w = min(axes.inner_windows) if axes.inner_windows else 5
+
+                        inner_node = OperatorCall(
+                            _inner, [_base_node(spec), Number(float(inner_w), True)]
+                        )
+                        outer_node = OperatorCall(
+                            _outer, [inner_node, Number(float(window), True)]
+                        )
+                        return _wrap_cross_section(outer_node, _cs, _grp)
+                    return _builder
+
+                ts_sig = f"{outer_op}({inner_op})"
+                grid_extra = {
+                    "ts": ts_sig, "cs": cs_op, "group": group,
+                    "depth": 2, "neutralization": neutralization, "truncation": truncation,
+                    "universe": universe,
+                }
+                all_surface_configs.append(
+                    SurfaceConfig(
+                    layer=2,
+                    ts_sig=ts_sig,
+                    grid_extra=grid_extra,
+                    builder_fn=make_depth2_builder(),
+                )
+            )
+
+        # ------------------------------------------------------------------
+        # Layer 3: Multi-field signal templates (ts_corr)
+        # ------------------------------------------------------------------
+        if spec.secondary_field and not spec.operator_family:
+            for cs_op, group in itertools.product(cross_sections, groups):
+                def make_corr_builder(_cs=cs_op, _grp=group, _sec=spec.secondary_field):
+                    def _builder(window: int) -> Node:
+                        node = OperatorCall(
+                            "ts_corr",
+                            [
+                                _base_node(spec),
+                                Field(name=_sec),
+                                Number(float(window), True),
+                            ],
+                        )
+                        return _wrap_cross_section(node, _cs, _grp)
+                    return _builder
+
+                grid_extra = {
+                    "ts": "ts_corr",
+                    "secondary": spec.secondary_field,
+                    "cs": cs_op,
+                    "group": group,
+                    "depth": 1,
+                    "multi_field": True,
+                    "neutralization": neutralization,
+                    "truncation": truncation,
+                    "universe": universe,
+                }
+                all_surface_configs.append(
+                    SurfaceConfig(
+                        layer=3,
+                        ts_sig="ts_corr",
+                        grid_extra=grid_extra,
+                        builder_fn=make_corr_builder(),
+                    )
+                )
+
+    # Stratified selection
+    chosen_configs = select_surface_configs(all_surface_configs, budget_surfaces, rng=rng)
+
+    out: list[Candidate] = []
+    rejected = 0
+
+    for cfg in chosen_configs:
         surface, rej = _emit_surface(
             spec, kb, family_key, base_settings, axes,
-            _depth1_builder,
-            seen, grid_extra,
+            cfg.builder_fn,
+            seen, cfg.grid_extra,
             arm=arm, campaign_task_id=campaign_task_id,
         )
         rejected += rej
         out.extend(surface)
-
-    # ------------------------------------------------------------------
-    # Layer 2: Depth-2 templates (nested operator pairs)
-    # ------------------------------------------------------------------
-    if not spec.operator_family:  # Only explore depth-2 if operator family is unconstrained
-        for (outer_op, inner_op), cs_op, group, neutralization, truncation, universe in itertools.product(
-            axes.depth2_pairs, cross_sections, groups,
-            axes.neutralizations, axes.truncations, axes.universes,
-        ):
-            if (family_key, neutralization, truncation) in submitted_slices:
-                continue
-            if len(out) + surface_size > max_candidates:
-                break
-
-            def _depth2_builder(
-                window, _outer=outer_op, _inner=inner_op, _cs=cs_op, _grp=group,
-            ):
-                inner_w = None
-                for iw in sorted(axes.inner_windows, reverse=True):
-                    if iw < window:
-                        inner_w = iw
-                        break
-                if inner_w is None:
-                    inner_w = min(axes.inner_windows) if axes.inner_windows else 5
-
-                inner_node = OperatorCall(
-                    _inner, [_base_node(spec), Number(float(inner_w), True)]
-                )
-                outer_node = OperatorCall(
-                    _outer, [inner_node, Number(float(window), True)]
-                )
-                return _wrap_cross_section(outer_node, _cs, _grp)
-
-            grid_extra = {
-                "ts": f"{outer_op}({inner_op})", "cs": cs_op, "group": group,
-                "depth": 2, "neutralization": neutralization, "truncation": truncation,
-                "universe": universe,
-            }
-            surface, rej = _emit_surface(
-                spec, kb, family_key, base_settings, axes,
-                _depth2_builder,
-                seen, grid_extra,
-                arm=arm, campaign_task_id=campaign_task_id,
-            )
-            rejected += rej
-            out.extend(surface)
-
-    # ------------------------------------------------------------------
-    # Layer 3: Multi-field signal templates (ts_corr)
-    # ------------------------------------------------------------------
-    if spec.secondary_field and not spec.operator_family:
-        for cs_op, group, neutralization, truncation, universe in itertools.product(
-            cross_sections, groups, axes.neutralizations, axes.truncations, axes.universes,
-        ):
-            if (family_key, neutralization, truncation) in submitted_slices:
-                continue
-            if len(out) + surface_size > max_candidates:
-                break
-
-            def _corr_builder(
-                window, _cs=cs_op, _grp=group, _sec=spec.secondary_field,
-            ):
-                node = OperatorCall(
-                    "ts_corr",
-                    [
-                        _base_node(spec),
-                        Field(name=_sec),
-                        Number(float(window), True),
-                    ],
-                )
-                return _wrap_cross_section(node, _cs, _grp)
-
-            grid_extra = {
-                "ts": "ts_corr",
-                "secondary": spec.secondary_field,
-                "cs": cs_op,
-                "group": group,
-                "depth": 1,
-                "multi_field": True,
-                "neutralization": neutralization,
-                "truncation": truncation,
-                "universe": universe,
-            }
-            surface, rej = _emit_surface(
-                spec, kb, family_key, base_settings, axes,
-                _corr_builder,
-                seen, grid_extra,
-                arm=arm, campaign_task_id=campaign_task_id,
-            )
-            rejected += rej
-            out.extend(surface)
 
     if max_candidates > 0 and len(out) == 0:
         log.warning(

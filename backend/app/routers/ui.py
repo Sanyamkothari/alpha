@@ -26,12 +26,18 @@ from app.models.alphas import (
     SubmissionAttempt,
     sync_alpha_platform_outcome,
 )
-from app.models.enums import AlphaStatus, SubmissionResult
-from app.models.results import AlphaMetric
+from app.models.enums import AlphaStatus, ImportSource, SubmissionResult
+from app.models.results import AlphaMetric, SimulationImport
 from app.services.allocator import dataset_stats, suggest
 from app.services.alpha_library import transition_status
 from app.services.jobs import RunFamilyParams, registry, run_family_job
-from app.services.plateau import DECAY_LADDER, WINDOW_LADDER, evaluate, load_surface
+from app.services.plateau import (
+    DECAY_LADDER,
+    WINDOW_LADDER,
+    evaluate,
+    load_surface,
+    surface_axes,
+)
 from app.services.spend import summary as spend_summary
 
 router = APIRouter(prefix="/ui", tags=["ui"])
@@ -60,6 +66,8 @@ def _verdict_row(v: Any, db: Session) -> dict[str, Any]:
         "sharpe": v.sharpe,
         "fitness": v.fitness,
         "neighbour_median_sharpe": v.neighbour_median_sharpe,
+        "ridge_score": getattr(v, "ridge_score", None),
+        "config_fingerprint": getattr(v, "config_fingerprint", ""),
         "plateau_ratio": v.plateau_ratio,
         "is_plateau": v.is_plateau,
         "clears_bar": v.clears_bar,
@@ -100,9 +108,19 @@ def _verdict_row(v: Any, db: Session) -> dict[str, Any]:
 def summary(db: Session = Depends(get_db)) -> dict:
     """Everything the landing view needs, in one round trip."""
     total = db.scalar(select(func.count(Alpha.id))) or 0
-    simulated = db.scalar(select(func.count(AlphaMetric.id))) or 0
+    simulated = (
+        db.scalar(
+            select(func.count(func.distinct(Alpha.id)))
+            .join(AlphaMetric, AlphaMetric.alpha_id == Alpha.id)
+        )
+        or 0
+    )
     passing = (
-        db.scalar(select(func.count(AlphaMetric.id)).where(AlphaMetric.passed_all_checks.is_(True)))
+        db.scalar(
+            select(func.count(func.distinct(Alpha.id)))
+            .join(AlphaMetric, AlphaMetric.alpha_id == Alpha.id)
+            .where(AlphaMetric.passed_all_checks.is_(True))
+        )
         or 0
     )
     submitted = (
@@ -122,8 +140,11 @@ def summary(db: Session = Depends(get_db)) -> dict:
 
     promoted: list[dict] = []
     near: list[dict] = []
+    plateau_count = 0
     for family in _families(db):
         for v in evaluate(db, family):
+            if v.is_plateau:
+                plateau_count += 1
             if not (v.promoted or v.clears_bar):
                 continue
             row = _verdict_row(v, db)
@@ -132,7 +153,7 @@ def summary(db: Session = Depends(get_db)) -> dict:
                 continue
             if v.promoted:
                 promoted.append(row)
-            elif not getattr(v, "redundant_with", None):
+            else:
                 near.append(row)
 
     promoted.sort(key=lambda r: r["sharpe"] or 0, reverse=True)
@@ -144,6 +165,7 @@ def summary(db: Session = Depends(get_db)) -> dict:
             "simulated": simulated,
             "passing": passing,
             "submitted": submitted,
+            "plateau": plateau_count,
             "families": len(_families(db)),
         },
         # Counts BEFORE the display cap. Returning len(promoted[:25]) as the
@@ -194,11 +216,12 @@ def surfaces(
     if not points:
         return {
             "family_key": family,
-            "windows": WINDOW_LADDER,
-            "decays": DECAY_LADDER,
+            "windows": list(WINDOW_LADDER),
+            "decays": list(DECAY_LADDER),
             "surfaces": [],
         }
 
+    windows, decays = surface_axes(points)
     promoted_ids = {v.alpha_id for v in evaluate(db, family) if v.promoted}
 
     by_structure: dict[tuple, list] = {}
@@ -207,7 +230,7 @@ def surfaces(
 
     out = []
     for structure, pts in by_structure.items():
-        ts, cs, group, neutralization, truncation = structure
+        ts, cs, group, neutralization, truncation = structure[:5]
         cells = {
             f"{p.window}:{p.decay}": {
                 "alpha_id": p.alpha_id,
@@ -239,8 +262,8 @@ def surfaces(
     out.sort(key=lambda s: s["best_sharpe"], reverse=True)
     return {
         "family_key": family,
-        "windows": list(WINDOW_LADDER),
-        "decays": list(DECAY_LADDER),
+        "windows": windows,
+        "decays": decays,
         "surfaces": out,
     }
 
@@ -679,9 +702,19 @@ def funnel_telemetry(db: Session = Depends(get_db)) -> dict:
     """Telemetry report of funnel drop-offs across statistical gates."""
     total = db.scalar(select(func.count(Alpha.id))) or 0
     valid = db.scalar(select(func.count(Alpha.id)).where(Alpha.is_valid.is_(True))) or 0
-    simulated = db.scalar(select(func.count(AlphaMetric.id))) or 0
+    simulated = (
+        db.scalar(
+            select(func.count(func.distinct(Alpha.id)))
+            .join(AlphaMetric, AlphaMetric.alpha_id == Alpha.id)
+        )
+        or 0
+    )
     passing_brain = (
-        db.scalar(select(func.count(AlphaMetric.id)).where(AlphaMetric.passed_all_checks.is_(True)))
+        db.scalar(
+            select(func.count(func.distinct(Alpha.id)))
+            .join(AlphaMetric, AlphaMetric.alpha_id == Alpha.id)
+            .where(AlphaMetric.passed_all_checks.is_(True))
+        )
         or 0
     )
     submitted = (
@@ -733,13 +766,19 @@ def throughput(db: Session = Depends(get_db)) -> dict:
     # 1. Simulations metrics
     sims_today = (
         db.scalar(
-            select(func.count(AlphaMetric.id)).where(AlphaMetric.created_at >= today_start)
+            select(func.count(AlphaMetric.id))
+            .join(SimulationImport, SimulationImport.id == AlphaMetric.simulation_import_id)
+            .where(SimulationImport.source == ImportSource.BRAIN_API.value)
+            .where(AlphaMetric.created_at >= today_start)
         )
         or 0
     )
     sims_week = (
         db.scalar(
-            select(func.count(AlphaMetric.id)).where(AlphaMetric.created_at >= week_start)
+            select(func.count(AlphaMetric.id))
+            .join(SimulationImport, SimulationImport.id == AlphaMetric.simulation_import_id)
+            .where(SimulationImport.source == ImportSource.BRAIN_API.value)
+            .where(AlphaMetric.created_at >= week_start)
         )
         or 0
     )
@@ -750,6 +789,8 @@ def throughput(db: Session = Depends(get_db)) -> dict:
             func.date(AlphaMetric.created_at).label("day"),
             func.count(AlphaMetric.id),
         )
+        .join(SimulationImport, SimulationImport.id == AlphaMetric.simulation_import_id)
+        .where(SimulationImport.source == ImportSource.BRAIN_API.value)
         .where(AlphaMetric.created_at >= month_start)
         .group_by("day")
         .order_by("day")

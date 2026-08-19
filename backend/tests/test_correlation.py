@@ -88,7 +88,7 @@ def test_sub_500_day_overlap_rejection(tmp_path, db_session) -> None:
     store.save_pnl(a1.id, dates, pnl)
     store.save_pnl(a2.id, dates, pnl)
 
-    # Should NOT trigger empirical correlation due to insufficient overlap
+    # Should NOT trigger empirical correlation due to insufficient overlap (< 500 common days)
     is_corr, reason, max_corr = check_portfolio_empirical_correlation(
         db_session, a2.id, pnl_store=store, min_overlap=500
     )

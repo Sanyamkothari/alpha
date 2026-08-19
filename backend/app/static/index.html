@@ -234,7 +234,7 @@ details.acc[open] summary::before{content:"▾ "}
 .mini{border:1px solid var(--border);border-radius:var(--r-ctl);padding:5px;cursor:pointer;
   background:var(--sunken)}
 .mini.on{border-color:var(--fg);box-shadow:0 0 0 1px var(--fg)}
-.mini .g{display:grid;grid-template-columns:repeat(6,7px);gap:1px}
+.mini .g{display:grid;gap:1px}
 .mini .g i{height:7px;border-radius:1px;display:block}
 .mini .lab{font-size:9px;color:var(--fg-faint);font-family:var(--font-mono);margin-top:3px}
 
@@ -626,7 +626,7 @@ function renderVerdict(){
     // The zero-survivor morning is statistically the normal one, so it gets a
     // real layout and auto-expands the near-misses rather than showing a void.
     $("#verdict").innerHTML=`<div class="big">Nothing survived the filter.</div>
-      <p>${c.simulated} simulated · ${c.passing} cleared BRAIN's checks · 0 sat on a plateau${
+      <p>${c.simulated} simulated · ${c.passing} cleared BRAIN's checks · ${c.plateau ?? 0} sat on a plateau${
         bar?` · bar was ${fx(bar)}`:""}.<br>That is the normal outcome for most batches.</p>`;
     $("#missAcc").open=true;
   }else{
@@ -1363,6 +1363,7 @@ function openSurface(){
   p.surfaces.forEach((s,i)=>{
     const m=document.createElement("div"); m.className="mini"+(i===S.si?" on":"");
     const g=document.createElement("div"); g.className="g";
+    g.style.gridTemplateColumns = `repeat(${p.windows.length},7px)`;
     p.decays.forEach(d=>p.windows.forEach(w=>{
       const c=s.cells[`${w}:${d}`],el=document.createElement("i");
       if(!c||!c.simulated) el.style.border="1px dashed var(--border-strong)";
@@ -1377,6 +1378,12 @@ function openSurface(){
   grid.appendChild(heatmap(p,p.surfaces[S.si],r,true));
   $("#surfaceOverlay").classList.add("on");
 }
+[["surfaceOverlay",closeSurface],["outcomeOverlay",closeOutcome],
+ ["unresolvedOverlay",closeUnresolvedModal],["rejectionModal",closeRejectionModal],
+ ["helpOverlay",closeHelp]].forEach(([id,close])=>{
+  const el=$("#"+id);
+  if(el) el.addEventListener("mousedown",e=>{ if(e.target.id===id) close(); });
+});
 addEventListener("keydown",e=>{
   if(e.metaKey||e.ctrlKey||e.altKey) return;
   if(/^(INPUT|TEXTAREA|SELECT)$/.test(e.target.tagName)) return;

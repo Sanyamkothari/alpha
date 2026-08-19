@@ -148,115 +148,12 @@ class BudgetPlan:
 # Backward Compatibility: DiscountedThompsonSampler & SimulationBudgetOrchestrator
 # ----------------------------------------------------------------------
 
-@dataclass
-class BanditArm:
-    dataset_code: str
-    alpha_param: float = 1.0  # Beta prior
-    beta_param: float = 1.0
-    total_trials: int = 0
-    last_reward: float = 0.0
-
-
-class DiscountedThompsonSampler:
-    """Discounted Thompson Sampling bandit for non-stationary dataset reward distributions."""
-
-    def __init__(self, discount_factor: float = 0.95) -> None:
-        self.gamma = discount_factor
-        self.arms: dict[str, BanditArm] = {}
-
-    def get_arm(self, dataset_code: str) -> BanditArm:
-        if dataset_code not in self.arms:
-            self.arms[dataset_code] = BanditArm(dataset_code=dataset_code)
-        return self.arms[dataset_code]
-
-    def update(self, dataset_code: str, reward: float) -> None:
-        """Update arm with reward in [0, 1] using discount factor gamma."""
-        arm = self.get_arm(dataset_code)
-        r = max(0.0, min(1.0, reward))
-        arm.alpha_param = max(1.0, 1.0 + (arm.alpha_param - 1.0) * self.gamma + r)
-        arm.beta_param = max(1.0, 1.0 + (arm.beta_param - 1.0) * self.gamma + (1.0 - r))
-        arm.total_trials += 1
-        arm.last_reward = r
-
-    def sample_scores(self, dataset_codes: Sequence[str]) -> dict[str, float]:
-        """Draw sample from posterior Beta distribution for each candidate dataset."""
-        scores: dict[str, float] = {}
-        for code in dataset_codes:
-            arm = self.get_arm(code)
-            sample = random.betavariate(arm.alpha_param, arm.beta_param)
-            scores[code] = sample
-        return scores
-
-    def select_best_dataset(
-        self,
-        dataset_codes: Sequence[str],
-        dataset_usage_counts: dict[str, int] | None = None,
-        max_share: float = 0.20,
-    ) -> str:
-        """Select highest scoring dataset respecting the max_share diversity cap."""
-        if not dataset_codes:
-            return ""
-        scores = self.sample_scores(dataset_codes)
-        usage = dataset_usage_counts or {}
-        total_usage = sum(usage.values()) or 1
-        ranked = sorted(scores.items(), key=lambda x: x[1], reverse=True)
-        eligible = [
-            (code, score)
-            for code, score in ranked
-            if (usage.get(code, 0) / total_usage) < max_share
-        ]
-        if eligible:
-            return eligible[0][0]
-        return ranked[0][0]
-
-
-@dataclass
-class BudgetAllocation:
-    explore_slots: int
-    confirm_slots: int
-    evolution_slots: int
-    mode: str  # "bootstrap" | "mature"
-
-
-class SimulationBudgetOrchestrator:
-    """Orchestrates daily simulation budget across pipeline phases."""
-
-    def __init__(self, daily_budget: int = 15, explore_ratio: float = 0.60) -> None:
-        self.daily_budget = daily_budget
-        self.explore_ratio = explore_ratio
-
-    @classmethod
-    def get_allocation(cls, passed_alpha_count: int = 0) -> BudgetAllocation:
-        if passed_alpha_count < 5:
-            return BudgetAllocation(
-                explore_slots=2,
-                confirm_slots=1,
-                evolution_slots=0,
-                mode="bootstrap",
-            )
-        else:
-            return BudgetAllocation(
-                explore_slots=1,
-                confirm_slots=1,
-                evolution_slots=1,
-                mode="mature",
-            )
-
-    def allocate_slots(self, has_confirmed_alphas: bool = False) -> BudgetAllocation:
-        if not has_confirmed_alphas:
-            return BudgetAllocation(
-                explore_slots=2,
-                confirm_slots=1,
-                evolution_slots=0,
-                mode="bootstrap",
-            )
-        else:
-            return BudgetAllocation(
-                explore_slots=1,
-                confirm_slots=1,
-                evolution_slots=1,
-                mode="mature",
-            )
+from app.services.allocator_bandit import (
+    BanditArm,
+    BudgetAllocation,
+    DiscountedThompsonSampler,
+    SimulationBudgetOrchestrator,
+)
 
 
 # ----------------------------------------------------------------------

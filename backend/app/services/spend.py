@@ -25,9 +25,9 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.models.alphas import Alpha
-from app.models.enums import AlphaStatus
+from app.models.enums import AlphaStatus, ImportSource
 from app.models.prompts import LLMRun
-from app.models.results import AlphaMetric
+from app.models.results import AlphaMetric, SimulationImport
 
 # Measured on this account: 3 concurrent slots, ~90 s per simulation.
 SECONDS_PER_SIM = 90.0
@@ -146,9 +146,21 @@ def measured_sim_seconds(db: Session, *, sample: int = 200) -> tuple[float | Non
 
 def simulation_spend(db: Session) -> dict:
     """BRAIN throughput used. The currency here is wall-clock, not money."""
-    total = int(db.scalar(select(func.count(AlphaMetric.id))) or 0)
+    total = int(
+        db.scalar(
+            select(func.count(AlphaMetric.id))
+            .join(SimulationImport, SimulationImport.id == AlphaMetric.simulation_import_id)
+            .where(SimulationImport.source == ImportSource.BRAIN_API.value)
+        )
+        or 0
+    )
     day = int(
-        db.scalar(select(func.count(AlphaMetric.id)).where(AlphaMetric.created_at >= _since(24)))
+        db.scalar(
+            select(func.count(AlphaMetric.id))
+            .join(SimulationImport, SimulationImport.id == AlphaMetric.simulation_import_id)
+            .where(SimulationImport.source == ImportSource.BRAIN_API.value)
+            .where(AlphaMetric.created_at >= _since(24))
+        )
         or 0
     )
     measured, n = measured_sim_seconds(db)
@@ -175,7 +187,11 @@ def summary(db: Session) -> dict:
     sims = simulation_spend(db)
 
     passing = int(
-        db.scalar(select(func.count(AlphaMetric.id)).where(AlphaMetric.passed_all_checks.is_(True)))
+        db.scalar(
+            select(func.count(func.distinct(Alpha.id)))
+            .join(AlphaMetric, AlphaMetric.alpha_id == Alpha.id)
+            .where(AlphaMetric.passed_all_checks.is_(True))
+        )
         or 0
     )
     submitted = int(

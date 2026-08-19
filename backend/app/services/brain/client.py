@@ -391,3 +391,11 @@ class BrainClient:
 
     def operators(self) -> list[dict]:
         return self.get_json("/operators")
+
+    def self_correlation(self, alpha_id: str) -> dict[str, Any]:
+        """Fetch authoritative platform self-correlation (GET /alphas/{id}/correlations/self)."""
+        return self.get_json(f"/alphas/{alpha_id}/correlations/self")
+
+    def prod_correlation(self, alpha_id: str) -> dict[str, Any]:
+        """Fetch authoritative production correlation (GET /alphas/{id}/correlations/prod)."""
+        return self.get_json(f"/alphas/{alpha_id}/correlations/prod")
