@@ -33,10 +33,47 @@ from app.services.correlation import submitted_portfolio
 from app.services.filter_config import DEFAULT_FILTER_CONFIG, TRADING_DAYS_PER_YEAR
 from app.services.plateau import haircut_bar
 from app.services.pnl_storage import get_pnl_store
-from app.services.subperiod import evaluate_subperiod_stability
+from app.services.subperiod import compute_effective_trials, evaluate_subperiod_stability
 from scripts._cli import cli_main
 
 DEFAULT_N_EFF = (1, 3, 5, 8, 12, 20, 49)
+
+
+def _audit_portfolio(db, portfolio) -> None:
+    """Sanity-check the portfolio before anything is measured against it.
+
+    Every alpha here widens the correlation gate and forms the denominator of the
+    recall figure, so a portfolio that disagrees with the platform quietly corrupts
+    both. The drift incident recorded in CLAUDE.md is exactly this failure, which is
+    why the check is loud rather than a comment.
+    """
+    from sqlalchemy import func, select
+
+    from app.models.alphas import SubmissionAttempt
+
+    n_attempts = db.scalar(
+        select(func.count(SubmissionAttempt.id)).where(
+            SubmissionAttempt.result == "submitted",
+            SubmissionAttempt.is_recalled.is_(False),
+        )
+    ) or 0
+    n_alphas = len(portfolio)
+    print(f"Live attempts      : {n_attempts} across {n_alphas} distinct alpha(s)")
+
+    if n_attempts > n_alphas:
+        print(
+            f"  note: {n_attempts - n_alphas} alpha(s) carry more than one live attempt. "
+            "Harmless for gating (the portfolio is de-duplicated), but worth a look."
+        )
+
+    ids = sorted(a.id for a in portfolio)
+    print(f"Portfolio alpha ids: {ids}")
+    print(
+        "  Cross-check this list against the platform before trusting any number below.\n"
+        "  An alpha in this list that is not live on BRAIN blocks real candidates through\n"
+        "  the correlation gate and inflates the recall denominator; one that is live but\n"
+        "  missing lets a duplicate through."
+    )
 
 
 def _reported_sharpe(db, alpha_id: int) -> float | None:
@@ -78,7 +115,9 @@ def main() -> int:
         store = get_pnl_store()
         print(f"Filter fingerprint : {cfg.fingerprint()}")
         print(f"Submitted alphas   : {len(portfolio)}")
-        print(f"PnL directory      : {store._dir}\n")
+        print(f"PnL directory      : {store._dir}")
+        _audit_portfolio(db, portfolio)
+        print()
 
         rows = []
         for alpha in portfolio:
@@ -152,6 +191,23 @@ def main() -> int:
                 "Read the table as recall: every row above is an alpha BRAIN accepted, so\n"
                 "an n_eff whose bar rejects them is an n_eff at which this filter would\n"
                 "have talked you out of your own portfolio."
+            )
+            print(
+                "\nWhich row applies? The bar is priced on the *candidate family's* n_eff\n"
+                "(plateau.py: haircut_bar(fam_n_eff) over the 49 grid points being judged),\n"
+                "NOT on the portfolio's own n_eff. The portfolio's n_eff describes how\n"
+                "independent your submissions are, which is a different question and does\n"
+                "not enter the bar. For an equicorrelated 49-point sweep:"
+            )
+            print(f"    {'intra-family rho':>17}  {'n_eff':>6}  {'bar':>6}")
+            for rho in (0.95, 0.90, 0.80, 0.70, 0.50):
+                m = np.full((49, 49), rho)
+                np.fill_diagonal(m, 1.0)
+                fam_n_eff = compute_effective_trials(m)
+                print(f"    {rho:>17.2f}  {fam_n_eff:>6.2f}  {haircut_bar(fam_n_eff, cfg=cfg):>6.2f}")
+            print(
+                "    Measure the real value with build_family_matrix() on a backfilled family\n"
+                "    rather than assuming one — the bar moves by 0.2+ Sharpe across this range."
             )
         if with_pnl:
             failed = [r for r in with_pnl if r["subperiod"] is False]
