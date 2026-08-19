@@ -7,9 +7,15 @@
 name: tests
 
 on:
+  workflow_dispatch:
   push:
     branches: ["**"]
   pull_request:
+  schedule:
+    # The calibration lane, nightly. It is the evidence behind every threshold in
+    # FilterConfig, so it needs to keep being true -- but at ~11 minutes for the
+    # 500-replication run it does not belong on every push.
+    - cron: "0 3 * * *"
 
 jobs:
   pytest:
@@ -46,3 +52,29 @@ jobs:
             .venv/bin/python -m pytest -q "$f" || { echo "::error::$f fails in isolation"; status=1; }
           done
           exit $status
+
+  calibration:
+    # Monte Carlo runs measured in minutes. Nightly, or on demand.
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+
+      - name: Install project
+        run: |
+          uv venv --python 3.11 .venv
+          uv pip install -e ".[dev]"
+
+      - name: Run the calibration lane
+        run: .venv/bin/python -m pytest -m slow
