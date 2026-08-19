@@ -1,103 +1,169 @@
-"""Perturbation Robustness and Fragility Check (E2).
+"""Neutralization-ladder robustness check (E2).
 
-Evaluates the local parameter stability of an elected alpha point (w0, d0) on a 2D surface
-by measuring the performance drop to its 4-connected coordinate neighbors:
-    fragility = max(0, (Sharpe_peak - median(Sharpe_nbrs)) / Sharpe_peak)
+A mechanism that survives one step along the neutralization ladder is a mechanism;
+one that only works at a single neutralization setting is a fit to that setting's
+particular residual structure.
 
-Plateau ridges have low fragility (< 0.35) and high neighbor median Sharpe (>= 1.25).
-Isolated lucky spikes have high fragility (>= 0.35) and fail promotion.
+**Why this is not the plateau test.** ``plateau._neighbours`` walks ``(window, decay)``
+*within* one structure, and ``_structure_of`` includes ``neutralization`` — so the
+existing ridge test structurally cannot vary it. This module reads *across* surfaces
+at matched ``(window, decay)`` coordinates, which is the perturbation the surface
+test cannot reach. An earlier draft of this module re-walked ``(window, decay)``
+inside a single structure and was therefore a second, differently-scaled copy of the
+plateau test; that is what this replaces.
+
+**Absence is not evidence of fragility.** If the adjacent-neutralization surface was
+never simulated, the verdict is ``None`` — not ``False``. Reporting an unmeasured
+alpha as fragile would penalise it for a gap in our own coverage, and the whole
+budget argument for this system is that coverage is incomplete by design.
+
+Advisory only. Like PBO, this needs its distribution observed across real families
+before any promotion threshold based on it means anything.
 """
 
 from __future__ import annotations
 
-import statistics
 from collections.abc import Sequence
 from dataclasses import dataclass
+from statistics import median
 
-from app.services.plateau import SurfacePoint
+import structlog
+
+from app.services.plateau import SurfacePoint, structure_component, structure_replacing
+
+log = structlog.get_logger("perturbation")
+
+# Ordered weakest → strongest. "One step" means one position along this ladder.
+NEUTRALIZATION_LADDER: tuple[str, ...] = (
+    "NONE",
+    "MARKET",
+    "SECTOR",
+    "INDUSTRY",
+    "SUBINDUSTRY",
+)
+
+# A mechanism should retain most of its Sharpe one rung along the ladder. 0.6 mirrors
+# plateau.PLATEAU_RATIO so the two robustness notions are on the same scale; it is a
+# starting point to be replaced by a measured value, not a calibrated threshold.
+DEFAULT_MIN_RETENTION = 0.6
 
 
 @dataclass(frozen=True)
-class PerturbationResult:
-    peak_sharpe: float
-    neighbour_sharpes: list[float]
-    neighbour_median_sharpe: float
-    fragility: float  # [0.0, 1.0+]
-    is_robust: bool  # True if fragility <= max_fragility and median >= min_median_sharpe
-    reason: str | None = None
+class NeutralizationRobustness:
+    """How much of a point's Sharpe survives one step along the neutralization ladder."""
+
+    peak_sharpe: float | None
+    peak_neutralization: str | None
+    neighbour_sharpes: dict[str, float]
+    median_neighbour_sharpe: float | None
+    retention: float | None
+    is_robust: bool | None  # None = not measurable from the points we have
+    reason: str
+
+    @property
+    def measured(self) -> bool:
+        return self.is_robust is not None
 
 
-def check_perturbation_robustness(
+def adjacent_neutralizations(neutralization: str | None) -> list[str]:
+    """The one-step neighbours of a neutralization on the ladder."""
+    if neutralization is None:
+        return []
+    try:
+        idx = NEUTRALIZATION_LADDER.index(neutralization)
+    except ValueError:
+        return []
+    out = []
+    if idx > 0:
+        out.append(NEUTRALIZATION_LADDER[idx - 1])
+    if idx + 1 < len(NEUTRALIZATION_LADDER):
+        out.append(NEUTRALIZATION_LADDER[idx + 1])
+    return out
+
+
+def check_neutralization_robustness(
     peak: SurfacePoint,
-    surface_points: Sequence[SurfacePoint],
+    family_points: Sequence[SurfacePoint],
     *,
-    max_fragility: float = 0.35,
-    min_median_sharpe: float = 1.25,
-) -> PerturbationResult:
-    """Assess whether an elected peak represents a stable ridge or an isolated spike."""
+    min_retention: float = DEFAULT_MIN_RETENTION,
+) -> NeutralizationRobustness:
+    """Compare a point against the same (window, decay) at adjacent neutralizations.
+
+    ``family_points`` should span the whole family, not one surface — the comparison
+    is across surfaces by construction.
+    """
+    peak_neut = structure_component(peak.structure, "neutralization")
+
     if peak.sharpe is None or peak.sharpe <= 0:
-        return PerturbationResult(
-            peak_sharpe=peak.sharpe or 0.0,
-            neighbour_sharpes=[],
-            neighbour_median_sharpe=0.0,
-            fragility=1.0,
-            is_robust=False,
-            reason="non_positive_peak_sharpe",
-        )
-
-    # Derive axes for this structure
-    matching_points = [p for p in surface_points if p.structure == peak.structure]
-    windows = sorted({p.window for p in matching_points if p.window is not None})
-    decays = sorted({p.decay for p in matching_points if p.decay is not None})
-
-    if peak.window not in windows or peak.decay not in decays:
-        return PerturbationResult(
+        return NeutralizationRobustness(
             peak_sharpe=peak.sharpe,
-            neighbour_sharpes=[],
-            neighbour_median_sharpe=0.0,
-            fragility=1.0,
-            is_robust=False,
-            reason="peak_not_in_axes",
+            peak_neutralization=peak_neut,
+            neighbour_sharpes={},
+            median_neighbour_sharpe=None,
+            retention=None,
+            is_robust=None,
+            reason="non-positive Sharpe — robustness test does not apply",
         )
 
-    w_idx = windows.index(peak.window)
-    d_idx = decays.index(peak.decay)
+    neighbours = adjacent_neutralizations(peak_neut)
+    if not neighbours:
+        return NeutralizationRobustness(
+            peak_sharpe=peak.sharpe,
+            peak_neutralization=peak_neut,
+            neighbour_sharpes={},
+            median_neighbour_sharpe=None,
+            retention=None,
+            is_robust=None,
+            reason=f"neutralization {peak_neut!r} is not on the ladder",
+        )
 
-    nbr_sharpes: list[float] = []
-    for p in matching_points:
-        if p.sharpe is None or (p.window == peak.window and p.decay == peak.decay):
+    # Match on every structural axis except neutralization, at the same coordinate.
+    wanted = {
+        neut: structure_replacing(peak.structure, "neutralization", neut) for neut in neighbours
+    }
+    found: dict[str, float] = {}
+    for point in family_points:
+        if point.alpha_id == peak.alpha_id or point.sharpe is None:
             continue
-        pw_idx = windows.index(p.window)
-        pd_idx = decays.index(p.decay)
-        # 4-connected neighbors: |dw| + |dd| == 1
-        if abs(pw_idx - w_idx) + abs(pd_idx - d_idx) == 1:
-            nbr_sharpes.append(p.sharpe)
+        if point.window != peak.window or point.decay != peak.decay:
+            continue
+        for neut, target in wanted.items():
+            if point.structure == target:
+                found[neut] = point.sharpe
 
-    if not nbr_sharpes:
-        return PerturbationResult(
+    if not found:
+        return NeutralizationRobustness(
             peak_sharpe=peak.sharpe,
-            neighbour_sharpes=[],
-            neighbour_median_sharpe=0.0,
-            fragility=1.0,
-            is_robust=False,
-            reason="no_valid_neighbours",
+            peak_neutralization=peak_neut,
+            neighbour_sharpes={},
+            median_neighbour_sharpe=None,
+            retention=None,
+            is_robust=None,
+            reason=(
+                f"no adjacent-neutralization point simulated at "
+                f"(window={peak.window}, decay={peak.decay}) — not measured"
+            ),
         )
 
-    med_nbr = float(statistics.median(nbr_sharpes))
-    fragility = max(0.0, float((peak.sharpe - med_nbr) / peak.sharpe))
-
-    is_robust = (fragility <= max_fragility) and (med_nbr >= min_median_sharpe)
-    reason = None if is_robust else (
-        f"fragile_peak(fragility={fragility:.2f} > {max_fragility:.2f})"
-        if fragility > max_fragility
-        else f"low_neighbour_median({med_nbr:.2f} < {min_median_sharpe:.2f})"
+    med = float(median(found.values()))
+    retention = med / peak.sharpe
+    is_robust = retention >= min_retention
+    reason = (
+        f"retains {retention:.0%} of Sharpe across {len(found)} adjacent "
+        f"neutralization(s) {sorted(found)}"
+        if is_robust
+        else (
+            f"neutralization-fragile: median {med:.2f} vs own {peak.sharpe:.2f} "
+            f"({retention:.0%} < {min_retention:.0%})"
+        )
     )
 
-    return PerturbationResult(
+    return NeutralizationRobustness(
         peak_sharpe=peak.sharpe,
-        neighbour_sharpes=nbr_sharpes,
-        neighbour_median_sharpe=med_nbr,
-        fragility=fragility,
+        peak_neutralization=peak_neut,
+        neighbour_sharpes=found,
+        median_neighbour_sharpe=med,
+        retention=retention,
         is_robust=is_robust,
         reason=reason,
     )

@@ -166,6 +166,18 @@ def check_portfolio_empirical_correlation(
     return False, None, max_signed_corr
 
 
+def _reported_sharpe(db: Session, alpha_id: int) -> float | None:
+    """The most recent BRAIN-reported Sharpe for an alpha, if we have one."""
+    from app.models.results import AlphaMetric
+
+    return db.execute(
+        select(AlphaMetric.sharpe)
+        .where(AlphaMetric.alpha_id == alpha_id)
+        .order_by(AlphaMetric.id.desc())
+        .limit(1)
+    ).scalar_one_or_none()
+
+
 def ensure_alpha_pnl(
     db: Session,
     alpha_id: int,
@@ -208,7 +220,23 @@ def ensure_alpha_pnl(
             if records:
                 dates = [str(r[0]) for r in records]
                 pnl = np.array([float(r[1]) for r in records], dtype=float)
-                store.save_pnl(alpha_id, dates, pnl)
+                # Reconcile against the reported Sharpe, exactly as the batch backfill
+                # does. Saving without it would record ``reconciled=None`` on the path
+                # that runs *during evaluation* — the one place the guard matters most.
+                save_res = store.save_pnl(
+                    alpha_id,
+                    dates,
+                    pnl,
+                    reported_sharpe=_reported_sharpe(db, alpha_id),
+                )
+                if not save_res.saved:
+                    log.warning(
+                        "on_demand_pnl_rejected",
+                        alpha_id=alpha_id,
+                        remote_id=remote_id,
+                        reason=save_res.rejection_reason,
+                    )
+                    return False
                 return True
     except Exception as exc:
         log.warning("on_demand_pnl_fetch_failed", alpha_id=alpha_id, remote_id=remote_id, error=str(exc))

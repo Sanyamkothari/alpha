@@ -1,0 +1,141 @@
+"""Answer "will this setting do anything?" from stored metrics, before spending sims.
+
+BRAIN's fitness is a published closed form::
+
+    fitness = Sharpe * sqrt(|returns| / max(turnover, 0.125))
+
+which means every candidate fix can be priced arithmetically *before* it is
+simulated. This script does two things for a family:
+
+1. **Is truncation slack?** Truncation caps the weight of any single name. A
+   ``rank()`` alpha spreads weight almost evenly, so its largest position is about
+   ``2/N`` of the book for N held names. Truncation therefore does nothing at all
+   unless ``2/N`` exceeds it — with 1,000 names the biggest position is 0.2% and a
+   1% cap never binds. ``long_count + short_count`` settles it.
+
+2. **What would actually clear the bars?** Given a point's Sharpe and returns, it
+   solves for the turnover that would put fitness over the floor, so you can see
+   whether the gap is reachable at all.
+
+    python -m scripts.diagnose_settings --family "liabilities/cap@USA/TOP3000/d1"
+    python -m scripts.diagnose_settings --all
+"""
+
+from __future__ import annotations
+
+import argparse
+import math
+
+from sqlalchemy import select
+
+from app.db.session import session_scope
+from app.models.alphas import Alpha
+from app.models.results import AlphaMetric
+
+TURNOVER_FLOOR = 0.125  # the max() floor inside the fitness formula
+FITNESS_BAR = 1.0
+TURNOVER_CEILING = 0.70
+SHARPE_BAR = 1.25
+
+TRUNCATION_LEVELS = (0.08, 0.04, 0.01)
+
+
+def fitness_of(sharpe: float, returns: float, turnover: float) -> float:
+    return sharpe * math.sqrt(abs(returns) / max(turnover, TURNOVER_FLOOR))
+
+
+def required_turnover(sharpe: float, returns: float, bar: float = FITNESS_BAR) -> float | None:
+    """The turnover at which fitness would reach `bar`, holding Sharpe and returns."""
+    if sharpe <= 0:
+        return None
+    return abs(returns) / ((bar / sharpe) ** 2)
+
+
+def report_family(family_key: str) -> None:
+    with session_scope() as db:
+        rows = db.execute(
+            select(Alpha, AlphaMetric)
+            .join(AlphaMetric, AlphaMetric.alpha_id == Alpha.id)
+            .where(Alpha.family_key == family_key)
+        ).all()
+
+    if not rows:
+        print(f"no simulated alphas in family {family_key!r}")
+        return
+
+    print(f"\n=== {family_key} — {len(rows)} simulated points ===\n")
+
+    # ---- 1. does truncation bind? ----
+    counts = [
+        (m.long_count or 0) + (m.short_count or 0)
+        for _, m in rows
+        if m.long_count is not None or m.short_count is not None
+    ]
+    if not counts:
+        print("long_count/short_count not stored for this family — cannot judge truncation.")
+    else:
+        smallest = min(counts)
+        typical = sorted(counts)[len(counts) // 2]
+        print(f"positions held: median {typical}, smallest {smallest}")
+        max_weight = 2.0 / smallest if smallest else float("inf")
+        print(f"largest position of a rank() alpha ~ 2/N = {max_weight:.2%} of book\n")
+        for level in TRUNCATION_LEVELS:
+            binds = max_weight > level
+            verdict = "BINDS — changing it will move the book" if binds else "slack — no effect"
+            print(f"  truncation {level:<5} vs max weight {max_weight:.2%}   {verdict}")
+        if max_weight <= min(TRUNCATION_LEVELS):
+            print(
+                "\n  => Truncation is slack at every level tested. Sweeping it will return a\n"
+                "     flat line. Spend the simulations on an axis that binds instead."
+            )
+
+    # ---- 2. what would clear the bars? ----
+    print("\nfitness = Sharpe * sqrt(|returns| / max(turnover, 0.125))\n")
+    print(f"  {'decay':>6} {'Sharpe':>7} {'return':>7} {'turnov':>7} {'fitness':>8}  what it needs")
+    for alpha, m in sorted(rows, key=lambda r: (r[0].decay or 0)):
+        if m.sharpe is None or m.returns is None or m.turnover is None:
+            continue
+        need = required_turnover(m.sharpe, m.returns)
+        if m.fitness is not None and m.fitness >= FITNESS_BAR and m.turnover <= TURNOVER_CEILING:
+            verdict = "PASSES"
+        elif m.turnover > TURNOVER_CEILING and need is not None and need >= TURNOVER_CEILING:
+            verdict = f"cut turnover to <={TURNOVER_CEILING:.2f} and fitness follows"
+        elif need is not None:
+            verdict = f"needs turnover <={need:.2f} (now {m.turnover:.2f})"
+        else:
+            verdict = "—"
+        print(
+            f"  {alpha.decay or 0:>6} {m.sharpe:>7.2f} {m.returns:>7.1%} "
+            f"{m.turnover:>7.2f} {m.fitness or 0:>8.2f}  {verdict}"
+        )
+    print()
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser(description=__doc__)
+    ap.add_argument("--family", help="family key to diagnose")
+    ap.add_argument("--all", action="store_true", help="every family with simulated points")
+    args = ap.parse_args()
+
+    if args.all:
+        with session_scope() as db:
+            families = [
+                f for (f,) in db.execute(
+                    select(Alpha.family_key)
+                    .join(AlphaMetric, AlphaMetric.alpha_id == Alpha.id)
+                    .where(Alpha.family_key.is_not(None))
+                    .group_by(Alpha.family_key)
+                ).all()
+            ]
+        for fam in families:
+            report_family(fam)
+        return 0
+
+    if not args.family:
+        ap.error("pass --family or --all")
+    report_family(args.family)
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

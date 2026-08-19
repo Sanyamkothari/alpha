@@ -29,7 +29,7 @@ from __future__ import annotations
 import itertools
 import random
 from collections import defaultdict
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass
 from dataclasses import field as dc_field
 
@@ -92,7 +92,10 @@ DEFAULT_VECTOR_REDUCERS: tuple[str, ...] = ("vec_avg", "vec_sum", "vec_count", "
 
 DEFAULT_NEUTRALIZATIONS: tuple[str, ...] = ("SUBINDUSTRY", "INDUSTRY", "SECTOR", "MARKET", "NONE")
 
-DEFAULT_TRUNCATIONS: tuple[float, ...] = (0.01, 0.08)
+# Reference truncation FIRST: with settings_per_structure=1 the constructor
+# emits settings_combinations[0], so index 0 defines the baseline every
+# historical result was produced at. Probe levels follow it.
+DEFAULT_TRUNCATIONS: tuple[float, ...] = (0.08, 0.04, 0.01)
 
 DEFAULT_HUMPS: tuple[float | None, ...] = (None,)
 
@@ -267,6 +270,17 @@ class SurfaceConfig:
     ts_sig: str
     grid_extra: dict
     builder_fn: Callable[[int], Node]
+    # Stratum identity for budget allocation. ``base_sig`` deliberately excludes
+    # turnover-control wrappers so that hump variants compete *within* a
+    # structure's stratum rather than against other structures for the budget.
+    # ``variant_rank`` 0 marks the control arm (no turnover control), which is
+    # always drawn before any variant of the same structure.
+    base_sig: str = ""
+    variant_rank: int = 0
+
+    @property
+    def stratum(self) -> tuple[int, str]:
+        return (self.layer, self.base_sig or self.ts_sig)
 
 
 def _base_node(spec: FamilySpec, vector_reducer: str | None = None) -> Node:
@@ -388,16 +402,46 @@ def _emit_surface(
     return [], rejected
 
 
+def _hump_variant_rank(hump: float | None, humps: Sequence[float | None]) -> int:
+    """Stratum draw order: 0 is the control arm, 1+ are turnover-control variants.
+
+    The control arm must be drawn first, otherwise a hump sweep can spend its
+    whole budget on variants and leave nothing to measure them against.
+    """
+    if hump is None:
+        return 0
+    variants = [h for h in humps if h is not None]
+    try:
+        return variants.index(hump) + 1
+    except ValueError:
+        return len(variants) + 1
+
+
 def select_surface_configs(
     configs: list[SurfaceConfig],
     budget_surfaces: int,
     *,
     rng: random.Random | None = None,
 ) -> list[SurfaceConfig]:
-    """Round-robin across strata, shuffling within each stratum.
+    """Round-robin across strata, control arm first within each stratum.
 
-    Stratum key: (layer, ts_sig). Guarantees every ts-transform and every
-    depth layer receives a surface before any stratum receives a second one.
+    Stratum key is ``(layer, base_sig)`` — the *structure* identity, excluding
+    turnover-control wrappers. Two properties this buys, both of which the
+    earlier ``(layer, ts_sig)`` key silently lost:
+
+    **Widening a structure-variant axis cannot cost structural coverage.** With
+    ``ts_sig`` as the key, ``humps=(None, 0.01, 0.05)`` turned 7 strata into 21
+    and — because ``hump(...)`` sorts before ``ts_*`` — the budget went entirely
+    to hump variants of four transforms. Variants now queue inside their own
+    structure's stratum instead of competing with other structures.
+
+    **The control arm survives.** Within a stratum, ``variant_rank`` 0 (no
+    turnover control) is drawn first, so a hump sweep always retains the
+    un-humped point to measure the variants against.
+
+    Strata are visited in a seeded-shuffled order rather than sorted order:
+    when strata outnumber the budget, alphabetical order biases selection
+    toward whichever dimension happens to sort first.
     """
     if budget_surfaces <= 0 or not configs:
         return []
@@ -405,12 +449,16 @@ def select_surface_configs(
     r = rng or random.Random(42)
     by_stratum: dict[tuple[int, str], list[SurfaceConfig]] = defaultdict(list)
     for c in configs:
-        by_stratum[(c.layer, c.ts_sig)].append(c)
+        by_stratum[c.stratum].append(c)
 
     for s_list in by_stratum.values():
         r.shuffle(s_list)
+        # Control arm first, then variants; the shuffle above still randomises
+        # order *within* each rank.
+        s_list.sort(key=lambda c: c.variant_rank)
 
     strata_keys = sorted(by_stratum.keys())
+    r.shuffle(strata_keys)
     selected: list[SurfaceConfig] = []
     strata_queues = {k: list(by_stratum[k]) for k in strata_keys}
 
@@ -431,6 +479,7 @@ def expand(
     base_settings: AlphaSettings | None = None,
     max_candidates: int = 400,
     policy: BudgetPolicy | None = None,
+    rank_by_novelty: bool = True,
     arm: str | None = None,
     campaign_task_id: int | None = None,
     rng: random.Random | None = None,
@@ -508,6 +557,12 @@ def expand(
 
     budget_surfaces = max(1, max_candidates // surface_size)
     policy = policy or BudgetPolicy(max_surfaces=budget_surfaces, settings_per_structure=1)
+    # Honour an explicitly supplied policy. This was previously constructed and then
+    # ignored — select_surface_configs took the candidate-derived budget, so a caller
+    # passing BudgetPolicy(max_surfaces=3) silently got something else. The candidate
+    # cap still binds: a policy may narrow the budget, never widen it past what
+    # max_candidates pays for.
+    budget_surfaces = max(1, min(budget_surfaces, policy.max_surfaces))
 
     settings_combinations = list(
         itertools.product(axes.neutralizations, axes.truncations, axes.universes)
@@ -521,10 +576,26 @@ def expand(
 
     all_surface_configs: list[SurfaceConfig] = []
 
+    # F11: when num_settings == 1 a `continue` here emitted nothing at all for the
+    # whole family — every structure lost, because one settings tuple was already
+    # submitted. Skip forward to the next unused settings tuple instead, and only
+    # give up if every one of them is exhausted.
+    usable_settings = [
+        combo
+        for combo in settings_combinations
+        if (family_key, combo[0], combo[1]) not in submitted_slices
+    ]
+    if not usable_settings:
+        log.warning(
+            "family_settings_exhausted",
+            family=family_key,
+            combinations=len(settings_combinations),
+        )
+        return []
+    num_settings = min(len(usable_settings), max(1, policy.settings_per_structure))
+
     for settings_idx in range(num_settings):
-        neutralization, truncation, universe = settings_combinations[settings_idx]
-        if (family_key, neutralization, truncation) in submitted_slices:
-            continue
+        neutralization, truncation, universe = usable_settings[settings_idx]
 
         for vec_reducer in vec_reducers:
             # ------------------------------------------------------------------
@@ -554,6 +625,8 @@ def expand(
                         ts_sig=ts_sig,
                         grid_extra=grid_extra,
                         builder_fn=make_depth1_builder(),
+                        base_sig=base_ts_sig,
+                        variant_rank=_hump_variant_rank(hump, axes.humps),
                     )
                 )
 
@@ -575,6 +648,8 @@ def expand(
                             ts_sig=evt_ts_sig,
                             grid_extra=grid_extra_evt,
                             builder_fn=make_event_builder(),
+                            base_sig=evt_ts_sig,
+                            variant_rank=_hump_variant_rank(hump, axes.humps),
                         )
                     )
 
@@ -623,6 +698,8 @@ def expand(
                             ts_sig=ts_sig,
                             grid_extra=grid_extra,
                             builder_fn=make_depth2_builder(),
+                            base_sig=base_sig,
+                            variant_rank=_hump_variant_rank(hump, axes.humps),
                         )
                     )
 
@@ -667,13 +744,15 @@ def expand(
                             ts_sig=ts_sig,
                             grid_extra=grid_extra,
                             builder_fn=make_corr_builder(),
+                            base_sig=base_sig,
+                            variant_rank=_hump_variant_rank(hump, axes.humps),
                         )
                     )
 
     # Stratified selection
     chosen_configs = select_surface_configs(all_surface_configs, budget_surfaces, rng=rng)
 
-    out: list[Candidate] = []
+    emitted_surfaces: list[list[Candidate]] = []
     rejected = 0
 
     for cfg in chosen_configs:
@@ -684,7 +763,33 @@ def expand(
             arm=arm, campaign_task_id=campaign_task_id,
         )
         rejected += rej
-        out.extend(surface)
+        if surface:
+            emitted_surfaces.append(surface)
+
+    # Novelty prior (C1): order whole surfaces so that structurally novel mechanisms
+    # reach the simulator first. Callers cap how many candidates actually run, and
+    # simulation slots are the scarcest resource in the system — this spends them on
+    # structures we have not already learned the answer to. A ranking key only:
+    # a hard filter over a corpus this size would fit noise (STRATEGY.md §10).
+    if rank_by_novelty and len(emitted_surfaces) > 1:
+        from app.services.novelty import NoveltyScorer, rank_surfaces_by_novelty
+
+        scorer = NoveltyScorer.from_session(db)
+        if scorer.total_alphas > 0:
+            emitted_surfaces = rank_surfaces_by_novelty(emitted_surfaces, scorer)
+            for surf in emitted_surfaces:
+                for cand in surf:
+                    if cand.features is not None:
+                        cand.features["novelty_score"] = round(scorer.score_candidate(cand), 4)
+            log.info(
+                "surfaces_ranked_by_novelty",
+                family=family_key,
+                surfaces=len(emitted_surfaces),
+                corpus=scorer.corpus,
+                corpus_size=scorer.total_alphas,
+            )
+
+    out: list[Candidate] = [c for surf in emitted_surfaces for c in surf]
 
     if max_candidates > 0 and len(out) == 0:
         log.warning(

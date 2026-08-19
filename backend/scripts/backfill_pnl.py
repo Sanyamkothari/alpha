@@ -87,7 +87,7 @@ def backfill_all(
                         )
                         if save_res.saved:
                             stats["saved"] += 1
-                            if save_res.reconciled:
+                            if save_res.reconciled is True:
                                 stats["reconciled"] += 1
                             elif strict:
                                 raise ValueError(

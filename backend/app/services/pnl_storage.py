@@ -35,7 +35,11 @@ class PnLSaveResult:
     alpha_id: int
     saved: bool
     series_kind: str
-    reconciled: bool
+    # Tri-state on purpose. ``None`` means *unverified* — no reported Sharpe was
+    # supplied to check against — and must never be read as "verified fine".
+    # Reporting True for an unperformed check is how the guard got bypassed on the
+    # on-demand fetch path.
+    reconciled: bool | None
     recomputed_sharpe: float | None = None
     reported_sharpe: float | None = None
     rejection_reason: str | None = None
@@ -125,15 +129,15 @@ class PnLStore:
             detected_kind = "cumulative"
             # Difference the cumulative curve to recover daily increments
             if len(arr) > 1:
-                diff_arr = np.diff(arr)
-                diff_dates = dates[1:]
-                # Anchor first day diff as 0.0 or prepend original first point if sensible
-                arr = np.concatenate([[arr[0]], diff_arr])
+                # cum[0] is the first day's PnL, so it carries through unchanged and
+                # the dates array stays aligned with the values.
+                arr = np.concatenate([[arr[0]], np.diff(arr)])
                 log.info("cumulative_pnl_differenced", alpha_id=alpha_id, original_len=len(pnl_values))
 
         recomputed_sr = compute_vector_sharpe(arr)
-        reconciled = True
+        reconciled: bool | None = None  # unverified until a reported Sharpe says otherwise
         if reported_sharpe is not None and not math.isnan(reported_sharpe) and abs(reported_sharpe) > 0.01:
+            reconciled = True
             diff = abs(recomputed_sr - reported_sharpe)
             if diff > cfg.sharpe_reconciliation_tolerance:
                 reconciled = False

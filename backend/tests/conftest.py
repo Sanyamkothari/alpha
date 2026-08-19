@@ -114,6 +114,9 @@ def _seed(test_session_factory: sessionmaker[Session]) -> None:
                 _op("group_normalize", "group", _matrix("x", 0), _group("group", 1)),
                 _op("hump", "transformational", _matrix("x", 0), OperatorArgument(name="hump", position=1, arg_type="float", required=False, is_window=False, min_value=0.0, max_value=1.0)),
                 _op("regression_neut", "cross_section", _matrix("y", 0), _matrix("x", 1)),
+                # Used by the C2 size risk-proxy: regression_neut(signal, log(cap)).
+                _op("log", "arithmetic", _matrix("x", 0)),
+                _op("vector_neut", "cross_section", _matrix("x", 0), _matrix("y", 1)),
                 _op("days_from_last_change", "time_series", _matrix("x", 0)),
                 _op("vec_avg", "vector", OperatorArgument(name="x", position=0, arg_type="vector", required=True)),
                 _op("vec_sum", "vector", OperatorArgument(name="x", position=0, arg_type="vector", required=True)),

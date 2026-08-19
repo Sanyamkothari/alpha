@@ -6,7 +6,16 @@ using sub-second vectorized numpy operations:
 2. Form C = comb(S, S/2) symmetric train/test partitions (comb(16, 8) = 12,870).
 3. In-sample: Select best strategy n* = argmax Sharpe_IS.
 4. Out-of-sample: Evaluate rank and return of n* on test partition.
-5. PBO = fraction of splits where Sharpe_OOS(n*) <= 0.
+5. PBO = fraction of splits where the IS winner lands in the bottom half OOS
+   (relative rank <= 0.5, equivalently logit lambda <= 0). ``pbo_loss`` reports the
+   stricter "IS winner actually lost money OOS" variant separately.
+
+Degradation
+-----------
+CSCV is only meaningful when there are enough strategies to rank and enough days
+per block to estimate a Sharpe from. Below either floor the result is returned with
+``degraded=True`` and ``pbo=nan`` — never ``0.0``, which would read as *the best
+possible score* for a family that is simply too small to evaluate.
 """
 
 from __future__ import annotations
@@ -14,8 +23,14 @@ from __future__ import annotations
 import itertools
 import math
 from dataclasses import dataclass
-
 import numpy as np
+
+
+# CSCV needs enough strategies for a rank to carry information, and enough days per
+# block that a block Sharpe is an estimate rather than noise. S=16 with a 20-day floor
+# implies ~640 trading days (~2.5 years) — comfortably inside BRAIN's 2019-onward window.
+MIN_STRATEGIES = 4
+MIN_BLOCK_LEN = 20
 
 
 @dataclass(frozen=True)
@@ -28,6 +43,13 @@ class CSCVResult:
     median_oos_sharpe: float
     median_oos_rank: float
     degradation_pct: float  # (IS_Sharpe - OOS_Sharpe) / IS_Sharpe
+    degraded: bool = False  # True when the input was too small to evaluate
+    degraded_reason: str | None = None
+
+    @property
+    def reportable(self) -> bool:
+        """Whether ``pbo`` is a number a reader may act on."""
+        return not self.degraded and math.isfinite(self.pbo)
 
 
 def compute_pbo_cscv(
@@ -48,20 +70,34 @@ def compute_pbo_cscv(
         raise ValueError(f"Expected 2D matrix (N x T), got {matrix.shape}")
 
     n_strategies, t_days = matrix.shape
-    if n_strategies < 2 or t_days < n_subperiods:
+    block_len = t_days // n_subperiods if n_subperiods > 0 else 0
+
+    degraded_reason: str | None = None
+    if n_subperiods < 4 or n_subperiods % 2 != 0:
+        degraded_reason = f"n_subperiods must be even and >= 4, got {n_subperiods}"
+    elif n_strategies < MIN_STRATEGIES:
+        degraded_reason = f"only {n_strategies} strategies (need >= {MIN_STRATEGIES} to rank)"
+    elif block_len < MIN_BLOCK_LEN:
+        degraded_reason = (
+            f"block length {block_len} < {MIN_BLOCK_LEN} days "
+            f"({t_days} days over {n_subperiods} subperiods)"
+        )
+
+    if degraded_reason is not None:
         return CSCVResult(
-            pbo=0.0,
-            pbo_loss=0.0,
+            pbo=float("nan"),
+            pbo_loss=float("nan"),
             n_splits=0,
             n_strategies=n_strategies,
             n_subperiods=n_subperiods,
-            median_oos_sharpe=0.0,
-            median_oos_rank=0.5,
-            degradation_pct=0.0,
+            median_oos_sharpe=float("nan"),
+            median_oos_rank=float("nan"),
+            degradation_pct=float("nan"),
+            degraded=True,
+            degraded_reason=degraded_reason,
         )
 
     # Divide T into S contiguous slices and precompute subperiod sum and sum of squares
-    block_len = t_days // n_subperiods
     usable_t = block_len * n_subperiods
     trimmed = matrix[:, :usable_t].reshape(n_strategies, n_subperiods, block_len)
 
