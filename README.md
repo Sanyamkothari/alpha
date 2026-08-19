@@ -28,7 +28,9 @@ Read **[STRATEGY.md](STRATEGY.md)** first — it contains the diagnosis of why n
 3. **Plateau, not peak.**  
    Isolated spikes are overfitted flukes. Candidates are judged by their neighbourhood median Sharpe across complete `(lookback_window × decay)` surfaces.
 4. **Honest multiple-testing haircuts & DSR.**  
-   Mass search produces false discoveries by chance. Trials are discounted via Bailey & Lopez de Prado's Deflated Sharpe Ratio (DSR) and empirical correlation gates against existing portfolio alphas.
+   Mass search produces false discoveries by chance. Trials are discounted via Bailey & Lopez de Prado's Deflated Sharpe Ratio (DSR), with an extreme-value haircut priced on the *effective* number of trials, and an empirical correlation gate against the submitted portfolio.
+5. **Correlation is judged on magnitude.**
+   The gate compares `|r|`, not `r`. An alpha anti-correlated with something you already submitted is that alpha inverted — one idea twice, not a hedge. The reported figure keeps its sign so you can tell the two apart.
 
 ---
 
@@ -59,7 +61,7 @@ Read **[STRATEGY.md](STRATEGY.md)** first — it contains the diagnosis of why n
   │  2. Pre-declared BRAIN Metric Checks                    │
   │  3. Deflated Sharpe Ratio (DSR) Multiple-Testing Bar    │
   │  4. Sub-Period Stability & Split-Half Consistency       │
-  │  5. Empirical Daily PnL Correlation Gate (< 0.55)       │
+  │  5. Empirical Daily PnL Correlation Gate (|r| < 0.55)   │
   └───────────────────────────┬─────────────────────────────┘
                               │
                               ▼
@@ -86,7 +88,7 @@ backend/
 │   │   ├── evolution.py             Bloat-controlled genetic search & genealogy trees
 │   │   ├── plateau.py               2D surface plateau filter & DSR multiple testing
 │   │   ├── subperiod.py             In-sample / out-of-sample stability validation
-│   │   ├── correlation.py           Empirical PnL Pearson correlation & proxy fallback
+│   │   ├── correlation.py           Empirical PnL Pearson correlation & proxy fallback (gates on |r|)
 │   │   ├── allocator.py             Multi-armed bandit allocation, 3-arm campaigns & diversity caps
 │   │   ├── campaign_runner.py       Resumable DB-checkpointed overnight campaign executor
 │   │   ├── field_triage.py          LLM semantic dataset triage & slot filling
@@ -98,7 +100,7 @@ backend/
 │   └── seeds/            Operator knowledge base seeds (102 operators + signatures)
 ├── scripts/              CLI workflows (run_family, report, fetch_catalog, build_desktop)
 ├── migrations/           Alembic database migrations
-└── tests/                220+ unit and integration tests (fast, isolated SQLite)
+└── tests/                270 unit and integration tests (isolated SQLite, no network)
 fields/                   Field catalog samples and fixtures
 operators/                Operator definitions, signatures, and type constraints
 docs/                     Architecture, study validation, operating guides, decision records
@@ -120,7 +122,7 @@ docs/                     Architecture, study validation, operating guides, deci
 | **2** | Batch simulation runner | Polite async runner (3 concurrent cap, backoff, retry-after) | **Done** |
 | **3** | Family & composite constructors | Grid sweeps, cross-field composites, bloat-controlled genetic search | **Done** |
 | **4** | Honest statistical filters | 2D plateau ridge, Deflated Sharpe Ratio (DSR), subperiod stability | **Done** |
-| **5** | Correlation & portfolio gates | Empirical daily PnL correlation (< 0.55) & structural proxy check | **Done** |
+| **5** | Correlation & portfolio gates | Empirical daily PnL correlation (\|r\| < 0.55) against the submitted portfolio, structural proxy only where PnL is missing | **Done** |
 | **6** | Diversity-capped allocator | Multi-armed bandit (Thompson/UCB) with 20% dataset crowding cap | **Done** |
 | **7** | Web console & desktop app | Interactive heatmaps, keyboard review, PyInstaller standalone binary | **Done** |
 
@@ -224,6 +226,42 @@ python -m scripts.import_brain_alphas
 python -m scripts.backfill_pnl
 ```
 
+Daily PnL is what turns the filter on: sub-period stability, the Deflated Sharpe
+Ratio and the empirical correlation gate all require it, and a candidate without a
+stored series is held back rather than guessed at. Series live under
+`database/pnl/` for the default database; any other `DATABASE_URL` gets its own
+`database/pnl-<digest>/` directory, because the files are keyed by `alpha_id` and
+that id only means something inside one database.
+
+#### 5. Calibrate the Filter
+
+Two complementary questions — does the filter reject noise, and does it accept what
+already worked?
+
+```bash
+# Synthetic ground truth: false-discovery rate on pure noise vs survival of a true signal
+python -m scripts.calibrate_filter --replications 50
+
+# Real ground truth: how many of your own submitted alphas would this filter promote?
+python -m scripts.calibrate_against_portfolio
+```
+
+The second is the one that catches over-tightening. Every alpha in your submitted
+portfolio is a known positive — BRAIN accepted it and you chose to submit it — so a
+filter that rejects them is mis-tuned no matter how clean the synthetic scorecard
+looks. It needs backfilled PnL to score sub-period stability.
+
+#### 6. Reproduce the Gating Baseline
+
+```bash
+python -m scripts.repro_review_findings
+```
+
+Builds a fixed 49-point family end to end and asserts the funnel against a recorded
+baseline, then checks that the promoted alpha actually reaches the report and the
+surface API. Seeds are deterministic, so any movement in the printed counts is a
+real change in the filter rather than run-to-run noise.
+
 ---
 
 ## Standalone Desktop Distribution
@@ -261,6 +299,9 @@ Coverage includes:
 - Plateau filter, Deflated Sharpe Ratio (DSR), and multiple testing haircuts (`test_plateau.py`).
 - Subperiod stability & split-half decay validation (`test_subperiod.py`).
 - Empirical PnL correlation & proxy calibration (`test_correlation.py`, `test_proxy_calibration.py`).
+- Review-finding regressions, including the correlation gate's magnitude rule and
+  per-database PnL isolation (`test_review_findings.py`).
+- Filter calibration on synthetic ground truth (`test_filter_backtest.py`).
 - Bloat-controlled genetic mutations & lineage CTE trees (`test_evolution.py`, `test_genealogy.py`).
 - Multi-armed bandit allocation & diversity caps (`test_allocator.py`, `test_allocator_bandit.py`).
 - Strict HTTP safety assertions (`test_brain_no_post.py` — enforces zero automated submission code paths).

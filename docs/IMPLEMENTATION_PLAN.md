@@ -1,5 +1,13 @@
 # Implementation Plan — Restoring the Promotion Path
 
+> **Status: executed.** This plan was implemented, then reviewed in
+> [../CODE_REVIEW.md](../CODE_REVIEW.md) and hardened further. Baselines quoted below
+> (194 tests, 5.9s) are the pre-implementation state and are retained deliberately so
+> the plan still reads as it was written. Current: 270 tests, ~35s. Decision D3
+> (representative granularity) was resolved in favour of the `structure` tuple — see
+> [OPEN_DECISIONS.md](OPEN_DECISIONS.md) §4.
+
+
 **Scope:** the ten findings from `REVIEW.md`.
 **Baseline commit:** `29a64c2`. All file:line references are as of that commit.
 **Baseline test suite:** 194 passing, 5.9s, no network.

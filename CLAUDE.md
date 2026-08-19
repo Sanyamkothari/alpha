@@ -124,5 +124,7 @@ docs/
 - Distinguish *code exists* from *code runs* from *code has been used*. Several modules had full implementations and zero rows of output.
 - **For any new constraint, exclusion, or scoring path: prove it fires on data written by the production writer, not by the test fixture.** Where a test constructs an identifier, it must construct it using the same function production uses.
 - Migrations via Alembic only. Test both upgrade and downgrade.
-- Keep the test suite green and under ~5 seconds (194 tests at last count).
+- Keep the test suite green (270 tests at last count, ~35s — the statistical layer
+  dominates the runtime). Never assert wall-clock seconds in a test: assert a
+  scaling ratio instead, or the suite fails on whichever machine is busiest.
 - If a task is larger than described, or the design looks wrong, **stop and report** rather than improvising.

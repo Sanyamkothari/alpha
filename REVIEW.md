@@ -1,5 +1,14 @@
 # User review — Alpha Research Engine
 
+> **Status: resolved.** All ten findings below were fixed on
+> `claude/project-feature-review-qxc27g` and hardened further after the follow-up
+> review in [CODE_REVIEW.md](CODE_REVIEW.md). This document is kept as the original
+> point-in-time record — the numbers in it describe the code as it was, not as it is.
+> Current state: 270 tests passing, the console promotes alphas, and the heatmap
+> renders every emitted cell. See
+> [docs/IMPLEMENTATION_RECORD.md](docs/IMPLEMENTATION_RECORD.md) §6 for what changed.
+
+
 A hands-on review done the way a new user would: clone, follow `README.md` literally,
 run the CLI workflows, drive the web console in a browser, and check whether the
 product's promise — *a morning shortlist of submittable alphas* — actually arrives.

@@ -1,5 +1,14 @@
 # Code Review — "Restoring the Promotion Path"
 
+> **Status: resolved.** H1 (the correlation gate's sign handling), M1–M3 (the
+> verification gaps) and the P2/P3 follow-ups in §5 were all implemented. One further
+> defect surfaced *during* that work and is not described below — PnL files were keyed
+> by `alpha_id` in a directory shared across databases — and it is fixed as well.
+> This document is kept as the original point-in-time record. Current state:
+> **270 tests passing, stable**, a deterministic repro harness, and a portfolio-recall
+> script. See [docs/IMPLEMENTATION_RECORD.md](docs/IMPLEMENTATION_RECORD.md) §6.
+
+
 **Reviewed:** `claude/project-feature-review-qxc27g` @ `9958c5e`, diffed against `origin/main`.
 **Method:** ran the suite, ran the repro harness six times, ran the calibration backtest, and
 drove the pipeline end-to-end through the real API and browser with the **default** PnL store.

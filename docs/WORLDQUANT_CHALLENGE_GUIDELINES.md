@@ -79,10 +79,10 @@ For researchers using this repository (`alpha`), the system's hard invariants ma
 
 | Official Guideline / Constraint | Local Repository Implementation & Enforcement |
 | :--- | :--- |
-| **Manual Submissions Only** | Automated simulation only; final submission is **100% human-initiated** via the BRAIN web portal. Enforced by [Hard Invariant 1](file:///Users/sanya/Projects/alpha/CLAUDE.md#L15) and `tests/test_brain_no_post.py`. |
-| **Original Work / No Noise** | Alphas are generated via deterministic AST logic grounded in genuine economic mechanisms (no randomized noise or brute-force formula spam) ([Hard Invariant 2](file:///Users/sanya/Projects/alpha/CLAUDE.md#L16)). |
+| **Manual Submissions Only** | Automated simulation only; final submission is **100% human-initiated** via the BRAIN web portal. Enforced by [Hard Invariant 1](../CLAUDE.md#L15) and `tests/test_brain_no_post.py`. |
+| **Original Work / No Noise** | Alphas are generated via deterministic AST logic grounded in genuine economic mechanisms (no randomized noise or brute-force formula spam) ([Hard Invariant 2](../CLAUDE.md#L16)). |
 | **Fitness & Turnover Optimization** | Built-in filters optimize the fitness formula ($\text{Sharpe} \times \sqrt{\text{Ret}/\text{Turnover}}$) by enforcing decay tuning and volume/liquidity gating to keep turnover low. |
-| **Self-Correlation & Portfolio Quality** | Pre-submission gates verify pairwise correlation $r < 0.70$ and enforce Sharpe $> 1.25$ / Fitness $\ge 1.00$ to maintain out-of-sample stability ([GOLD_LEVEL_GUIDE.md](file:///Users/sanya/Projects/alpha/docs/GOLD_LEVEL_GUIDE.md#L118-L146)). |
+| **Self-Correlation & Portfolio Quality** | Pre-submission gates verify pairwise correlation $r < 0.70$ and enforce Sharpe $> 1.25$ / Fitness $\ge 1.00$ to maintain out-of-sample stability ([GOLD_LEVEL_GUIDE.md](GOLD_LEVEL_GUIDE.md#L118-L146)). |
 | **Single Account Safety** | All sync tools and local databases key to a single user profile without multi-account automation. |
 
 ---

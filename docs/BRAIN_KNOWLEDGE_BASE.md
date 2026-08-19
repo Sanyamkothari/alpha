@@ -179,4 +179,4 @@ When a researcher identifies a single proven fundamental anomaly, they can expan
 | **Simulation Engine** | Automated execution via `backend/app/simulation` in `Delay 1` and `SUBINDUSTRY` neutralization. |
 | **Statistical Gating** | Pre-submission verification of Sharpe $> 1.25$, Fitness $\ge 1.00$, Subperiod uniformity, and DSR. |
 | **Correlation Gating** | Automated pairwise Pearson correlation calculation ($r < 0.70$) across all submitted alphas cached in `database/pnl/`. |
-| **Submission Protocol** | Strict manual 1-click human execution in BRAIN UI to preserve platform compliance ([Hard Invariant 1](file:///Users/sanya/Projects/alpha/CLAUDE.md#L15)). |
+| **Submission Protocol** | Strict manual 1-click human execution in BRAIN UI to preserve platform compliance ([Hard Invariant 1](../CLAUDE.md#L15)). |

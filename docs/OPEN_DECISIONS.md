@@ -3,7 +3,7 @@
 **Document Context:** Phase 1 Design Decisions & Architecture Tradeoffs  
 **Date:** August 2026  
 **Status:** Open for Alignment / Recommendations Specified (No Code Changes in this Document)  
-**Historical Implementation Record:** See [docs/IMPLEMENTATION_RECORD.md](file:///Users/sanya/Projects/alpha/docs/IMPLEMENTATION_RECORD.md) for completed Part A work (B1 scaling, intra-surface deduplication, concurrency locking, Invariant 8 implementation).
+**Historical Implementation Record:** See [docs/IMPLEMENTATION_RECORD.md](IMPLEMENTATION_RECORD.md) for completed Part A work (B1 scaling, intra-surface deduplication, concurrency locking, Invariant 8 implementation).
 
 ---
 

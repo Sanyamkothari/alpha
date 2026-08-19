@@ -106,7 +106,7 @@ The greatest pitfall in quantitative analysis is **overfitting** (curve-fitting 
 * Selecting single-year windfall gains that fail to reproduce across different market cycles.
 
 ### Safeguards Built into This Repository (`alpha`):
-1. **Deterministic AST Synthesis:** Expressions follow grounded economic templates rather than randomized brute-force noise ([Hard Invariant 2](file:///Users/sanya/Projects/alpha/CLAUDE.md#L16)).
+1. **Deterministic AST Synthesis:** Expressions follow grounded economic templates rather than randomized brute-force noise ([Hard Invariant 2](../CLAUDE.md#L16)).
 2. **Deflated Sharpe Ratio (DSR):** Tracks simulation counts and discounts estimated performance based on the multiple-testing penalty.
 3. **Subperiod Stability Checks:** Rejects any signal that fails to produce consistent positive Sharpe ratios across distinct sub-regimes.
 4. **Plateau Tests:** Tests adjacent lookback windows (e.g. $w \pm 20\%$) to ensure performance reflects a broad economic phenomenon rather than a knife-edge parameter spike.
