@@ -41,9 +41,18 @@ class FilterConfig:
     rolling_pos_floor: float = 0.70
     min_split_half_sr_floor: float = -0.5  # Reject if either half is significantly negative
 
-    # Multiple testing & DSR
-    dsr_threshold: float = 0.95
-    dsr_re_promotion_threshold: float = 0.97
+    # Multiple testing & DSR.
+    #
+    # 0.95 is the convention when DSR is the ONLY multiple-testing control. Here
+    # it is the last of five gates -- BRAIN's checks, the plateau shape, the EVT
+    # bar and the sub-period tests all filter first -- so what matters is the
+    # STACK's false-discovery rate, not this gate's confidence level in isolation.
+    # Measured over that stack (docs/CALIBRATION.md), the false-discovery rate is
+    # indistinguishable from zero at every threshold from 0.70 to 0.95, while
+    # power at true Sharpe 1.5 falls from 85% to 46%. 0.70 buys 39 points of
+    # power for no measurable cost in false discoveries.
+    dsr_threshold: float = 0.70
+    dsr_re_promotion_threshold: float = 0.85
 
     # Correlation & portfolio gates
     portfolio_corr_threshold: float = 0.55

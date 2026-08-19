@@ -543,3 +543,131 @@ def test_eval_cache_invalidates_when_new_metrics_land(db_session, tmp_path) -> N
 
     after = _freshness_token(db_session, [])
     assert after != before, "inserting metrics must change the freshness token"
+
+
+def test_ledger_estimates_both_statistics_from_family_maxima(db_session, tmp_path) -> None:
+    """sigma_SR and N_eff must describe the same population: what selection picks.
+
+    Two biases used to pull in opposite directions and land in different gates.
+    sigma_SR came from per-family MEAN Sharpes, and averaging within a family
+    shrinks dispersion by ~1/sqrt(n) -- understating it, lowering SR*, and making
+    the DSR lenient. N_eff was a ratio extrapolated from a sample of families out
+    to every simulated alpha, counting thousands of rho~0.95 siblings as though
+    they were independent chances to be fooled -- overstating it, and the bar
+    with it.
+    """
+    import numpy as np
+
+    from app.models.alphas import Alpha
+    from app.models.results import AlphaMetric, SimulationImport
+    from app.services.trials import build_ledger
+
+    store = PnLStore(tmp_path / "pnl")
+    rng = np.random.default_rng(5)
+    dates = [f"L_{i:04d}" for i in range(1236)]
+
+    n_families, family_size = 4, 12
+    for f in range(n_families):
+        # Each family has its own driver: distinct mechanisms, correlated siblings.
+        driver = rng.normal(0.0, 0.01, size=len(dates))
+        for k in range(family_size):
+            # Between-family levels differ AND each family has its own internal
+            # spread, so the maxima are dispersed differently from the means.
+            # With a uniform internal spread the two estimators coincide by
+            # construction and the test cannot tell them apart.
+            sharpe = 0.4 * f + 0.15 * k * (f + 1)
+            a = Alpha(
+                expression=f"rank(ts_zscore(reg_field,{5 + k}))",
+                normalized_expression=f"rank(ts_zscore(reg_field,{5 + k}))",
+                expression_hash=f"ledger-{f}-{k}",
+                family_key=f"ledgerfam/{f}",
+                status="rejected",
+                source="constructor",
+                region="USA",
+                universe="TOP3000",
+                delay=1,
+                neutralization="SUBINDUSTRY",
+                decay=4,
+                truncation=0.08,
+                is_valid=True,
+                generation=0,
+                feature_json={"grid": {"window": 5 + k, "decay": 4}},
+            )
+            db_session.add(a)
+            db_session.flush()
+            si = SimulationImport(alpha_id=a.id, source="brain_api", raw_payload={})
+            db_session.add(si)
+            db_session.flush()
+            db_session.add(
+                AlphaMetric(
+                    alpha_id=a.id,
+                    simulation_import_id=si.id,
+                    sharpe=sharpe,
+                    fitness=1.0,
+                    turnover=0.3,
+                    passed_all_checks=True,
+                )
+            )
+            idio = rng.normal(0.0, 0.01, size=len(dates))
+            store.save_pnl(a.id, dates, math.sqrt(0.95) * driver + math.sqrt(0.05) * idio)
+    db_session.flush()
+
+    ledger = build_ledger(db_session, store)
+
+    # N_eff counts independent MECHANISMS, not alphas. 48 alphas in 4 families
+    # whose siblings correlate at 0.95 is nothing like 48 independent trials.
+    from sqlalchemy import distinct, func as sa_func, select as sa_select
+
+    # Count groups the way build_ledger does. COUNT(DISTINCT) drops NULL, while
+    # GROUP BY keeps alphas with no family_key together as one pseudo-family --
+    # the conservative choice, since it credits them with one trial rather than
+    # one each.
+    total_families = len(
+        db_session.execute(
+            sa_select(Alpha.family_key)
+            .join(AlphaMetric, Alpha.id == AlphaMetric.alpha_id)
+            .where(AlphaMetric.sharpe.is_not(None))
+            .group_by(Alpha.family_key)
+        ).all()
+    )
+    assert ledger.n_trials >= n_families * family_size
+    assert ledger.n_eff <= total_families, (
+        f"N_eff={ledger.n_eff:.1f} cannot exceed the {total_families} distinct "
+        f"mechanisms in the database"
+    )
+    assert ledger.n_eff < ledger.n_trials / 3, (
+        f"N_eff={ledger.n_eff:.1f} must be far below the {ledger.n_trials} alphas: "
+        f"siblings correlating at 0.95 are not independent chances to be fooled"
+    )
+
+    # sigma_SR is taken from the family maxima, which are more dispersed than the
+    # family means the old estimator used.
+    # Compare the two estimators over whatever families the database holds, so
+    # this stays true regardless of what other tests inserted.
+    per_family = db_session.execute(
+        sa_select(
+            Alpha.family_key,
+            sa_func.max(AlphaMetric.sharpe),
+            sa_func.avg(AlphaMetric.sharpe),
+        )
+        .join(AlphaMetric, Alpha.id == AlphaMetric.alpha_id)
+        .where(AlphaMetric.sharpe.is_not(None))
+        .group_by(Alpha.family_key)
+    ).all()
+    maxima = [float(r[1]) for r in per_family]
+    means = [float(r[2]) for r in per_family]
+
+    expected_sigma = float(np.std(maxima, ddof=1)) / math.sqrt(TRADING_DAYS_PER_YEAR)
+    old_estimator = float(np.std(means, ddof=1)) / math.sqrt(TRADING_DAYS_PER_YEAR)
+
+    assert ledger.sigma_sr_daily == pytest.approx(expected_sigma, rel=1e-6), (
+        "sigma_SR must come from the family maxima -- what selection actually picks"
+    )
+    assert ledger.sigma_sr_daily != pytest.approx(old_estimator, rel=1e-6), (
+        "and must differ from the per-family-mean estimator it replaced"
+    )
+
+    # Reproducible: the bar must not move between identical calls.
+    again = build_ledger(db_session, store)
+    assert again.n_eff == ledger.n_eff
+    assert again.sigma_sr_daily == ledger.sigma_sr_daily

@@ -257,8 +257,18 @@ def test_neighbours_derives_ladders_from_surface_points() -> None:
     target = next(p for p in surface if p.window == 40 and p.decay == 4)
     neighbours, possible = _neighbours(target, surface)
 
-    assert possible == 4  # 2 window neighbours (20, 60) + 2 decay neighbours (2, 6)
-    assert len(neighbours) == 4
-    neigh_coords = {(n.window, n.decay) for n in neighbours}
-    expected_coords = {(20, 4), (60, 4), (40, 2), (40, 6)}
-    assert neigh_coords == expected_coords
+    # Decay snaps to the coarse rungs (0, 4, 8, 16) before adjacency is computed.
+    # decay=4 and decay=6 both sit on rung 4, so (40, 6) is the SAME coordinate as
+    # the target, not a neighbour of it: they are the same alpha, and a plateau
+    # test that counts one as evidence for the other passes on anything. The real
+    # decay neighbours are rung 0 (decays 0, 1, 2) and rung 8.
+    from app.services.plateau import PLATEAU_DECAY_RUNGS, _snap
+
+    assert possible == 4  # windows 20 and 60 on rung 4, plus decay rungs 0 and 8
+    assert len(neighbours) == 4, "one observation per coarse cell, not per fine point"
+
+    coords = {(n.window, _snap(n.decay, PLATEAU_DECAY_RUNGS)) for n in neighbours}
+    assert coords == {(20, 4), (60, 4), (40, 0), (40, 8)}
+    assert all(n.window != 40 or _snap(n.decay, PLATEAU_DECAY_RUNGS) != 4 for n in neighbours), (
+        "a point on the target's own decay rung is never its own neighbour"
+    )

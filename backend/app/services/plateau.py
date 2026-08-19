@@ -235,31 +235,71 @@ def surface_axes(points: list[SurfacePoint]) -> tuple[list[int], list[int]]:
     return (windows or list(FALLBACK_WINDOW_LADDER), decays or list(FALLBACK_DECAY_LADDER))
 
 
+# Decay rungs the plateau test steps over, regardless of how finely the
+# constructor sampled the axis. The plateau test's power comes entirely from
+# neighbours being economically DISTINCT: decay=1 and decay=2 are the same alpha,
+# so on the constructor's 7-rung ladder a point's "neighbours" include near
+# duplicates of itself and the ratio test passes on anything. Settings search
+# still uses the fine ladder -- this only governs what counts as adjacent.
+PLATEAU_DECAY_RUNGS: tuple[int, ...] = (0, 4, 8, 16)
+
+
+def _snap(value: int, rungs: tuple[int, ...]) -> int:
+    """Nearest rung, ties going to the lower one."""
+    return min(rungs, key=lambda r: (abs(r - value), r))
+
+
 def _neighbours(point: SurfacePoint, surface: list[SurfacePoint]) -> tuple[list[SurfacePoint], int]:
-    """Simulated neighbours one step away on the surface coordinate grid."""
+    """Simulated neighbours one economically distinct step away.
+
+    Windows keep the surface's own ladder -- consecutive rungs there are 1.5x to
+    2x apart, which is a real difference. Decay is snapped to
+    ``PLATEAU_DECAY_RUNGS`` first, so points sharing a rung are one coordinate
+    rather than evidence about each other.
+
+    A coarse cell can hold several fine-grained points (decays 0, 1 and 2 all
+    land on rung 0), and each cell contributes exactly ONE observation -- its
+    median member. Counting all three would let a neighbourhood look well
+    sampled while carrying one alpha's worth of independent information, which is
+    the failure the coarse ladder exists to prevent.
+    """
     windows = sorted({p.window for p in surface if p.window is not None})
-    decays = sorted({p.decay for p in surface if p.decay is not None})
     if not windows:
         windows = list(FALLBACK_WINDOW_LADDER)
-    if not decays:
-        decays = list(FALLBACK_DECAY_LADDER)
 
+    decay_rungs = sorted(
+        {_snap(p.decay, PLATEAU_DECAY_RUNGS) for p in surface if p.decay is not None}
+    )
+    if not decay_rungs:
+        decay_rungs = list(PLATEAU_DECAY_RUNGS)
+
+    point_rung = _snap(point.decay, PLATEAU_DECAY_RUNGS)
     try:
         wi = windows.index(point.window)
-        di = decays.index(point.decay)
+        di = decay_rungs.index(point_rung)
     except ValueError:
         return [], 0
-    wanted = set()
+
+    wanted: set[tuple[int, int]] = set()
     for step in (-1, 1):
         if 0 <= wi + step < len(windows):
-            wanted.add((windows[wi + step], point.decay))
-        if 0 <= di + step < len(decays):
-            wanted.add((point.window, decays[di + step]))
-    found = [
-        p
-        for p in surface
-        if p.structure == point.structure and (p.window, p.decay) in wanted and p.sharpe is not None
-    ]
+            wanted.add((windows[wi + step], point_rung))
+        if 0 <= di + step < len(decay_rungs):
+            wanted.add((point.window, decay_rungs[di + step]))
+
+    cells: dict[tuple[int, int], list[SurfacePoint]] = defaultdict(list)
+    for p in surface:
+        if p.structure != point.structure or p.sharpe is None or p.alpha_id == point.alpha_id:
+            continue
+        coord = (p.window, _snap(p.decay, PLATEAU_DECAY_RUNGS))
+        if coord in wanted:
+            cells[coord].append(p)
+
+    found: list[SurfacePoint] = []
+    for members in cells.values():
+        members.sort(key=lambda m: (m.sharpe, m.alpha_id))
+        found.append(members[len(members) // 2])
+
     return found, len(wanted)
 
 
@@ -343,6 +383,8 @@ def haircut_bar(
     noise_ceiling = se * expected_max_normal(n_eff)
     if cfg.bar_form == "debias":
         return float(cfg.target_sharpe + noise_ceiling)
+    if cfg.bar_form == "economic":
+        return float(cfg.target_sharpe)
     return float(max(cfg.target_sharpe, noise_ceiling))
 
 
@@ -467,10 +509,15 @@ def evaluate(
 
             # 5. Deflated Sharpe Ratio (DSR) using program ledger and family N_eff
             daily_sharpes = [s / math.sqrt(TRADING_DAYS_PER_YEAR) for s in family_sharpes]
+            # Both parameters come from the same trial universe as the bar. Mixing
+            # the family's effective trial count with the programme's Sharpe
+            # dispersion answers no coherent question: SR* = sigma * E[max N] is a
+            # statement about one population, and taking sigma from across
+            # mechanisms while taking N from inside one family describes neither.
             dsr_val = compute_dsr(
                 daily_pnl,
                 daily_sharpes,
-                n_eff=fam_n_eff if fam_n_eff is not None else trial_ledger.n_eff,
+                n_eff=trial_ledger.n_eff,
                 sigma_sr_override=trial_ledger.sigma_sr_daily,
             )
 

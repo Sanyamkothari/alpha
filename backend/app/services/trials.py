@@ -58,10 +58,29 @@ def build_ledger(
     cfg: FilterConfig = DEFAULT_FILTER_CONFIG,
     lookback_days: int = 365,
 ) -> TrialLedger:
-    """Construct program-wide trial ledger across simulated alphas."""
+    """Programme-wide trial ledger, both statistics from one object.
+
+    The object is the set of **family-maximum** alphas: for each family, the point
+    with the highest Sharpe. That is what selection actually operates on -- nobody
+    submits a family's average -- and estimating from it fixes two biases that
+    used to pull in opposite directions and land in different gates:
+
+    * ``sigma_sr`` came from per-family *mean* Sharpes. Averaging within a family
+      shrinks dispersion by roughly 1/sqrt(n), which understates sigma_SR, lowers
+      SR*, and makes the DSR more lenient. Maxima are the right population.
+
+    * ``n_eff`` was a ratio extrapolated from <=100 family representatives out to
+      every simulated alpha. But the population being extrapolated to is mostly
+      within-family siblings at rho ~ 0.95, whose marginal contribution to the
+      effective count is near zero, so the figure came out far too large and the
+      bar with it. The effective number of independent MECHANISMS is what a
+      "best of everything I tried" bar should deflate for, and it is measured
+      directly here rather than scaled.
+
+    ``n_trials`` stays the raw count -- it is reported, not used for deflation.
+    """
     store = pnl_store or get_pnl_store()
 
-    # Total simulated alphas count
     total_simulated = (
         db.scalar(
             select(func.count(func.distinct(Alpha.id)))
@@ -70,46 +89,62 @@ def build_ledger(
         or 1
     )
 
-    # Fetch cross-family simulated alphas to estimate cross-family Sharpe dispersion and N_eff
-    family_metrics = (
-        db.execute(
-            select(Alpha.family_key, func.avg(AlphaMetric.sharpe), func.count(Alpha.id))
-            .join(AlphaMetric, Alpha.id == AlphaMetric.alpha_id)
-            .where(AlphaMetric.sharpe.is_not(None))
-            .group_by(Alpha.family_key)
+    # One row per family: the alpha selection would have picked, and its Sharpe.
+    # Ordered so the sample -- and therefore the bar -- is reproducible.
+    family_max = db.execute(
+        select(
+            Alpha.family_key,
+            func.max(AlphaMetric.sharpe).label("best_sharpe"),
         )
-        .all()
-    )
+        .join(AlphaMetric, Alpha.id == AlphaMetric.alpha_id)
+        .where(AlphaMetric.sharpe.is_not(None))
+        .group_by(Alpha.family_key)
+        .order_by(Alpha.family_key)
+    ).all()
 
-    sharpes_annual = [float(row[1]) for row in family_metrics if row[1] is not None]
-    if len(sharpes_annual) > 1:
-        sigma_annual = float(np.std(sharpes_annual, ddof=1))
-        sigma_sr_daily = sigma_annual / math.sqrt(TRADING_DAYS_PER_YEAR)
+    best_sharpes = [float(r[1]) for r in family_max if r[1] is not None]
+    if len(best_sharpes) > 1:
+        sigma_sr_daily = float(np.std(best_sharpes, ddof=1)) / math.sqrt(TRADING_DAYS_PER_YEAR)
     else:
         # Conservative default cross-family Sharpe dispersion
         sigma_sr_daily = 0.35 / math.sqrt(TRADING_DAYS_PER_YEAR)
 
-    # Compute N_eff over stored PnL vectors (sample representative per family)
-    sample_alpha_ids: list[int] = (
-        db.execute(
-            select(func.max(Alpha.id))
+    # The alpha_ids behind those maxima, for the correlation matrix.
+    rep_ids: list[int] = []
+    for family_key, best in family_max:
+        if best is None:
+            continue
+        aid = db.scalar(
+            select(Alpha.id)
             .join(AlphaMetric, Alpha.id == AlphaMetric.alpha_id)
-            .group_by(Alpha.family_key)
-            .limit(100)
+            .where(Alpha.family_key.is_(None) if family_key is None else Alpha.family_key == family_key)
+            .where(AlphaMetric.sharpe == best)
+            .order_by(Alpha.id)
+            .limit(1)
         )
-        .scalars()
-        .all()
-    )
+        if aid is not None:
+            rep_ids.append(int(aid))
 
-    n_eff = float(total_simulated)
-    if len(sample_alpha_ids) > 1:
-        _, _, matrix = store.get_aligned_matrix(sample_alpha_ids, min_overlap=300)
+    # Absent measurable PnL, the count of distinct mechanisms is a far better
+    # stand-in than the count of alphas: 4,800 alphas in 100 families is not
+    # 4,800 independent chances to be fooled.
+    n_eff = float(max(1, len(rep_ids)))
+    if len(rep_ids) > 1:
+        valid_ids, _, matrix = store.get_aligned_matrix(rep_ids, min_overlap=300)
         if matrix.shape[0] > 1 and matrix.shape[1] >= 300:
             corr_mat = np.nan_to_num(np.corrcoef(matrix), nan=0.0)
-            n_eff_sample = compute_effective_trials(corr_mat)
-            # Scale sample N_eff to total trials
-            ratio = n_eff_sample / float(matrix.shape[0])
-            n_eff = max(1.0, float(total_simulated) * ratio)
+            measured = compute_effective_trials(corr_mat)
+            # Families we could not measure still count as their own trial.
+            unmeasured = len(rep_ids) - matrix.shape[0]
+            n_eff = max(1.0, float(measured + unmeasured))
+
+    log.debug(
+        "ledger_built",
+        n_trials=total_simulated,
+        families=len(family_max),
+        n_eff=round(n_eff, 2),
+        sigma_sr_daily=round(sigma_sr_daily, 6),
+    )
 
     return TrialLedger(
         n_trials=total_simulated,
