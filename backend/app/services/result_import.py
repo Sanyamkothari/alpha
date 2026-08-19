@@ -193,6 +193,16 @@ def parse_result_block(raw: str | dict) -> ParsedResult:
         if nk == "checks" and isinstance(value, list):
             parsed.checks = value
             parsed.passed_all_checks = _checks_pass(value)
+            # BRAIN reports the sub-universe Sharpe as the *value* of the
+            # LOW_SUB_UNIVERSE_SHARPE check, not as a top-level key. Looking only for a
+            # top-level key left the column populated on 4 rows out of 565, and the
+            # missing figure is what made "does low turnover cost sub-universe Sharpe?"
+            # unanswerable — a question that gates a whole line of work.
+            for entry in value:
+                if isinstance(entry, dict) and entry.get("name") == "LOW_SUB_UNIVERSE_SHARPE":
+                    sub = entry.get("value")
+                    if isinstance(sub, (int, float)):
+                        parsed.columns.setdefault("subuniverse_sharpe", float(sub))
             continue
         if nk in ("passedallchecks", "passed"):
             parsed.passed_all_checks = (

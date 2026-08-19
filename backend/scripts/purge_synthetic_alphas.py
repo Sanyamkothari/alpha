@@ -49,6 +49,10 @@ TURNOVER_FLOOR = 0.125
 FITNESS_TOLERANCE = 0.10
 # One or two identical rows is a coincidence; a whole family of them is a fixture.
 MIN_ROWS_TO_JUDGE = 5
+# BRAIN computes fitness with the formula itself, and on real output it reproduces to
+# within 0.005 (measured across 288 rows). Real BRAIN results therefore *cannot*
+# violate it systematically. At this rate the data did not come from BRAIN.
+FABRICATION_VIOLATION_RATE = 0.90
 
 
 @dataclass
@@ -109,17 +113,28 @@ def classify(db) -> list[FamilyVerdict]:
             if abs(_expected_fitness(m.sharpe, m.returns, m.turnover) - m.fitness) > FITNESS_TOLERANCE:
                 mismatches += 1
 
-        # Fabricated = the metrics barely vary AND they do not obey BRAIN's own formula.
-        # Either alone is not enough: a flat surface can be real, and a formula mismatch
-        # on one row can be a rounding artefact.
+        # Fabrication test. An earlier version required BOTH near-identical metrics and
+        # formula violations, and that let a family through: `close/cap` had 5 distinct
+        # tuples against a threshold of 4, so it escaped despite violating the formula on
+        # every single row.
+        #
+        # The tuple-diversity signal was only ever a proxy. The formula violation is the
+        # actual proof: BRAIN *computes* fitness with that formula, so genuine BRAIN
+        # output reproduces it to within 0.005. A family violating it on ~every row did
+        # not come from BRAIN, however varied its numbers look. Diversity is now reported
+        # as supporting detail rather than gating the verdict.
+        #
+        # This does not endanger a real flat surface: a surface whose fitness *agrees*
+        # with the formula is clean no matter how repetitive it is.
+        violation_rate = (mismatches / checked) if checked else 0.0
         few_distinct = len(tuples) <= max(2, n // 10)
-        mostly_wrong = checked > 0 and mismatches / checked > 0.5
-        if few_distinct and mostly_wrong:
+        if checked >= MIN_ROWS_TO_JUDGE and violation_rate >= FABRICATION_VIOLATION_RATE:
+            shape = "near-identical metrics" if few_distinct else f"{len(tuples)} distinct tuples"
             verdicts.append(
                 FamilyVerdict(
                     family, n, "fabricated",
-                    f"{len(tuples)} distinct metric tuples across {n} rows; "
-                    f"{mismatches}/{checked} violate the fitness formula",
+                    f"{mismatches}/{checked} rows ({violation_rate:.0%}) violate BRAIN's own "
+                    f"fitness formula; {shape}",
                     ids,
                 )
             )
@@ -246,8 +261,12 @@ def main() -> int:
         total = 0
         for v in flagged:
             total += v.rows
+            sources = sorted({
+                a.source for a in db.execute(select(Alpha).where(Alpha.id.in_(v.alpha_ids))).scalars()
+            })
             print(f"  [{v.kind:11s}] {v.family_key}")
             print(f"                {v.rows} rows — {v.evidence}")
+            print(f"                source tag: {', '.join(sources)}")
         print(f"\n{total} alpha rows flagged across {len(flagged)} families.")
 
         if not args.apply:

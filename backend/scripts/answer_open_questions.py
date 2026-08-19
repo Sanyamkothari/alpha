@@ -79,9 +79,60 @@ def q1_subuniverse_limit(db) -> None:
         print(f"\n  ANSWER: the limit is {only}. Update docs/BRAIN_API.md and stop treating")
         print("  it as contested.")
     elif len(limits) > 1:
-        print("\n  ANSWER: the limit VARIES across results — it is not one constant.")
-        print("  That is worth knowing on its own; do not hard-code any single value.")
+        print("\n  The limit VARIES across results — it is not one constant.")
+        _test_ratio_hypothesis(db)
     print()
+
+
+def _test_ratio_hypothesis(db) -> None:
+    """A varying limit is a clue, not a dead end: test whether it tracks our own Sharpe.
+
+    Hypothesis: BRAIN does not apply a fixed sub-universe bar, it requires the
+    sub-universe Sharpe to be some fraction of the alpha's *own* Sharpe. Two
+    observations point that way — a family failing at limit 0.80 had Sharpe ~1.07
+    (ratio 0.75), and the 0.01 recorded in docs/BRAIN_API.md would correspond to an
+    alpha with near-zero Sharpe, which is exactly what a trivial tutorial alpha is.
+
+    If it holds, the strategic consequence is large and counter-intuitive: raising
+    Sharpe raises the bar with it, so this check cannot be beaten by a stronger signal.
+    It is a robustness test, not a quality one.
+    """
+    pairs: list[tuple[float, float]] = []
+    for (metric,) in db.execute(select(AlphaMetric)).all():
+        if metric.sharpe is None:
+            continue
+        for entry in _checks(metric):
+            if entry.get("name") != CHECK:
+                continue
+            lim = entry.get("limit")
+            if isinstance(lim, (int, float)) and metric.sharpe not in (None, 0):
+                pairs.append((float(metric.sharpe), float(lim)))
+
+    if len(pairs) < 10:
+        print(f"  CANNOT DETERMINE the rule — only {len(pairs)} (Sharpe, limit) pairs.")
+        return
+
+    ratios = [lim / sharpe for sharpe, lim in pairs if sharpe > 0.01]
+    if not ratios:
+        print("  CANNOT DETERMINE the rule — no positive-Sharpe rows to divide by.")
+        return
+
+    med = st.median(ratios)
+    spread = st.pstdev(ratios) if len(ratios) > 1 else 0.0
+    within = sum(1 for r in ratios if abs(r - med) <= 0.02) / len(ratios)
+
+    print(f"  limit / own-Sharpe over {len(ratios)} rows: median {med:.3f}, sd {spread:.3f}")
+    print(f"  {within:.0%} of rows sit within 0.02 of that median")
+
+    if within >= 0.90:
+        print(f"\n  ANSWER: the limit is NOT fixed — it is {med:.2f} x the alpha's own Sharpe.")
+        print("  Consequence, and it is the important part: raising Sharpe raises this bar")
+        print("  proportionally, so a stronger signal does NOT help you pass it. It is a")
+        print("  robustness test — the alpha must hold up on the smaller universe too.")
+        print("  Record it in docs/BRAIN_API.md as a ratio, not a constant.")
+    else:
+        print("\n  ANSWER: the limit varies but is NOT a clean multiple of our own Sharpe")
+        print("  either. Something else drives it — do not model this check locally yet.")
 
 
 def q2_turnover_vs_subuniverse(db) -> None:
