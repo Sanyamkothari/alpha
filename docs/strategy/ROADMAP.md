@@ -1,27 +1,27 @@
 # Revised Roadmap
 
-**Based on the project inventory of 15 August 2026**
+**Based on the project inventory and operational progress (Updated 20 August 2026)**
 Supersedes the sequencing in the business model and validation protocol.
 
 ---
 
-## What the inventory changed
+## Progress & Operational Evidence
 
-| What we assumed | What is true |
-|---|---|
-| A working alpha engine with a track record | 37 days old, 486 alphas simulated, 3 submitted, **0 acceptances recorded** |
-| Enough history for a validation study | ~36 dense territories vs ~490 needed. Study impossible, not merely underpowered |
-| Crowding history available | Catalog fetch deletes and replaces. Two fetch dates exist |
-| Broad territory coverage | **29 of 6,583 fields** (0.44%), one operator family, zero evolved alphas |
-| Tool running at capacity | 13 simulations/day against a 200–500/day design target — ~4% utilisation |
+| Milestone Metric | Baseline (15 Aug 2026) | Verified State (20 Aug 2026) | Status |
+|---|---|---|---|
+| **Simulated Alphas** | 486 alphas | **695 distinct alphas (740 backtests)** | 178 cleared BRAIN checks |
+| **Recorded Submissions** | 0 tracked / 3 unverified | **17 recorded attempts (10 active in OS)** | 10 submissions accepted into Out-of-Sample |
+| **Stored Daily PnL** | 369 vectors | **390 daily vectors** in `database/pnl/` | Auto-differenced with sidecar metadata |
+| **Point-in-Time Crowding** | Overwritten on fetch | **6,268 snapshots stamped** at creation | `alpha_field_snapshot` preserved |
+| **Statistical Hardening** | Basic plateau & DSR | **EVT Gumbel, Lo SE Z-tests, CSCV, Ridge Clustering** | Multi-testing haircuts institutionalized |
+| **Test Suite** | 176 tests | **262 tests passing (100%)** | Clean CI run in ~7.60s |
 
-**The single sentence version:** you have built the machine and have not yet run it. The business plan describes what to do after you know it works. You do not know that yet.
-
-This is a sequencing problem, not a failure. The engineering is ahead of the evidence, which is the normal failure mode for strong builders and is entirely recoverable — but only if you stop building product and start generating evidence.
+**The operational imperative:** Phase 0 instrumentation is complete, and the system is actively generating evidence toward the 40-submission Phase 1 milestone. 10 alphas are currently active in Out-of-Sample on WorldQuant BRAIN.
 
 ---
 
-## Phase 0 — This week
+## Phase 0 — Instrumentation (Completed)
+
 
 Everything here is cheap, and every day of delay destroys data you cannot get back.
 

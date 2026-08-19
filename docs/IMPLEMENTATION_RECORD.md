@@ -110,3 +110,64 @@ The evolution engine implements genetic recombination of high-performing alpha e
 - **AST Crossover & Mutation:** Safe AST manipulation substituting operators, windows, and cross-sectional normalizers while respecting grammatical constraints.
 - **Diversity Gating:** Enforces non-monolithic seed pools (`check_seed_diversity`), requiring $\ge 3$ distinct time-series operator families in the seed pool to prevent self-correlated inbreeding.
 - **Genealogy Tracking:** Lineage recorded in `alphas.parent_id`, `alphas.generation`, and `alphas.mutation_type`.
+
+---
+
+## 6. Quant Research Review Remediation & Statistical Layer Hardening (Part B)
+
+### 6.1 Intra-Family Single-Linkage Clustering (F1/A1)
+- **Problem:** When multiple candidate points sit on a continuous profitable plateau, adjacent cells exhibit high mutual correlation ($\rho > 0.85$). Naive correlation filtering either vetoed the whole ridge or picked arbitrary boundary points.
+- **Resolution (`clustering.py`):** Implemented single-linkage agglomerative clustering at threshold $\rho \ge 0.90$. All points within the connected cluster are grouped into a single component, and exactly one **ridge center representative** is elected based on shrunk neighbourhood median Sharpe (`ridge_score`).
+- **Portfolio Gating:** Inter-family portfolio correlation is evaluated strictly on signed Pearson correlation $\rho \ge 0.55$ against confirmed submissions (`SubmissionAttempt.result == 'submitted'`).
+
+### 6.2 Stratified Round-Robin Constructor Sampling (F2/A2)
+- **Problem:** Constructor sweeps previously concentrated on a single operator family (`ts_zscore`), creating operator monoculture.
+- **Resolution (`constructor.py`):** Added stratified round-robin sampling across `(layer, ts_sig)` strata during candidate generation, guaranteeing that every expanded family emits $\ge 5$ distinct time-series transforms (`ts_zscore`, `ts_rank`, `ts_delta`, `ts_mean`, `ts_decay_linear`, `ts_std_dev`, `ts_quantile`) and $\ge 1$ depth-2 composite candidate.
+
+### 6.3 Extreme Value Theory (EVT) Hurdle & Lo (2002) SE Z-Tests (F3/F4/A3/A4)
+- **Problem:** Simple Sharpe hurdles ($SR > 1.25$) fail to account for the number of trials searched ($N$), leading to false discoveries from data mining. Furthermore, subperiod Sharpe tests ignored return autocorrelation.
+- **Resolution (`plateau.py`, `subperiod.py`):**
+  1. **EVT Asymptotic Expected Maximum Hurdle (Gumbel correction):**
+     $$E[\max_{i=1..N} SR_i] \approx \sqrt{2 \ln N} + \frac{\gamma}{\sqrt{2 \ln N}}$$
+     Alphas must clear this multiple-testing expected maximum hurdle based on effective independent trials.
+  2. **Lo (2002) Autocorrelation-Adjusted SE Z-Tests:** Computes spectral density / Newey-West adjusted standard errors for split-half and regime stability tests, rejecting decay if $Z$-score indicates statistically significant performance deterioration.
+
+### 6.4 PnL Auto-Differencing, Sidecars & Strict Sharpe Reconciliation (F5b/A5)
+- **Problem:** Cumulative PnL vectors from certain simulation sources could be mistaken for daily incremental returns, distorting variance and Sharpe calculations.
+- **Resolution (`pnl_storage.py`):**
+  - Daily PnL arrays on disk are validated with auto-differencing heuristics (checking monotonicity and bounds).
+  - Sidecar metadata (`.meta.json`) tracks vector provenance, dates, and reported backtest metrics.
+  - **Hard Precondition:** Enforces strict Sharpe reconciliation:
+    $$|\text{sample\_sr} - \text{reported\_sr}| \le 0.10$$
+    If sample Sharpe diverges beyond 0.10 from reported backtest Sharpe, the series is flagged and re-differenced.
+
+### 6.5 Shrunk Ridge Scores & Discounted Thompson Sampling (F6–F10/A6)
+- **Ridge Scoring:** Candidate ranking uses James-Stein style shrunk neighbourhood median Sharpe:
+  $$\text{ridge\_score} = \alpha \cdot \text{median}(\text{Neighbours}) + (1-\alpha) \cdot \text{self\_sharpe}$$
+- **Discounted Thompson Sampling (`allocator.py`):** Multi-armed bandit maintains exponential decay on historical rewards to adapt to shifting dataset fertility, with a strict **20% maximum dataset allocation cap** preventing over-concentration in any single dataset.
+- **Filter Config Centralization (`filter_config.py`):** All filter thresholds and parameters are centralized in a frozen dataclass with runtime SHA-256 fingerprinting to guarantee configuration immutability during campaigns.
+
+---
+
+## 7. Advanced Validation Layer (CSCV, Perturbation, Novelty & Feedback)
+
+### 7.1 Combinatorially Symmetric Cross-Validation (`cscv.py`)
+- Implements Bailey et al. (2016) CSCV to compute the **Probability of Backtest Overfitting (PBO)**.
+- Partitions the $T$-day return series into $S$ slices (e.g. $S=16$) and evaluates performance across all $\binom{S}{S/2}$ training/testing combinations. Alphas with $PBO > 0.50$ are rejected as overfitted.
+
+### 7.2 Parameter & Noise Perturbation Analysis (`perturbation.py`)
+- Evaluates alpha robustness under $\pm 10\%$ lookback window jitter and additive Gaussian noise.
+- Measures Sharpe degradation and weight rank stability; signals that collapse under slight perturbation are flagged as unstable parameter spikes.
+
+### 7.3 Structural & Semantic Novelty (`novelty.py`)
+- Computes AST subtree isomorphism distance and token Jaccard distance against the existing submitted portfolio.
+- Prioritizes structurally distinct mechanisms to maximize portfolio diversification and prevent `PROD_CORRELATION` collisions on WorldQuant BRAIN.
+
+### 7.4 Batch Orthogonalization (`orthogonalization.py`)
+- Applies greedy Gram-Schmidt residualization across shortlisted candidates before batch submission.
+- Ensures that every alpha put forward adds incremental, orthogonal information to the existing portfolio.
+
+### 7.5 Closed-Loop Feedback (`feedback_loop.py`)
+- Continuously ingests simulation outcomes, pass rates, and submission results.
+- Dynamically adjusts constructor search bounds, operator weights, and dataset exploration priorities in real time based on empirical platform feedback.
+

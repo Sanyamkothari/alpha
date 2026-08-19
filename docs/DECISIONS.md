@@ -146,3 +146,49 @@ The Next-Up allocator was rebuilt to operate at whole-surface territory granular
    - Canonical keys (`horizon_band` set) exclude **specifically** that horizon band.
    - Fields remain reachable under untried operator families.
 3. **Absences Reported as Absences**: Unmeasured metrics (such as `self_corr_headroom`) return `None` rather than fabricating synthetic proxy numbers.
+
+
+## D8 — Single-Linkage Ridge Center Representative Election (2026-08-20)
+
+**Status:** accepted (resolves review finding F1).
+
+### What changed
+
+Intra-family candidate deduplication was upgraded from discrete structural slice grouping to single-linkage agglomerative clustering at threshold $\rho \ge 0.90$ across surface points (`app/services/clustering.py`). Within each connected cluster, exactly one representative is elected using shrunk neighbourhood median Sharpe (`ridge_score`).
+
+### Why
+
+Points on the same continuous parameter ridge exhibit high pairwise correlation ($\rho > 0.85$). Selecting arbitrary slice representatives caused boundary points with noisy local peaks to be promoted. Single-linkage clustering groups the whole connected ridge and elects the central, most stable parameter point.
+
+
+## D9 — EVT Asymptotic Expected Maximum Hurdle & Lo (2002) SE Z-Tests (2026-08-20)
+
+**Status:** accepted (resolves review findings F3, F4).
+
+### What changed
+
+1. **EVT Asymptotic Expected Maximum Hurdle**: Multiple-testing adjustments in `app/services/plateau.py` incorporate Extreme Value Theory with Gumbel correction based on effective independent trials ($N_{\text{eff}}$).
+2. **Lo (2002) Autocorrelation-Adjusted SE Z-Tests**: Subperiod split-half consistency and regime decay validation in `app/services/subperiod.py` compute autocorrelation-adjusted standard errors (spectral density / Newey-West) to test for statistically significant performance decay.
+
+### Why
+
+Static Sharpe hurdles fail to penalize extensive data mining across hundreds of parameter combinations. Autoregressive return structure also distorts nominal standard errors, leading to false discoveries without spectral autocorrelation corrections.
+
+
+## D10 — Advanced Validation Suite (CSCV, Perturbation, Novelty & Batch Orthogonality) (2026-08-20)
+
+**Status:** accepted.
+
+### What changed
+
+Added dedicated validation and post-processing services:
+1. **`app/services/cscv.py`**: Combinatorially Symmetric Cross-Validation to evaluate the Probability of Backtest Overfitting (PBO).
+2. **`app/services/perturbation.py`**: Parameter jitter and Gaussian noise perturbation tests.
+3. **`app/services/novelty.py`**: AST subtree and token Jaccard novelty scoring against existing portfolio.
+4. **`app/services/orthogonalization.py`**: Greedy Gram-Schmidt batch residualization.
+5. **`app/services/feedback_loop.py`**: Dynamic parameter adaptation based on backtest performance.
+
+### Why
+
+Provides a comprehensive, institutional-grade statistical defense against overfitting before human review and manual BRAIN submission.
+

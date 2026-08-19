@@ -54,12 +54,13 @@ Read **[STRATEGY.md](STRATEGY.md)** first — it contains the diagnosis of why n
               │
               ▼
   ┌─────────────────────────────────────────────────────────┐
-  │               Honest Multi-Tier Filter                  │
-  │  1. 2D Surface Plateau Ridge (neighbour median)         │
-  │  2. Pre-declared BRAIN Metric Checks                    │
-  │  3. Deflated Sharpe Ratio (DSR) Multiple-Testing Bar    │
-  │  4. Sub-Period Stability & Split-Half Consistency       │
+  │         Honest Multi-Tier Statistical Robustness        │
+  │  1. 2D Surface Plateau Ridge (single-linkage cluster)   │
+  │  2. Pre-declared BRAIN Metric Checks (Sharpe, Fitness)  │
+  │  3. Deflated Sharpe (DSR) & EVT Asymptotic Hurdle (EVT) │
+  │  4. Sub-Period Stability & Lo (2002) SE Z-Tests         │
   │  5. Empirical Daily PnL Correlation Gate (< 0.55)       │
+  │  6. CSCV (PBO), Perturbation Stability & Feedback Loop  │
   └───────────────────────────┬─────────────────────────────┘
                               │
                               ▼
@@ -81,13 +82,21 @@ backend/
 │   ├── validator/        AST compiler: lexer → parser → AST → KB validation → features
 │   ├── services/         Generation core, plateau filter, simulator, DSR, allocator
 │   │   ├── brain/        Polite BRAIN API HTTP client (GET catalog, POST simulations)
-│   │   ├── constructor.py           Deterministic family grid expansion
+│   │   ├── constructor.py           Deterministic family grid expansion & stratified sampling
 │   │   ├── composite_constructor.py Cross-field blends, spreads, residuals & triggers
 │   │   ├── evolution.py             Bloat-controlled genetic search & genealogy trees
-│   │   ├── plateau.py               2D surface plateau filter & DSR multiple testing
-│   │   ├── subperiod.py             In-sample / out-of-sample stability validation
+│   │   ├── clustering.py            Intra-family single-linkage clustering at rho >= 0.90
+│   │   ├── plateau.py               2D surface plateau filter, ridge scores & EVT hurdles
+│   │   ├── subperiod.py             DSR, split-half stability & Lo (2002) SE Z-tests
+│   │   ├── cscv.py                  Combinatorially Symmetric Cross-Validation (CSCV & PBO)
+│   │   ├── perturbation.py          Parameter & noise perturbation stability testing
+│   │   ├── novelty.py               Structural AST & semantic novelty scoring
+│   │   ├── orthogonalization.py     Greedy batch Gram-Schmidt residualization
+│   │   ├── feedback_loop.py         Closed-loop dynamic campaign adaptation
+│   │   ├── filter_backtest.py       Monte Carlo statistical filter classification suite
+│   │   ├── filter_config.py         Centralized filter config with SHA-256 fingerprinting
 │   │   ├── correlation.py           Empirical PnL Pearson correlation & proxy fallback
-│   │   ├── allocator.py             Multi-armed bandit allocation, 3-arm campaigns & diversity caps
+│   │   ├── allocator.py             Multi-armed bandit (Discounted Thompson / UCB) with 20% cap
 │   │   ├── campaign_runner.py       Resumable DB-checkpointed overnight campaign executor
 │   │   ├── field_triage.py          LLM semantic dataset triage & slot filling
 │   │   └── simulation_runner.py     Async batch runner with concurrency caps
@@ -95,17 +104,20 @@ backend/
 │   ├── routers/          FastAPI endpoints (UI summary, surfaces, library, telemetry)
 │   ├── static/           Zero-dependency single-page HTML console (dark/light themes)
 │   ├── desktop.py        Desktop launcher with auto port selection & browser launch
-│   └── seeds/            Operator knowledge base seeds (102 operators + signatures)
+│   └── seeds/            Operator knowledge base seeds (105 operators + signatures)
 ├── scripts/              CLI workflows (run_family, report, fetch_catalog, build_desktop)
 ├── migrations/           Alembic database migrations
-└── tests/                220+ unit and integration tests (fast, isolated SQLite)
+└── tests/                260+ unit and integration tests (fast, isolated SQLite)
 fields/                   Field catalog samples and fixtures
 operators/                Operator definitions, signatures, and type constraints
 docs/                     Architecture, study validation, operating guides, decision records
     ├── strategy/         Validation protocol, product strategy, roadmap, business model
     ├── briefs/           Phase briefs (inventory, phase 0, phase 1)
-    ├── DECISIONS.md      Architectural decision records (D1–D5)
+    ├── DECISIONS.md      Architectural decision records (D1–D10)
+    ├── IMPLEMENTATION_RECORD.md Part A & Part B architecture, scaling & quant remediations
+    ├── OPEN_DECISIONS.md Architectural trade-offs & resolutions (B1–B4)
     ├── PHASE1_OPERATING_GUIDE.md Step-by-step operating runbook
+    ├── GOLD_LEVEL_GUIDE.md WorldQuant BRAIN Gold Level roadmap & expansion
     └── BRAIN_API.md      Empirical API reference and verified behaviors
 ```
 
@@ -116,12 +128,12 @@ docs/                     Architecture, study validation, operating guides, deci
 | Stage | Milestone | Capability | Status |
 |---|---|---|---|
 | **0** | Operator KB, AST compiler & validator | Syntax validation, infix precedence climbing, operator typing | **Done** |
-| **1** | Real BRAIN field catalog | 4,367+ fields across 14+ datasets with user counts & coverage | **Done** |
+| **1** | Real BRAIN field catalog | 6,583 fields across 33 datasets with user counts & coverage | **Done** |
 | **2** | Batch simulation runner | Polite async runner (3 concurrent cap, backoff, retry-after) | **Done** |
 | **3** | Family & composite constructors | Grid sweeps, cross-field composites, bloat-controlled genetic search | **Done** |
-| **4** | Honest statistical filters | 2D plateau ridge, Deflated Sharpe Ratio (DSR), subperiod stability | **Done** |
-| **5** | Correlation & portfolio gates | Empirical daily PnL correlation (< 0.55) & structural proxy check | **Done** |
-| **6** | Diversity-capped allocator | Multi-armed bandit (Thompson/UCB) with 20% dataset crowding cap | **Done** |
+| **4** | Honest statistical filters | 2D plateau ridge, EVT Gumbel hurdle, DSR, Lo (2002) SE Z-tests | **Done** |
+| **5** | Correlation & portfolio gates | Empirical daily PnL correlation (< 0.55) & single-linkage clustering | **Done** |
+| **6** | Diversity-capped allocator | Discounted Thompson Sampling / UCB with 20% dataset crowding cap | **Done** |
 | **7** | Web console & desktop app | Interactive heatmaps, keyboard review, PyInstaller standalone binary | **Done** |
 
 ---

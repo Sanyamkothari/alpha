@@ -1,9 +1,20 @@
-# Open Architectural Decisions: B2, B3, and B4
+# Architectural Decisions & Resolutions: B1, B2, B3, and B4
 
-**Document Context:** Phase 1 Design Decisions & Architecture Tradeoffs  
-**Date:** August 2026  
-**Status:** Open for Alignment / Recommendations Specified (No Code Changes in this Document)  
-**Historical Implementation Record:** See [docs/IMPLEMENTATION_RECORD.md](file:///Users/sanya/Projects/alpha/docs/IMPLEMENTATION_RECORD.md) for completed Part A work (B1 scaling, intra-surface deduplication, concurrency locking, Invariant 8 implementation).
+**Document Context:** Phase 1 Design Decisions, Architecture Tradeoffs & Implementations  
+**Date:** August 2026 (Updated 2026-08-20)  
+**Status:** **All Decisions Resolved & Implemented in Production Codebase**  
+**Historical Implementation Record:** See [docs/IMPLEMENTATION_RECORD.md](file:///Users/sanya/Projects/alpha/docs/IMPLEMENTATION_RECORD.md) for complete Part A & Part B implementations (B1 scaling, intra-surface single-linkage clustering, concurrency locking, EVT hurdles, Lo SE Z-tests, Invariant 8, and statistical hardening).
+
+---
+
+## Resolution Summary
+
+| Decision | Scope | Resolution Status | Implementation Summary |
+| :--- | :--- | :--- | :--- |
+| **B1** | Correlation Scaling & Deduplication | **RESOLVED & IMPLEMENTED** | Scoped strictly to confirmed submitted portfolio ($O(N)$); intra-surface clustering prevents self-vetoes. |
+| **B2** | Neutralization & Settings Expansion | **RESOLVED & IMPLEMENTED** | Option C implemented: 49-alpha primary exploration (`SUBINDUSTRY`) + stratified round-robin constructor sampling. |
+| **B3** | Plateau Geometry & Calibration | **RESOLVED & IMPLEMENTED** | Dynamic surface coordinate derivation from emitted grid points; synchronized fallback ladders; empirical calibration script. |
+| **B4** | Disposition of 5 Uncalled Modules | **RESOLVED & IMPLEMENTED** | Layer 3 deprecated in favor of `composite_constructor.py`; `evolution.py` & composites retained as targeted research CLIs; statistical hardening added. |
 
 ---
 

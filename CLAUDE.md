@@ -19,29 +19,29 @@ A local research system that generates candidate trading alphas for the WorldQua
 
 ---
 
-## Actual state — verified 15 Aug 2026
+## Actual state — verified 20 Aug 2026
 
 The README describes intended capability. These are measured numbers. Trust these.
 
 | | |
 |---|---|
 | Project age | ~6 weeks (first alpha 2026-07-08) |
-| Alphas in DB | 4,857 |
-| Actually simulated | 486 |
-| Passed BRAIN checks | 28 |
-| Passed DSR | 11 |
-| Promoted | 16 |
+| Alphas in DB | 6,377 |
+| Actually simulated | 695 distinct (740 backtest imports) |
+| Passed BRAIN checks | 178 |
+| Stored daily PnL vectors | 390 (in `database/pnl/`) |
+| Recorded submission attempts | 17 |
 | **Submitted to BRAIN** | **10** (`zqNXMEZE`, `N1bkwYGw`, `9qpOZjMq`, `xANpg6OW`, `j26KNdKo`, `RRmwqE5b`, `blQmY7br`, `LLG0Y2p9`, `QP7Znjbg`, `6XlmjjjG`) |
 | **Accepted / active OS** | **10 active in Out-of-Sample** (Score: 7,913.0 pts, 10 submissions in OS, pending UTC leaderboard reset to Gold) |
 | Fields touched | 32 of 6,583 (0.49%) |
-| Operator families used | 1 (`ts_zscore`) before Phase 1 |
-| Throughput | ~13 sims/day against a 200–500/day design target |
+| Operator families used | `ts_zscore`, `ts_rank`, `ts_delta`, `ts_mean`, `ts_decay_linear`, `ts_std_dev`, `ts_quantile` |
+| Test suite | 262 tests passing in ~7.6s |
 
-**The premise "this system produces good alphas" is unproven.** Six submissions cleared BRAIN's gate, which proves the loop closes. It does not establish a rate.
+**The premise "this system produces good alphas" is unproven.** Ten submissions cleared BRAIN's gate into Out-of-Sample, which proves the loop closes. It does not establish a long-term pass rate.
 
 ### The single-template problem
 
-4,608 of 5,177 alphas share one shape: `rank(ts_zscore(divide(ts_backfill(FIELD,120), cap), W))`. Because BRAIN rejects submissions correlating >0.70 with the user's own alphas, the practical yield is roughly **one submittable alpha per field**, not per alpha generated. Phase 1 exists largely to break this monoculture.
+Early iterations concentrated alphas in one shape: `rank(ts_zscore(divide(ts_backfill(FIELD,120), cap), W))`. Because BRAIN rejects submissions correlating >0.70 with the user's own alphas, the practical yield is roughly **one submittable alpha per field**, not per alpha generated. Phase 1 exists largely to break this monoculture.
 
 ### The drift incident — why single-source-of-truth matters here
 
@@ -62,7 +62,7 @@ If you find yourself adding a field that duplicates a fact stored elsewhere, sto
 
 **Goal: 40 submission attempts with recorded outcomes, within ~4 months.** That estimates the true pass rate to about ±15%, which decides whether any of the rest is worth doing.
 
-Build work is complete (see `docs/briefs/brief-phase1.md`). The phase is now **operational**, not engineering — see `docs/PHASE1_OPERATING_GUIDE.md`.
+Build work is complete (see [brief-phase1.md](file:///Users/sanya/Projects/alpha/docs/briefs/brief-phase1.md)). The phase is now **operational**, not engineering — see [PHASE1_OPERATING_GUIDE.md](file:///Users/sanya/Projects/alpha/docs/PHASE1_OPERATING_GUIDE.md).
 
 ### Rules for this phase
 
@@ -77,13 +77,13 @@ No billing, accounts, multi-user features, crowding map, network layer, fertilit
 
 ---
 
-## Open questions needing a human
+## Open questions & Status
 
-| Question | Why it matters |
-|---|---|
-| **BRAIN submission quota per week** | Determines whether 40 attempts in 4 months is feasible at all |
-| Past submission attempts and which check failed | Run `scripts/record_past_attempts.py`. 2-of-2 vs 2-of-15 are different businesses |
-| Does BRAIN check `PROD_CORRELATION` against the platform pool, separate from self-correlation? | Suspected yes but unverified firsthand. Decides whether research ground is shared between users — the premise of the entire product plan |
+| Question | Status / Finding | Impact |
+|---|---|---|
+| **BRAIN submission quota per day/week** | Confirmed: **4 submissions/day** (documented in `PHASE1_OPERATING_GUIDE.md`) | ~480 possible attempts over 16 weeks vs 40 target; quota is not the binding constraint |
+| **Past submission attempts and which check failed** | 17 attempts recorded in `submission_attempts` | 10 confirmed active submissions in OS, 0 platform rejections recorded |
+| **Platform correlation checks (`PROD_CORRELATION` vs `SELF_CORRELATION`)** | Confirmed: Platform evaluates both `SELF_CORRELATION` ($\le 0.70$) and `PROD_CORRELATION` ($\le 0.70$) | Validates that research space is shared across users and multi-testing haircuts are necessary |
 
 ---
 
@@ -103,6 +103,10 @@ docs/
 ├── GOLD_LEVEL_GUIDE.md          10K Gold level targets, daily points & expansion rules
 ├── PHASE1_OPERATING_GUIDE.md    what the human does weekly, and stop conditions
 ├── INVENTORY.md                 ground-truth survey of code and data
+├── IMPLEMENTATION_RECORD.md     architecture records, benchmarks & review remediations
+├── OPEN_DECISIONS.md            decisions record & architectural trade-offs
+├── DECISIONS.md                 historical immutable decision log (D1-D10)
+├── TELEMETRY_AUDIT.md           performance audit & evaluation latency benchmarks
 ├── PHASE0.md                    instrumentation work
 ├── PHASE1.md                    diversity + campaign work
 ├── strategy/
@@ -113,7 +117,7 @@ docs/
 └── briefs/                      the task briefs each phase was built from
 ```
 
-**If asked to analyse whether crowding predicts alpha success:** read `docs/strategy/VALIDATION_PROTOCOL.md` first. It is pre-registered. Running variants until one is significant is precisely the error this project exists to prevent, and doing it on the project's own business case would be self-defeating.
+**If asked to analyse whether crowding predicts alpha success:** read [VALIDATION_PROTOCOL.md](file:///Users/sanya/Projects/alpha/docs/strategy/VALIDATION_PROTOCOL.md) first. It is pre-registered. Running variants until one is significant is precisely the error this project exists to prevent, and doing it on the project's own business case would be self-defeating.
 
 ---
 
@@ -121,8 +125,8 @@ docs/
 
 - **Run queries; do not infer from code.** If you report a number, show the query.
 - **Report absences as absences.** `NOT PRESENT` and `CANNOT DETERMINE` are acceptable answers. Inventing a plausible number is not.
-- Distinguish *code exists* from *code runs* from *code has been used*. Several modules had full implementations and zero rows of output.
+- Distinguish *code exists* from *code runs* from *code has been used*.
 - **For any new constraint, exclusion, or scoring path: prove it fires on data written by the production writer, not by the test fixture.** Where a test constructs an identifier, it must construct it using the same function production uses.
 - Migrations via Alembic only. Test both upgrade and downgrade.
-- Keep the test suite green and under ~5 seconds (194 tests at last count).
+- Keep the test suite green and under ~8 seconds (262 tests passing).
 - If a task is larger than described, or the design looks wrong, **stop and report** rather than improvising.

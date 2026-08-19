@@ -140,3 +140,13 @@ Top simulated territories:
    - Valid BRAIN API credentials (`BRAIN_EMAIL`, `BRAIN_PASSWORD` / authenticated token).
    - Available BRAIN simulation quota headroom (e.g. 50–200 simulations).
    - An operator decision to execute `campaign_runner.execute_campaign(campaign_id, simulate=True)` (or trigger via CLI / scheduled nightly cron).
+
+---
+
+## 6. Post-Remediation Status (August 2026)
+
+Following the audit findings, Part A and Part B remediations were completed:
+1. **Whole-Surface Territory Allocation (D6):** Allocations are planned in complete 49-point surface units across exploit, random-stratified, and plateau-fill arms with exact arithmetic budget closure ($\sum \text{targets} = B$).
+2. **Explicit Resumption Policy (D2 & D3):** Background auto-resumption on boot was disabled by default (`AUTO_RESUME_CAMPAIGNS=false`) to protect quota, while task errors are isolated with forfeited budget rather than stalling campaigns.
+3. **Statistical Layer Hardening:** Deployed EVT Gumbel hurdle, Lo SE Z-tests, single-linkage ridge clustering, and batch orthogonalization to evaluate campaign outputs with full statistical rigor.
+
