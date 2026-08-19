@@ -480,6 +480,7 @@ def expand(
     base_settings: AlphaSettings | None = None,
     max_candidates: int = 400,
     policy: BudgetPolicy | None = None,
+    rank_by_novelty: bool = True,
     arm: str | None = None,
     campaign_task_id: int | None = None,
     rng: random.Random | None = None,
@@ -730,7 +731,7 @@ def expand(
     # Stratified selection
     chosen_configs = select_surface_configs(all_surface_configs, budget_surfaces, rng=rng)
 
-    out: list[Candidate] = []
+    emitted_surfaces: list[list[Candidate]] = []
     rejected = 0
 
     for cfg in chosen_configs:
@@ -741,7 +742,33 @@ def expand(
             arm=arm, campaign_task_id=campaign_task_id,
         )
         rejected += rej
-        out.extend(surface)
+        if surface:
+            emitted_surfaces.append(surface)
+
+    # Novelty prior (C1): order whole surfaces so that structurally novel mechanisms
+    # reach the simulator first. Callers cap how many candidates actually run, and
+    # simulation slots are the scarcest resource in the system — this spends them on
+    # structures we have not already learned the answer to. A ranking key only:
+    # a hard filter over a corpus this size would fit noise (STRATEGY.md §10).
+    if rank_by_novelty and len(emitted_surfaces) > 1:
+        from app.services.novelty import NoveltyScorer, rank_surfaces_by_novelty
+
+        scorer = NoveltyScorer.from_session(db)
+        if scorer.total_alphas > 0:
+            emitted_surfaces = rank_surfaces_by_novelty(emitted_surfaces, scorer)
+            for surf in emitted_surfaces:
+                for cand in surf:
+                    if cand.features is not None:
+                        cand.features["novelty_score"] = round(scorer.score_candidate(cand), 4)
+            log.info(
+                "surfaces_ranked_by_novelty",
+                family=family_key,
+                surfaces=len(emitted_surfaces),
+                corpus=scorer.corpus,
+                corpus_size=scorer.total_alphas,
+            )
+
+    out: list[Candidate] = [c for surf in emitted_surfaces for c in surf]
 
     if max_candidates > 0 and len(out) == 0:
         log.warning(

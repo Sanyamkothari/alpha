@@ -97,6 +97,13 @@ class Verdict:
     gate_mode: str = "DSR"
     subperiod_passed: bool | None = None
     redundant_with: int | None = None
+    # Advisory only — reported, never gated on, until their distributions have been
+    # observed across real families. A threshold picked before seeing the
+    # distribution is a number invented to look rigorous.
+    family_pbo: float | None = None          # E1: None when CSCV degraded on this family
+    family_pbo_reason: str | None = None     # why PBO is unavailable, when it is
+    neutralization_retention: float | None = None   # E2: fraction of Sharpe held one rung along
+    neutralization_robust: bool | None = None       # None = no adjacent surface simulated
     reasons: list[str] = dc_field(default_factory=list)
     config_fingerprint: str = ""
 
@@ -373,14 +380,31 @@ def evaluate(
     from app.services.family_matrix import build_family_matrix
     from app.services.correlation import compute_correlation_matrix
     from app.services.subperiod import compute_effective_trials
+    from app.services.cscv import compute_pbo_cscv
+    from app.services.perturbation import check_neutralization_robustness
 
     fam_matrix = build_family_matrix(db, family_key, pnl_store=store)
     fam_n_eff = None
+    family_pbo: float | None = None
+    family_pbo_reason: str | None = "no family PnL matrix available"
     if fam_matrix is not None and fam_matrix.matrix.shape[0] >= 2:
         corr_mat = compute_correlation_matrix(fam_matrix.matrix)
         fam_n_eff = compute_effective_trials(corr_mat)
 
-    n_trials = fam_n_eff if fam_n_eff is not None else (trial_ledger.n_eff if ledger is not None else max(1, simulated_count))
+        # E1 — the same (N, T) matrix answers a different question from N_eff:
+        # does in-sample rank within this family predict out-of-sample rank at all?
+        # A high PBO says the whole surface is noise, which no per-point statistic
+        # can tell you. Reported, not gated (see Verdict.family_pbo).
+        pbo_res = compute_pbo_cscv(fam_matrix.matrix)
+        if pbo_res.reportable:
+            family_pbo, family_pbo_reason = pbo_res.pbo, None
+        else:
+            family_pbo_reason = pbo_res.degraded_reason
+
+    # One fallback chain, used by both the haircut bar and the DSR. These previously
+    # disagreed: the bar fell back to the raw simulated count while the DSR used the
+    # ledger, so a single family was deflated by two different trial counts.
+    n_trials = fam_n_eff if fam_n_eff is not None else (trial_ledger.n_eff or max(1, simulated_count))
     bar = haircut_bar(n_trials, cfg=cfg)
 
     if portfolio is None:
@@ -460,7 +484,7 @@ def evaluate(
             dsr_val = compute_dsr(
                 daily_pnl,
                 daily_sharpes,
-                n_eff=fam_n_eff if fam_n_eff is not None else trial_ledger.n_eff,
+                n_eff=n_trials,
                 sigma_sr_override=trial_ledger.sigma_sr_daily,
             )
 
@@ -495,6 +519,14 @@ def evaluate(
 
         promoted = bool(survives_statistical_gates and not is_corr)
 
+        # E2 — advisory. Reads across surfaces at this point's (window, decay) to the
+        # adjacent neutralization rungs, which the plateau ridge structurally cannot
+        # reach. Never contributes to `promoted`: its distribution has not been
+        # observed on real families yet, and an unmeasured point returns None.
+        neut_rob = check_neutralization_robustness(point, surface)
+        if neut_rob.is_robust is False:
+            reasons.append(neut_rob.reason)
+
         v = Verdict(
             alpha_id=point.alpha_id,
             expression=point.expression,
@@ -516,6 +548,10 @@ def evaluate(
             dsr_passed=dsr_passed,
             gate_mode="DSR",
             subperiod_passed=subperiod_passed,
+            family_pbo=family_pbo,
+            family_pbo_reason=family_pbo_reason,
+            neutralization_retention=neut_rob.retention,
+            neutralization_robust=neut_rob.is_robust,
             redundant_with=None,
             reasons=reasons,
             config_fingerprint=cfg.fingerprint(),

@@ -154,8 +154,8 @@ def build(
     # ---- 1. Per-Family Sequential Gating Telemetry ----
     add("## Per-Family Sequential Gating Breakdown")
     add("")
-    add("| Family | Mode | Simulated | 1. Checks | 2. Plateau | 3. Sub-Period | 4. DSR/Cold-Start | 5. Orthogonal | 6. Representative | Promoted |")
-    add("|---|---|---|---|---|---|---|---|---|---|")
+    add("| Family | Mode | Simulated | 1. Checks | 2. Plateau | 3. Sub-Period | 4. DSR/Cold-Start | 5. Orthogonal | 6. Representative | Promoted | PBO |")
+    add("|---|---|---|---|---|---|---|---|---|---|---|")
     for family in families:
         f_verdicts = family_verdict_map.get(family, [])
         if not f_verdicts:
@@ -177,10 +177,25 @@ def build(
         s5 = [v for v in s4 if not v.is_correlated]
         s6 = [v for v in s5 if v.promoted]
 
+        # PBO is a family-level property, so every verdict in the family carries the
+        # same value; read it off the first one.
+        pbo_val = f_verdicts[0].family_pbo
+        pbo_str = f"{pbo_val:.2f}" if pbo_val is not None else "insufficient"
+
         add(
             f"| `{family}` | {g_mode} | {sim_display} | {len(s1)} | {len(s2)} | {len(s3)} |"
             f" {len(s4)} | {len(s5)} | {len(s6)} | {sum(1 for v in f_verdicts if v.promoted)} |"
+            f" {pbo_str} |"
         )
+    add("")
+    add("**PBO** — Probability of Backtest Overfitting (CSCV). It answers a question no")
+    add("per-point statistic can: *within this family, does in-sample rank predict")
+    add("out-of-sample rank at all?* ~0.5 means the winner is whichever point got lucky.")
+    add("`insufficient` means the family is too small or too short to evaluate — not 0.")
+    add("")
+    add("Reported only. It is **not** a promotion gate and must not be used as one until")
+    add("ten or more families have a value and the distribution has been looked at; a")
+    add("single family's PBO is noisy (~0.19-0.89 observed across draws of pure noise).")
     add("")
 
     # ---- 2. the shortlist: what to submit ----
@@ -192,13 +207,24 @@ def build(
         add("passing BRAIN's checks is necessary but not sufficient; a result also has to sit")
         add("on a plateau and clear the multiple-testing bar. See the near-misses below.")
     else:
-        add("| # | Ridge Score | Sharpe | DSR | Fitness | neighbours | gate | expression |")
-        add("|---|---|---|---|---|---|---|---|")
+        add("| # | Ridge Score | Sharpe | DSR | PBO | neut. hold | Fitness | neighbours | gate | expression |")
+        add("|---|---|---|---|---|---|---|---|---|---|")
         for i, v in enumerate(accepted_shortlist[:15], 1):
             r_score = f"{v.ridge_score:.2f}" if v.ridge_score is not None else (f"{v.sharpe:.2f}" if v.sharpe else "—")
             nb = f"{v.neighbour_median_sharpe:.2f}" if v.neighbour_median_sharpe is not None else "—"
             dsr_str = f"{v.dsr:.2f}" if v.dsr is not None else "—"
-            add(f"| {i} | {r_score} | {v.sharpe:.2f} | {dsr_str} | {v.fitness:.2f} | {nb} | {v.gate_mode} | `{v.expression}` |")
+            pbo_str = f"{v.family_pbo:.2f}" if v.family_pbo is not None else "—"
+            # "not measured" and "measured and fragile" are different states and the
+            # reviewer needs to tell them apart before acting.
+            if v.neutralization_retention is None:
+                neut_str = "—"
+            else:
+                flag = "" if v.neutralization_robust else " (fragile)"
+                neut_str = f"{v.neutralization_retention:.0%}{flag}"
+            add(
+                f"| {i} | {r_score} | {v.sharpe:.2f} | {dsr_str} | {pbo_str} | {neut_str} |"
+                f" {v.fitness:.2f} | {nb} | {v.gate_mode} | `{v.expression}` |"
+            )
         add("")
         add("Review, correlation-check, and **submit manually**. Nothing here has been sent.")
     add("")

@@ -16,7 +16,8 @@ from app.models.alphas import Alpha
 from app.models.fields import DataField, Dataset
 from app.services.alpha_library import AlphaSettings, create_alpha
 from app.services.constructor import Candidate, FamilySpec, GridAxes, expand
-from app.services.novelty import NoveltyScorer, rank_candidates_by_novelty
+from app.models.enums import AlphaStatus
+from app.services.novelty import NoveltyScorer, rank_surfaces_by_novelty
 from app.services.orthogonalization import build_tier1_residuals, build_tier2_residual
 from app.validator import ValidatorKB
 
@@ -50,19 +51,100 @@ def test_c1_subtree_novelty_scoring_and_reranking(db_session) -> None:
         create_alpha(db_session, c.expression, c.settings, family_key=c.family_key, grid=c.grid, source="test")
     db_session.flush()
 
+    # NOTE: db_session rolls back but cannot undo committed rows, so the corpus here
+    # includes whatever earlier tests committed. Assertions below are therefore
+    # relative — they test behaviour, not absolute counts.
     scorer = NoveltyScorer.from_session(db_session)
-    assert scorer.total_alphas >= 30
+    assert scorer.corpus in ("outcome", "all")
+    assert scorer.total_alphas > 0
     assert len(scorer.idf_table) > 0
 
-    # Verify that frequent subtrees have lower IDF than unseen subtrees
-    for h, idf_val in scorer.idf_table.items():
+    # Frequent subtrees must score below an unseen one.
+    for idf_val in scorer.idf_table.values():
         assert idf_val <= scorer.default_idf
 
-    # Score and re-rank candidates
-    reranked = rank_candidates_by_novelty(candidates, scorer)
-    assert len(reranked) == len(candidates)
-    scores = [scorer.score_candidate(c) for c in reranked]
-    assert all(scores[i] >= scores[i + 1] for i in range(len(scores) - 1))
+    # Ranking operates on whole surfaces, in descending mean novelty.
+    surfaces = _group_into_surfaces(candidates)
+    assert len(surfaces) > 1
+    ranked = rank_surfaces_by_novelty(surfaces, scorer)
+    assert len(ranked) == len(surfaces)
+    means = [
+        sum(scorer.score_candidate(c) for c in surf) / len(surf) for surf in ranked
+    ]
+    assert all(means[i] >= means[i + 1] for i in range(len(means) - 1))
+
+
+def _group_into_surfaces(candidates: list[Candidate]) -> list[list[Candidate]]:
+    """Split an emitted candidate list back into its (window x decay) surfaces."""
+    from app.services.plateau import _structure_of
+
+    grouped: dict[tuple, list[Candidate]] = {}
+    for c in candidates:
+        grouped.setdefault(_structure_of(c.grid), []).append(c)
+    return list(grouped.values())
+
+
+def test_c1_novelty_ranking_keeps_surfaces_contiguous(db_session) -> None:
+    """Ranking must not interleave surfaces.
+
+    Callers cap what reaches BRAIN (``run_family --simulate N``) by slicing the
+    emitted order. If novelty ranking scattered candidates across surfaces, that cap
+    would yield no *complete* (window x decay) surface and the plateau test — the
+    highest-value check in the system — would have nothing to read.
+    """
+    fcode = _seed_field(db_session, "ds_c1_contig", "f_c1_contig")
+    settings = AlphaSettings(region="USA", universe="TOP3000", delay=1)
+    spec = FamilySpec(field_code=fcode)
+
+    candidates = expand(db_session, spec, base_settings=settings, max_candidates=400)
+    assert len(candidates) >= 50
+
+    from app.services.plateau import _structure_of
+
+    # Every surface must occupy one unbroken run in the emitted order.
+    seen_runs: list[tuple] = []
+    for c in candidates:
+        struct = _structure_of(c.grid)
+        if not seen_runs or seen_runs[-1] != struct:
+            seen_runs.append(struct)
+    assert len(seen_runs) == len(set(seen_runs)), "a surface was split across the ordering"
+
+    # And each run is a complete surface.
+    counts: dict[tuple, int] = {}
+    for c in candidates:
+        counts[_structure_of(c.grid)] = counts.get(_structure_of(c.grid), 0) + 1
+    assert len(set(counts.values())) == 1, f"uneven surface sizes: {set(counts.values())}"
+
+
+def test_c1_corpus_scopes_to_outcome_alphas(db_session) -> None:
+    """The corpus is alphas that got somewhere, not everything we ever generated."""
+    fcode = _seed_field(db_session, "ds_c1_scope", "f_c1_scope")
+    settings = AlphaSettings(region="USA", universe="TOP3000", delay=1)
+    spec = FamilySpec(field_code=fcode)
+    candidates = expand(db_session, spec, base_settings=settings, max_candidates=400)
+
+    outcome_states = [AlphaStatus.PASSED.value, AlphaStatus.SUBMITTED.value]
+    before = (
+        db_session.query(Alpha).filter(Alpha.status.in_(outcome_states)).count()
+    )
+    total_before = db_session.query(Alpha).count()
+
+    created = [
+        create_alpha(db_session, c.expression, c.settings, family_key=c.family_key, grid=c.grid, source="test").alpha
+        for c in candidates[:20]
+    ]
+    db_session.flush()
+
+    # 20 new alphas, only 2 of which reached an outcome. The corpus must count the
+    # 2, not the 20 — that distinction is the whole point of scoping it.
+    for a in created[:2]:
+        a.status = AlphaStatus.PASSED.value
+    db_session.flush()
+
+    scorer = NoveltyScorer.from_session(db_session)
+    assert scorer.corpus == "outcome"
+    assert scorer.total_alphas == before + 2
+    assert scorer.total_alphas < total_before + 20
 
 
 def test_c2_orthogonalisation_tier1_and_tier2(db_session) -> None:
