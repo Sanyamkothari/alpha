@@ -8,14 +8,14 @@ representative selection, report generation, and surface API checks.
 from __future__ import annotations
 
 import math
-import sys
 import tempfile
+import zlib
 from pathlib import Path
 
 import numpy as np
 from fastapi.testclient import TestClient
-from sqlalchemy import create_engine, select
-from sqlalchemy.orm import Session, sessionmaker
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
 
 from app.db import get_db
 from app.main import app
@@ -24,6 +24,7 @@ from app.models.alphas import Alpha
 from app.models.enums import AlphaStatus, ImportSource
 from app.models.results import AlphaMetric, SimulationImport
 from app.seeds import load_fields, load_lookups, load_operators
+from app.services import pnl_storage
 from app.services.constructor import (
     STANDARD_DECAYS,
     STANDARD_WINDOWS,
@@ -35,6 +36,16 @@ from app.services.plateau import evaluate
 from app.services.pnl_storage import PnLStore
 from app.services.report import build as build_report
 from scripts._cli import cli_main
+
+
+def _seed_for(*parts: object) -> int:
+    """Deterministic across processes.
+
+    hash() on a tuple containing a str is salted by PYTHONHASHSEED, so seeding from
+    it makes this harness generate different PnL on every run — and a reproduction
+    that does not reproduce cannot be a regression baseline.
+    """
+    return zlib.crc32("|".join(str(p) for p in parts).encode()) % (2**31)
 
 
 @cli_main
@@ -78,6 +89,11 @@ def main() -> None:
 
         # 3. Create Alphas and synthetic simulation metrics with known plateau
         store = PnLStore(tmp_dir / "pnl")
+        # The report and the surfaces API resolve their own store via get_pnl_store().
+        # Passing pnl_store= to evaluate() only would leave those two paths with no PnL,
+        # so they would promote nothing and "verify" a report that is empty by
+        # construction. Redirect the process-wide default instead.
+        pnl_storage._default_store = store
         dates = [f"d_{i:04d}" for i in range(1236)]
         daily_vol = 0.01
 
@@ -133,7 +149,7 @@ def main() -> None:
 
             # 4. Generate independent stationary daily PnL vectors matching reported Sharpe
             daily_sharpe = sharpe / math.sqrt(252)
-            rng = np.random.default_rng(abs(hash((w, d, alpha.id, "repro"))) % (2**31))
+            rng = np.random.default_rng(_seed_for(w, d, alpha.id, "repro"))
             half = len(dates) // 2
             n1 = rng.normal(0, daily_vol, half)
             n1 = (n1 - np.mean(n1)) / float(np.std(n1, ddof=1)) * daily_vol
@@ -148,7 +164,7 @@ def main() -> None:
         print("✓ Created 49 Alpha records and generated independent PnL series")
 
         # 5. Evaluate family
-        verdicts = evaluate(db, spec.family_key(), pnl_store=store)
+        verdicts = evaluate(db, spec.family_key())
 
         simulated_cnt = len(verdicts)
         clears_cnt = sum(1 for v in verdicts if v.clears_bar)
@@ -170,22 +186,53 @@ def main() -> None:
         print(f"8. Redundant:       {redundant_cnt:>2}  (Demoted plateau twins)")
         print("-------------------------------\n")
 
-        assert simulated_cnt == 49, f"Expected 49 simulated, got {simulated_cnt}"
-        assert clears_cnt == 49, f"Expected 49 clearing checks, got {clears_cnt}"
-        assert plateau_cnt >= 9, f"Expected >= 9 plateau points, got {plateau_cnt}"
-        assert subperiod_cnt >= 9, f"Expected >= 9 subperiod passed, got {subperiod_cnt}"
-        assert dsr_cnt >= 9, f"Expected >= 9 DSR passed, got {dsr_cnt}"
-        assert corr_cnt == 0, f"Expected 0 correlated collisions, got {corr_cnt}"
-        assert promoted_cnt >= 1, f"Expected >= 1 promoted representative, got {promoted_cnt}"
-        assert redundant_cnt >= 8, f"Expected >= 8 redundant twins, got {redundant_cnt}"
-        print("✓ All funnel asserts passed!")
+        # Exact counts, not floors. The seed is fixed, so any movement here is a real
+        # change in the filter and should be read as one — a ">= 9" floor would have
+        # sat quietly through a drift from 36 to 12.
+        expected = {
+            "simulated": 49,
+            "clears": 49,
+            "plateau": 49,
+            "subperiod": 36,
+            "dsr": 12,
+            "correlated": 0,
+            "promoted": 1,
+            "redundant": 11,
+        }
+        actual = {
+            "simulated": simulated_cnt,
+            "clears": clears_cnt,
+            "plateau": plateau_cnt,
+            "subperiod": subperiod_cnt,
+            "dsr": dsr_cnt,
+            "correlated": corr_cnt,
+            "promoted": promoted_cnt,
+            "redundant": redundant_cnt,
+        }
+        if actual != expected:
+            drift = {k: (expected[k], actual[k]) for k in expected if expected[k] != actual[k]}
+            raise AssertionError(
+                f"funnel drifted from the recorded baseline (expected, actual): {drift}\n"
+                "If the change is intended, update the baseline in this file."
+            )
+        print("✓ All funnel asserts passed (exact match against recorded baseline)")
 
         # 6. Generate and verify report
         report_text = build_report(db)
         assert "| Family | Mode | Simulated | 1. Checks | 2. Plateau | 3. Sub-Period | 4. DSR/Cold-Start | 5. Orthogonal | 6. Representative | Promoted |" in report_text
         assert "What to try next (allocator suggestions)" in report_text
         assert "seed_all" not in report_text  # catalog was seeded
-        print("✓ Report generation passed (10-column table verified)")
+        # The header rendering alone proves nothing: the report must actually carry the
+        # promotion through. Without this the harness happily passes over an empty
+        # shortlist, which is exactly the state the review found.
+        assert "Nothing survived the filter" not in report_text, (
+            "report shows an empty shortlist even though the funnel promoted an alpha"
+        )
+        promoted_expr = next(v.expression for v in verdicts if v.promoted)
+        assert promoted_expr in report_text, (
+            f"promoted alpha {promoted_expr!r} is missing from the report shortlist"
+        )
+        print("✓ Report generation passed (10-column table + promoted alpha present)")
 
         # 7. Verify UI surfaces endpoint via TestClient
         def _get_db():
@@ -201,7 +248,20 @@ def main() -> None:
             assert len(data["windows"]) == 7
             assert len(data["decays"]) == 7
             assert len(data["surfaces"][0]["cells"]) == 49
-            print("✓ Surface API endpoint passed (7x7 axes and 49/49 cells verified)")
+            axis_w = set(data["windows"])
+            axis_d = set(data["decays"])
+            off_axis = [
+                k for k in data["surfaces"][0]["cells"]
+                if int(k.split(":")[0]) not in axis_w or int(k.split(":")[1]) not in axis_d
+            ]
+            assert not off_axis, f"cells rendered off the returned axes: {off_axis[:5]}"
+            promoted_cells = [
+                k for k, c in data["surfaces"][0]["cells"].items() if c.get("promoted")
+            ]
+            assert len(promoted_cells) == 1, (
+                f"expected exactly 1 promoted cell on the surface, got {len(promoted_cells)}"
+            )
+            print("✓ Surface API passed (7x7 axes, 49/49 cells on-axis, 1 promoted cell)")
         finally:
             app.dependency_overrides.pop(get_db, None)
 

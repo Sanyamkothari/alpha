@@ -25,7 +25,7 @@ import sys
 from sqlalchemy import select
 
 from app.db import session_scope
-from app.models.campaigns import Campaign, CampaignTask
+from app.models.campaigns import Campaign
 from app.services.campaign_runner import create_nightly_campaign, execute_campaign
 
 

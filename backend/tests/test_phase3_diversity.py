@@ -8,14 +8,11 @@ Validates:
 
 from __future__ import annotations
 
-import math
-import pytest
 from sqlalchemy.orm import Session
 
-from app.models.alphas import Alpha
 from app.models.fields import DataField, Dataset
 from app.services.alpha_library import AlphaSettings, create_alpha
-from app.services.constructor import Candidate, FamilySpec, GridAxes, expand
+from app.services.constructor import FamilySpec, expand
 from app.services.novelty import NoveltyScorer, rank_candidates_by_novelty
 from app.services.orthogonalization import build_tier1_residuals, build_tier2_residual
 from app.validator import ValidatorKB

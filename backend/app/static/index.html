@@ -698,8 +698,12 @@ function fullCard(row){
   const selfCorrTag = row.self_correlation_method === 'structural_proxy' ? ' (proxy)' : '';
   let selfCorrBadge = '';
   if (selfCorrVal !== null && row.self_correlation_target_id) {
-    const color = selfCorrVal < 0.55 ? 'var(--ok)' : (selfCorrVal < 0.70 ? 'var(--warn,#fb8c00)' : 'var(--bad,#e53935)');
-    const warning = selfCorrVal >= 0.70 ? ' ⚠️ BRAIN limit 0.70' : '';
+    // Severity is magnitude: -0.98 against a submitted alpha is that alpha inverted,
+    // which is a duplicate to BRAIN, not a hedge. The number keeps its sign so the
+    // operator can see which; only the colour and the warning read |rho|.
+    const selfCorrMag = Math.abs(selfCorrVal);
+    const color = selfCorrMag < 0.55 ? 'var(--ok)' : (selfCorrMag < 0.70 ? 'var(--warn,#fb8c00)' : 'var(--bad,#e53935)');
+    const warning = selfCorrMag >= 0.70 ? ' ⚠️ BRAIN limit 0.70' : '';
     selfCorrBadge = `<span style="border:1px solid ${color};color:${color};padding:2px 6px;border-radius:4px;font-size:11px;font-weight:600" title="Max self-correlation against confirmed submitted alphas">Self-Corr: ${selfCorrVal.toFixed(2)}${selfCorrTag} vs #${row.self_correlation_target_id}${warning}</span>`;
   }
 

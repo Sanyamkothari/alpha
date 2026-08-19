@@ -2,10 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime
-
-from app.models.alphas import Alpha, SubmissionAttempt, sync_alpha_platform_outcome
-from app.models.enums import AlphaStatus, PlatformOutcome, SubmissionCheckName, SubmissionResult
+from app.models.enums import AlphaStatus, PlatformOutcome, SubmissionCheckName
 from app.services.alpha_library import AlphaSettings, create_alpha
 
 

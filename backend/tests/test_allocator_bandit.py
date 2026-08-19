@@ -11,7 +11,6 @@ Tests:
 from __future__ import annotations
 
 import random
-import pytest
 
 from app.services.allocator import (
     DiscountedThompsonSampler,

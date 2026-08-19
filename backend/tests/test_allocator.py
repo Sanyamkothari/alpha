@@ -7,13 +7,11 @@ and territory coordinate exploration across workstreams W1–W6.
 from __future__ import annotations
 
 import pytest
+
 from app.models.alphas import Alpha, SubmissionAttempt
 from app.models.fields import DataField, Dataset
 from app.services.allocator import (
     CROWDED_USER_COUNT,
-    MAX_DATASET_SHARE,
-    MIN_VIABLE_CAMPAIGN_BUDGET,
-    MIN_VIABLE_TERRITORY_SIMS,
     DatasetStat,
     _dataset_priority,
     plan_budget_allocation,

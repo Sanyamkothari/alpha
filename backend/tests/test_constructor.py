@@ -16,7 +16,6 @@ from __future__ import annotations
 
 from app.services.alpha_library import AlphaSettings
 from app.services.constructor import (
-    FREQUENCY_BACKFILL,
     BudgetPolicy,
     FamilySpec,
     GridAxes,

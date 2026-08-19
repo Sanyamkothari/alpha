@@ -1,11 +1,12 @@
-from datetime import date
-import pytest
-from fastapi.testclient import TestClient
 from sqlalchemy import select
 
-from app.main import app
-from app.models.alphas import Alpha, AlphaStatusHistory, SubmissionAttempt, sync_alpha_platform_outcome
-from app.models.enums import AlphaStatus, OutcomeSource, PlatformOutcome
+from app.models.alphas import (
+    Alpha,
+    AlphaStatusHistory,
+    SubmissionAttempt,
+    sync_alpha_platform_outcome,
+)
+from app.models.enums import AlphaStatus
 from app.services.alpha_library import AlphaSettings, create_alpha
 
 

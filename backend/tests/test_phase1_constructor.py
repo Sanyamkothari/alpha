@@ -1,15 +1,11 @@
-from app.models.alphas import Alpha, SubmissionAttempt
-from app.models.campaigns import Campaign, CampaignTask
-from app.models.fields import DataField, Dataset
-from app.models.enums import AlphaStatus
-from app.models.results import AlphaMetric
+import numpy as np
+
+from app.models.alphas import SubmissionAttempt
 from app.services.allocator import plan_budget_allocation
 from app.services.alpha_library import AlphaSettings, create_alpha
 from app.services.constructor import FamilySpec, expand
 from app.services.correlation import compute_max_self_correlation_with_submitted
-from app.services.evolution import EvolutionConfig, evolve_generation
 from app.services.pnl_storage import PnLStore
-import numpy as np
 
 
 def test_standard_7x7_grid_expansion(db_session):

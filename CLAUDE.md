@@ -62,7 +62,7 @@ If you find yourself adding a field that duplicates a fact stored elsewhere, sto
 
 **Goal: 40 submission attempts with recorded outcomes, within ~4 months.** That estimates the true pass rate to about ±15%, which decides whether any of the rest is worth doing.
 
-Build work is complete (see [brief-phase1.md](file:///Users/sanya/Projects/alpha/docs/briefs/brief-phase1.md)). The phase is now **operational**, not engineering — see [PHASE1_OPERATING_GUIDE.md](file:///Users/sanya/Projects/alpha/docs/PHASE1_OPERATING_GUIDE.md).
+Build work is complete (see [brief-phase1.md](docs/briefs/brief-phase1.md)). The phase is now **operational**, not engineering — see [PHASE1_OPERATING_GUIDE.md](docs/PHASE1_OPERATING_GUIDE.md).
 
 ### Rules for this phase
 
@@ -117,7 +117,7 @@ docs/
 └── briefs/                      the task briefs each phase was built from
 ```
 
-**If asked to analyse whether crowding predicts alpha success:** read [VALIDATION_PROTOCOL.md](file:///Users/sanya/Projects/alpha/docs/strategy/VALIDATION_PROTOCOL.md) first. It is pre-registered. Running variants until one is significant is precisely the error this project exists to prevent, and doing it on the project's own business case would be self-defeating.
+**If asked to analyse whether crowding predicts alpha success:** read [VALIDATION_PROTOCOL.md](docs/strategy/VALIDATION_PROTOCOL.md) first. It is pre-registered. Running variants until one is significant is precisely the error this project exists to prevent, and doing it on the project's own business case would be self-defeating.
 
 ---
 
@@ -128,5 +128,7 @@ docs/
 - Distinguish *code exists* from *code runs* from *code has been used*.
 - **For any new constraint, exclusion, or scoring path: prove it fires on data written by the production writer, not by the test fixture.** Where a test constructs an identifier, it must construct it using the same function production uses.
 - Migrations via Alembic only. Test both upgrade and downgrade.
-- Keep the test suite green and under ~8 seconds (262 tests passing).
+- Keep the test suite green (270 tests at last count, ~35s — the statistical layer
+  dominates the runtime). Never assert wall-clock seconds in a test: assert a
+  scaling ratio instead, or the suite fails on whichever machine is busiest.
 - If a task is larger than described, or the design looks wrong, **stop and report** rather than improvising.

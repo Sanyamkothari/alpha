@@ -10,9 +10,9 @@ import numpy as np
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
+import tests.conftest as C
 from app.models import Base
 from app.models.fields import DataField, Dataset
-import tests.conftest as C
 
 
 def build_db(path):
@@ -52,7 +52,9 @@ print("=" * 70)
 print("FINDING 1 — campaign_runner references BatchResult.errored")
 print("=" * 70)
 import inspect
+
 from app.services import campaign_runner, simulation_runner
+
 src = inspect.getsource(campaign_runner)
 has_errored_ref = ".errored" in src
 has_errored_attr = hasattr(simulation_runner.BatchResult, "errored")
@@ -69,8 +71,8 @@ print("FINDING 2 — plateau_fill arm expands to zero candidates")
 print("=" * 70)
 tmp = tempfile.mkdtemp()
 eng, SF = build_db(os.path.join(tmp, "t.db"))
-from app.services.constructor import FamilySpec, expand
 from app.services.alpha_library import AlphaSettings
+from app.services.constructor import FamilySpec, expand
 
 with SF() as db:
     settings = AlphaSettings(region="USA", universe="TOP3000", delay=1)
@@ -87,6 +89,7 @@ print("=" * 70)
 print("FINDING 3 — nightly budget overshoot in plan_budget_allocation")
 print("=" * 70)
 from app.services.allocator import plan_budget_allocation
+
 with SF() as db:
     for budget in (200, 100, 50, 20):
         plan = plan_budget_allocation(db, total_simulations=budget)

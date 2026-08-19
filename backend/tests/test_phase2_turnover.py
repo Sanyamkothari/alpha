@@ -7,7 +7,6 @@ Validates:
 
 from __future__ import annotations
 
-import pytest
 from sqlalchemy.orm import Session
 
 from app.models.fields import DataField, Dataset

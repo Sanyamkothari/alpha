@@ -3,23 +3,22 @@
 from __future__ import annotations
 
 import math
+import zlib
 from pathlib import Path
 
 import numpy as np
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy import create_engine, select
+from sqlalchemy import create_engine
 from sqlalchemy.orm import Session
 
 from app.models import Base
 from app.models.alphas import Alpha, SubmissionAttempt
 from app.models.enums import AlphaStatus, ImportSource
-from app.models.fields import DataField
 from app.models.results import AlphaMetric, SimulationImport
 from app.services.constructor import STANDARD_DECAYS, STANDARD_WINDOWS
 from app.services.correlation import (
     check_portfolio_empirical_correlation,
-    submitted_portfolio,
 )
 from app.services.plateau import (
     FALLBACK_DECAY_LADDER,
@@ -27,11 +26,15 @@ from app.services.plateau import (
     _select_representatives,
     check_portfolio_correlation,
     evaluate,
-    load_surface,
 )
 from app.services.pnl_storage import PnLStore
 from app.services.report import build as build_report
-from app.services.result_import import import_result
+
+
+def _seed_for(*parts: object) -> int:
+    """Deterministic seed across processes (unlike hash() on tuples containing str)."""
+    return zlib.crc32("|".join(str(p) for p in parts).encode()) % (2**31)
+
 
 _STRUCTURE = {"ts": "ts_zscore", "cs": "rank", "group": None, "truncation": 0.08}
 
@@ -96,7 +99,7 @@ def _point_passed(
         dates = [f"d_{i:04d}" for i in range(n_days)]
         daily_sharpe = sharpe / math.sqrt(252)
         daily_vol = 0.01
-        rng = np.random.default_rng(abs(hash((family, window, decay, alpha.id))) % (2**31))
+        rng = np.random.default_rng(_seed_for(family, window, decay, alpha.id))
         pnl = rng.normal(daily_sharpe * daily_vol, daily_vol, n_days)
         std = float(np.std(pnl, ddof=1))
         if std > 0:
@@ -331,7 +334,7 @@ def test_family_promotes_one_representative_per_skeleton(db_session: Session, tm
             a = _point_passed(db_session, fam, w, d, sharpe, pnl_store=None, structural_hash=shash, neut=neut, cs=cs)
             # Create perfectly stationary daily PnL with exact matching Sharpe so all 49 clear reconciliation and stability
             daily_sharpe = sharpe / math.sqrt(252)
-            rng = np.random.default_rng(abs(hash((w, d, a.id))) % (2**31))
+            rng = np.random.default_rng(_seed_for(w, d, a.id))
             half = 1236 // 2
             n1 = rng.normal(0, daily_vol, half)
             n1 = (n1 - np.mean(n1)) / float(np.std(n1, ddof=1)) * daily_vol
@@ -474,3 +477,202 @@ def test_favicon_returns_no_content(client: TestClient) -> None:
     """Test 14: GET /favicon.ico -> 204 No Content."""
     resp = client.get("/favicon.ico")
     assert resp.status_code == 204
+
+
+# --------------------------------------------------------------------------------------
+# Correlation gate must act on magnitude, not sign (CODE_REVIEW.md H1)
+# --------------------------------------------------------------------------------------
+
+
+def _mirror_pair(
+    db_session: Session, tmp_path: Path, *, rho_sign: float = -1.0
+) -> tuple[int, int, PnLStore]:
+    """A submitted alpha plus a candidate whose PnL is (rho_sign x) the same series.
+
+    Same length, same dates, so the pair is fully *measured* — the structural proxy
+    never runs and the verdict is the empirical gate's alone. Different families and
+    hashes so no sibling or skeleton rule can mask the result.
+    """
+    store = PnLStore(tmp_path / "pnl_mirror")
+    submitted = _point_passed(
+        db_session, "sub_m/cap@USA/TOP3000/d1", 22, 4, 2.0,
+        structural_hash="hash-submitted", status=AlphaStatus.SUBMITTED.value,
+    )
+    db_session.add(SubmissionAttempt(alpha_id=submitted.id, result="submitted"))
+    candidate = _point_passed(
+        db_session, "cand_m/cap@USA/TOP3000/d1", 22, 4, 2.0,
+        structural_hash="hash-candidate", status=AlphaStatus.PASSED.value,
+    )
+    db_session.flush()
+
+    dates = [f"d_{i:04d}" for i in range(1236)]
+    rng = np.random.default_rng(20260819)
+    series = rng.normal(0.0002, 0.01, len(dates))
+    store.save_pnl(submitted.id, dates, series)
+    store.save_pnl(candidate.id, dates, rho_sign * series)
+    return candidate.id, submitted.id, store
+
+
+def test_exact_negation_of_submitted_alpha_is_blocked(
+    db_session: Session, tmp_path: Path
+) -> None:
+    """An inverted copy of a submitted alpha is a duplicate to BRAIN, not a hedge.
+
+    Gating on signed rho let this through as the most diversified candidate on the
+    board — the worst possible false negative for the gate whose whole job is
+    catching duplicates.
+    """
+    cand_id, sub_id, store = _mirror_pair(db_session, tmp_path, rho_sign=-1.0)
+
+    is_corr, reason, max_corr = check_portfolio_empirical_correlation(
+        db_session, cand_id, pnl_store=store
+    )
+
+    assert is_corr, "an exact negation of a submitted alpha must be blocked"
+    assert reason is not None and f"#{sub_id}" in reason
+    assert max_corr == pytest.approx(-1.0, abs=1e-6), (
+        "the reported correlation must keep its sign so the operator can tell an "
+        "inverted collision from a co-moving one"
+    )
+
+
+def test_negative_correlation_is_reported_signed_to_the_operator(
+    db_session: Session, tmp_path: Path
+) -> None:
+    """The number shown in the console must agree with the number the gate acted on."""
+    from app.services.correlation import compute_max_self_correlation_with_submitted
+
+    cand_id, sub_id, store = _mirror_pair(db_session, tmp_path, rho_sign=-1.0)
+
+    self_corr, target_id, method = compute_max_self_correlation_with_submitted(
+        db_session, cand_id, pnl_store=store
+    )
+
+    assert method == "empirical"
+    assert target_id == sub_id, "the colliding alpha must be identified, not dropped"
+    assert self_corr == pytest.approx(-1.0, abs=1e-6), (
+        "reporting 0.00 for a perfect mirror tells the operator the opposite of the truth"
+    )
+
+
+def test_positive_correlation_still_blocks_and_reports_positive(
+    db_session: Session, tmp_path: Path
+) -> None:
+    """The magnitude rule must not have broken the ordinary co-moving case."""
+    cand_id, sub_id, store = _mirror_pair(db_session, tmp_path, rho_sign=1.0)
+
+    is_corr, reason, max_corr = check_portfolio_empirical_correlation(
+        db_session, cand_id, pnl_store=store
+    )
+
+    assert is_corr
+    assert reason is not None and f"#{sub_id}" in reason
+    assert max_corr == pytest.approx(1.0, abs=1e-6)
+
+
+def test_uncorrelated_candidate_still_passes(db_session: Session, tmp_path: Path) -> None:
+    """Gating on |rho| must not turn independent series into collisions."""
+    store = PnLStore(tmp_path / "pnl_indep")
+    submitted = _point_passed(
+        db_session, "sub_i/cap@USA/TOP3000/d1", 22, 4, 2.0,
+        structural_hash="hash-sub-i", status=AlphaStatus.SUBMITTED.value,
+    )
+    db_session.add(SubmissionAttempt(alpha_id=submitted.id, result="submitted"))
+    candidate = _point_passed(
+        db_session, "cand_i/cap@USA/TOP3000/d1", 22, 4, 2.0,
+        structural_hash="hash-cand-i", status=AlphaStatus.PASSED.value,
+    )
+    db_session.flush()
+
+    dates = [f"d_{i:04d}" for i in range(1236)]
+    store.save_pnl(submitted.id, dates, np.random.default_rng(1).normal(0.0002, 0.01, len(dates)))
+    store.save_pnl(candidate.id, dates, np.random.default_rng(2).normal(0.0002, 0.01, len(dates)))
+
+    is_corr, reason, max_corr = check_portfolio_empirical_correlation(
+        db_session, candidate.id, pnl_store=store
+    )
+
+    assert not is_corr, f"independent series must pass, got: {reason}"
+    assert abs(max_corr) < 0.55
+
+
+# --------------------------------------------------------------------------------------
+# PnL files are keyed by alpha_id, which is only unique within one database
+# --------------------------------------------------------------------------------------
+
+
+def test_pnl_dir_is_bound_to_the_configured_database(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A second database must not inherit the first one's PnL.
+
+    alpha_id 42 in a rebuilt or temporary database is a different alpha from
+    alpha_id 42 in the main one. Sharing one flat directory silently feeds one
+    alpha's returns into another's DSR, sub-period and correlation gates — the
+    failure is invisible because every file loads successfully.
+    """
+    from app.config import settings
+    from app.services.pnl_storage import default_pnl_dir
+
+    monkeypatch.setattr(settings, "database_url", "", raising=False)
+    default_dir = default_pnl_dir()
+    assert default_dir.name == "pnl", "the default database keeps the historic path"
+
+    monkeypatch.setattr(settings, "database_url", "sqlite:////tmp/some-other.db", raising=False)
+    other_dir = default_pnl_dir()
+
+    assert other_dir != default_dir, "a different database must get a different PnL directory"
+    assert other_dir.name.startswith("pnl-")
+
+    monkeypatch.setattr(settings, "database_url", "sqlite:////tmp/a-third.db", raising=False)
+    assert default_pnl_dir() != other_dir, "each database gets its own directory"
+
+    monkeypatch.setattr(settings, "database_url", "sqlite:////tmp/some-other.db", raising=False)
+    assert default_pnl_dir() == other_dir, "and the mapping is stable for a given URL"
+
+
+def test_submitted_sibling_blocks_even_when_status_lags(db_session: Session) -> None:
+    """Membership is decided by the submission attempt, not by Alpha.status.
+
+    The two are kept in sync by sync_alpha_platform_outcome today, so this is a
+    guard rather than a live bug: if any future path records an attempt without
+    touching status, a genuinely submitted sibling must not quietly stop blocking.
+    """
+    fam = "lagstatus/cap@USA/TOP3000/d1"
+    siblings = [
+        _point_passed(
+            db_session, fam, w, 4, 2.0,
+            structural_hash="family_hash_lag", status=AlphaStatus.PASSED.value,
+        )
+        for w in (5, 10)
+    ]
+    db_session.flush()
+
+    # A real submission, recorded without the status write.
+    db_session.add(SubmissionAttempt(alpha_id=siblings[0].id, result="submitted"))
+    db_session.flush()
+    assert siblings[0].status != AlphaStatus.SUBMITTED.value, "precondition: status lags"
+
+    is_corr, reason = check_portfolio_correlation(db_session, siblings[1].id)
+
+    assert is_corr, "a sibling with a live submission attempt must still block"
+    assert reason is not None and f"#{siblings[0].id}" in reason
+    assert "submitted alpha" in reason, f"and must be labelled submitted, got: {reason}"
+
+
+def test_recalled_submission_stops_blocking(db_session: Session) -> None:
+    """A recalled submission is not a live position, so it must stop blocking."""
+    fam = "recalled/cap@USA/TOP3000/d1"
+    siblings = [
+        _point_passed(
+            db_session, fam, w, 4, 2.0,
+            structural_hash="family_hash_recalled", status=AlphaStatus.PASSED.value,
+        )
+        for w in (5, 10)
+    ]
+    db_session.flush()
+    db_session.add(
+        SubmissionAttempt(alpha_id=siblings[0].id, result="submitted", is_recalled=True)
+    )
+    db_session.flush()
+
+    is_corr, reason = check_portfolio_correlation(db_session, siblings[1].id)
+    assert not is_corr, f"a recalled submission must not block, got: {reason}"

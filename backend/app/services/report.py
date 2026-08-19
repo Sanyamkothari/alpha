@@ -26,8 +26,6 @@ from app.services.allocator import dataset_stats, suggest
 from app.services.clustering import select_orthogonal_batch
 from app.services.filter_config import DEFAULT_FILTER_CONFIG, FilterConfig
 from app.services.plateau import (
-    DECAY_LADDER,
-    WINDOW_LADDER,
     evaluate_families,
     load_surface,
     surface_axes,

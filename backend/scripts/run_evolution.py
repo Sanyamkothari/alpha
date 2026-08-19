@@ -30,7 +30,6 @@ MIN_DIVERSITY_FAMILIES = 3
 
 def check_seed_diversity(parent_alphas: list[Alpha]) -> tuple[bool, set[str]]:
     """Check how many distinct time-series operator families exist in parent pool."""
-    import re
     known_ops = {"ts_zscore", "ts_rank", "ts_delta", "ts_mean", "ts_decay_linear", "ts_std_dev", "ts_quantile", "ts_corr"}
     found = set()
     for a in parent_alphas:

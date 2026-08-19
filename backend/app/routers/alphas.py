@@ -21,13 +21,8 @@ from app.models.alphas import (
     sync_alpha_platform_outcome,
 )
 from app.models.enums import (
-    AlphaStatus,
     ImportSource,
-    OutcomeSource,
-    PlatformOutcome,
     ProductionStatus,
-    SubmissionCheckName,
-    SubmissionResult,
 )
 from app.models.results import AlphaMetric, SimulationImport
 from app.services.alpha_library import (

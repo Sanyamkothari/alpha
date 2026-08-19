@@ -9,18 +9,17 @@ Evaluates the gate stack on synthetic families with known ground truth:
 from __future__ import annotations
 
 import math
+import tempfile
 from collections import defaultdict
 from dataclasses import dataclass, field
 from pathlib import Path
-import tempfile
+
 import numpy as np
 import structlog
 from sqlalchemy import create_engine
-from sqlalchemy.orm import Session, sessionmaker
+from sqlalchemy.orm import sessionmaker
 
 from app.models import Base
-from app.models.alphas import Alpha
-from app.models.enums import AlphaStatus
 from app.models.fields import DataField, Dataset
 from app.models.operators import Operator, OperatorArgument
 from app.models.results import AlphaMetric, SimulationImport

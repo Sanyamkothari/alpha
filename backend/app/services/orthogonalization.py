@@ -9,13 +9,9 @@ with standard equity risk factors or already submitted alphas:
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Sequence
 
 import structlog
 
-from app.models.alphas import Alpha
-from app.services.alpha_library import AlphaSettings
-from app.services.constructor import Candidate
 from app.validator import ValidatorKB, validate
 
 log = structlog.get_logger("orthogonalization")

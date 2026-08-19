@@ -9,9 +9,9 @@ settings, so the same formula under different settings is a distinct alpha.
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Sequence
-from dataclasses import asdict, dataclass
 import hashlib
+from collections.abc import Iterable
+from dataclasses import asdict, dataclass
 
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
@@ -161,6 +161,7 @@ def stamp_alpha_field_snapshots(
 ) -> list[AlphaFieldSnapshot]:
     """Record point-in-time crowding metrics for the alpha's underlying data fields."""
     from datetime import datetime
+
     from app.models.fields import DataField
 
     if field_codes is None:

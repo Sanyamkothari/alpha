@@ -118,7 +118,11 @@ The evolution engine implements genetic recombination of high-performing alpha e
 ### 6.1 Intra-Family Single-Linkage Clustering (F1/A1)
 - **Problem:** When multiple candidate points sit on a continuous profitable plateau, adjacent cells exhibit high mutual correlation ($\rho > 0.85$). Naive correlation filtering either vetoed the whole ridge or picked arbitrary boundary points.
 - **Resolution (`clustering.py`):** Implemented single-linkage agglomerative clustering at threshold $\rho \ge 0.90$. All points within the connected cluster are grouped into a single component, and exactly one **ridge center representative** is elected based on shrunk neighbourhood median Sharpe (`ridge_score`).
-- **Portfolio Gating:** Inter-family portfolio correlation is evaluated strictly on signed Pearson correlation $\rho \ge 0.55$ against confirmed submissions (`SubmissionAttempt.result == 'submitted'`).
+- **Portfolio Gating:** Inter-family portfolio correlation is evaluated against confirmed
+  submissions (`SubmissionAttempt.result == 'submitted'`) on the **magnitude**
+  $|\rho| \ge 0.55$. Gating on signed $\rho$ was a defect — it cleared an exact
+  negation of a submitted alpha and reported it as zero-correlated; see §8.1. The
+  reported figure keeps its sign.
 
 ### 6.2 Stratified Round-Robin Constructor Sampling (F2/A2)
 - **Problem:** Constructor sweeps previously concentrated on a single operator family (`ts_zscore`), creating operator monoculture.
@@ -171,3 +175,91 @@ The evolution engine implements genetic recombination of high-performing alpha e
 - Continuously ingests simulation outcomes, pass rates, and submission results.
 - Dynamically adjusts constructor search bounds, operator weights, and dataset exploration priorities in real time based on empirical platform feedback.
 
+## 8. Post-Review Hardening (Part C)
+
+Changes made after the independent code review in `CODE_REVIEW.md`. Each was verified
+by a regression test that fails against the previous code, not by inspection.
+
+### 8.1 The Correlation Gate Judges Magnitude, Not Sign
+
+**Defect.** The gate compared signed $\rho$ against the threshold. An alpha whose daily
+PnL is the exact negation of a submitted alpha ($\rho = -1.00$) therefore cleared it,
+and — because `max_corr` was initialised at $0.0$ and only raised on $\rho >
+\text{max}$ — was reported to the operator as **self-correlation 0.00**, the strongest
+possible evidence of diversification. The console badge coloured on the same raw value,
+so a perfect mirror rendered green with no warning.
+
+**Reasoning.** The gate exists as a conservative proxy for BRAIN's own self-correlation
+limit. BRAIN measures *duplication*, not portfolio variance: $X$ and $-X$ is one idea
+submitted twice, however well the pair diversifies in theory.
+
+**Resolution.** `check_portfolio_empirical_correlation` and
+`compute_max_self_correlation_with_submitted` rank candidates on $|\rho|$ and report the
+signed value, so the number displayed agrees with the number acted on. The badge colours
+and warns on magnitude. Other consumers were audited and left alone: $N_{\text{eff}}$ is
+eigenvalue-based and already sign-agnostic, and `/api/ui/correlation-matrix` returns raw
+signed values for display.
+
+### 8.2 PnL Storage Is Bound to Its Database
+
+**Defect.** `PnLStore` wrote `<alpha_id>.npy` into a single directory derived from
+`USER_DATA_DIR` alone, independent of `DATABASE_URL`. A rebuilt or second database
+reusing ids $1..N$ silently inherited the first one's PnL and fed it to the
+reconciliation, sub-period, DSR and correlation gates. Nothing errors — every file loads
+successfully — so the failure surfaces only as confidently wrong verdicts.
+
+**Resolution.** `default_pnl_dir()` binds the directory to the configured database. The
+default database keeps the historic `database/pnl` path, so an existing single-database
+install migrates nothing; every other URL gets `database/pnl-<digest>`.
+
+### 8.3 One Source of Truth for "Submitted"
+
+`submitted_portfolio()` defines membership from `SubmissionAttempt`, deliberately not
+from `Alpha.status` (§1.1). `check_portfolio_correlation` nevertheless branched on
+`Alpha.status` for both the sibling-skip and the collision label. The two agree today
+only because `sync_alpha_platform_outcome` writes the status whenever an attempt
+resolves. Both now read the attempt, so a genuinely submitted sibling cannot stop
+blocking, and a recalled submission stops blocking immediately.
+
+### 8.4 Verification That Can Fail
+
+Three defects in the verification itself, none of which changed product behaviour but
+all of which would have let a regression through:
+
+- **`repro_review_findings.py` was not reproducible.** It seeded NumPy from `hash()` of a
+  tuple containing a `str`, which `PYTHONHASHSEED` salts per process; the funnel differed
+  every run (sub-period measured 33–40 across six runs). Seeds now derive from `crc32`,
+  and the `>= 9` floors are replaced by an exact recorded baseline that names any drift.
+- **It verified the funnel through a store the product never uses.** `evaluate()` received
+  an explicit temporary `pnl_store`, while the report and surfaces checks that followed
+  resolved the default store, found no PnL, and promoted nothing — so the script printed
+  success over an empty shortlist. It now redirects the process-wide default store and
+  asserts the promoted alpha reaches both the report and the surface payload.
+- **A wall-clock assertion.** `test_e1_cscv_pbo_performance_and_accuracy` asserted
+  `elapsed < 0.500`, which passed in isolation and failed under full-suite load on the
+  same commit. Replaced by a best-of-3 scaling assertion that still catches a fall back to
+  a Python-level loop over the 12,870 splits.
+
+### 8.5 Recall Against the Live Portfolio
+
+`scripts/calibrate_filter.py` scores the stack on synthetic families whose ground truth it
+generated. `scripts/calibrate_against_portfolio.py` asks the complementary question: how
+many alphas that BRAIN *already accepted* would this filter promote? Every submitted alpha
+is a known positive, so the promotion rate over that set is a lower bound on real recall.
+
+Against the ten live alphas in `GOLD_LEVEL_GUIDE.md` §3 (Sharpe 1.30–1.91, median 1.56):
+
+| $N_{\text{eff}}$ | Haircut bar | Accepted alphas clearing it |
+| :--- | :--- | :--- |
+| 1 | 1.25 | 10 / 10 |
+| 3 | 1.58 | 5 / 10 |
+| 5 | 1.68 | 3 / 10 |
+| 8 | 1.81 | 1 / 10 |
+| 20 | 2.02 | 0 / 10 |
+
+The bar is priced on *effective* trials, so the operative question is what
+$N_{\text{eff}}$ real families produce once their PnL is backfilled — the synthetic
+backtest runs at intra-family correlation 0.90, which prices the bar near 1.38. Anything
+that pushes $N_{\text{eff}}$ above ~3 starts rejecting alphas this account has already
+had accepted, and that is the signal to re-calibrate rather than to trust the synthetic
+scorecard.

@@ -1,7 +1,7 @@
 """Stage 4 — the honest filter (STRATEGY.md Rule 5).
 
 Mass simulation makes overfitting the *default* outcome, not a risk.
-Five sequential gates, cheapest first:
+Seven sequential gates, cheapest first:
 
 1. **Plateau, not peak.** Judge a candidate by the median score of its neighbours
    on the (window, decay) surface. A lone spike is a coincidence; a broad ridge is a mechanism.
@@ -9,35 +9,29 @@ Five sequential gates, cheapest first:
 3. **Hard PnL Reconciliation Precondition.** Loaded daily PnL must reconcile with reported Sharpe.
 4. **Sub-period stability & Lo (2002) SE Z-tests.** Statistical significance against sampling error.
 5. **Deflated Sharpe Ratio (DSR) & EVT Multiple-testing haircut.**
-6. **Intra-family clustering & Ridge Center Representative Election.**
-7. **Empirical Correlation Gate (< 0.55).** Evaluated on elected representatives against submitted portfolio.
+6. **Empirical Correlation Gate (|rho| < 0.55)** against the submitted portfolio. Applied
+   per point, before election — every surviving point is checked, not just the winner.
+7. **Representative election.** Of the survivors, one point per structure is kept; the
+   rest are marked ``redundant_with`` the keeper. See ``_select_representatives``.
 """
 
 from __future__ import annotations
 
 import math
 from collections import defaultdict
+from collections.abc import Sequence
 from dataclasses import dataclass
 from dataclasses import field as dc_field
 from statistics import median
-from typing import TYPE_CHECKING, Any, Sequence
 
 import structlog
-from sqlalchemy import func, select
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.models.alphas import Alpha
-from app.models.enums import AlphaStatus
 from app.models.results import AlphaMetric
-from app.services.constructor import (
-    STANDARD_DECAYS,
-    STANDARD_WINDOWS,
-    WIDE_DECAYS,
-    WIDE_WINDOWS,
-)
 from app.services.correlation import (
     check_portfolio_empirical_correlation,
-    compute_pairwise_correlation,
     submitted_portfolio,
 )
 from app.services.filter_config import (
@@ -101,6 +95,22 @@ class Verdict:
     config_fingerprint: str = ""
 
 
+def _submitted_alpha_ids(db: Session, alpha_ids: Sequence[int]) -> set[int]:
+    """Which of these alphas hold a live submission — one query, attempt-sourced."""
+    if not alpha_ids:
+        return set()
+    from app.models.alphas import SubmissionAttempt
+
+    rows = db.execute(
+        select(SubmissionAttempt.alpha_id).where(
+            SubmissionAttempt.alpha_id.in_(list(alpha_ids)),
+            SubmissionAttempt.result == "submitted",
+            SubmissionAttempt.is_recalled.is_(False),
+        )
+    ).scalars()
+    return set(rows)
+
+
 def check_portfolio_correlation(
     db: Session, alpha_id: int, portfolio: list[Alpha] | None = None
 ) -> tuple[bool, str | None]:
@@ -113,6 +123,15 @@ def check_portfolio_correlation(
         from app.services.correlation import submitted_portfolio
 
         portfolio = submitted_portfolio(db, exclude_alpha_id=alpha_id)
+
+    # "Submitted" is decided by the submission attempt, the same source
+    # ``submitted_portfolio`` uses to decide membership — not by ``Alpha.status``.
+    # The two agree today only because ``sync_alpha_platform_outcome`` writes the
+    # status whenever an attempt resolves; reading the attempt directly means a
+    # caller who passes its own portfolio, or any future path that records an
+    # attempt without touching status, cannot make a genuinely submitted alpha stop
+    # blocking its siblings.
+    submitted_ids = _submitted_alpha_ids(db, [p.id for p in portfolio])
 
     cand_features = candidate.feature_json or {}
     cand_struct = cand_features.get("structural_hash")
@@ -132,7 +151,7 @@ def check_portfolio_correlation(
             and port_alpha.family_key
             and candidate.family_key == port_alpha.family_key
         )
-        if same_family and port_alpha.status != AlphaStatus.SUBMITTED.value:
+        if same_family and port_alpha.id not in submitted_ids:
             continue
 
         port_features = port_alpha.feature_json or {}
@@ -141,17 +160,12 @@ def check_portfolio_correlation(
 
         # Structural hash match on the same base field => near-certain self-correlation
         if cand_struct and port_struct and cand_struct == port_struct and cand_field == port_field:
-            kind = (
-                "submitted"
-                if port_alpha.status == AlphaStatus.SUBMITTED.value
-                else "portfolio"
-            )
+            kind = "submitted" if port_alpha.id in submitted_ids else "portfolio"
             return True, f"structural correlation collision with {kind} alpha #{port_alpha.id}"
 
         # Same family as an already submitted alpha
-        if candidate.family_key and port_alpha.family_key and candidate.family_key == port_alpha.family_key:
-            if port_alpha.status == AlphaStatus.SUBMITTED.value:
-                return True, f"family collision with submitted alpha #{port_alpha.id} ({port_alpha.family_key})"
+        if same_family and port_alpha.id in submitted_ids:
+            return True, f"family collision with submitted alpha #{port_alpha.id} ({port_alpha.family_key})"
 
     return False, None
 
@@ -266,12 +280,23 @@ def _neighbours(point: SurfacePoint, surface: list[SurfacePoint]) -> tuple[list[
 def _select_representatives(
     db: Session, verdicts: list[Verdict], surface: list[SurfacePoint]
 ) -> None:
-    """Keep one promoted point per distinct structural skeleton.
+    """Keep one promoted point per surface *structure*.
 
     A family sweeps one mechanism across settings, so a promoted ridge usually
     arrives as a dozen adjacent points that would all be the same submission. The
     correlation gate used to absorb this implicitly by rejecting all of them; doing
     it here instead keeps the shortlist short AND says out loud what happened.
+
+    Granularity is the ``(ts, cs, group, neutralization, truncation, universe, hump)``
+    tuple — one winner per surface — not ``structural_hash``, which is finer and would
+    elect several points per surface. That is the deliberate, conservative choice:
+    sibling points are *not* correlation-checked against each other (the empirical
+    gate runs against the submitted portfolio, which siblings are not in), so two
+    representatives off one surface could be near-duplicates with nothing left to
+    catch it. Electing per structure means anything reaching the operator has already
+    been separated by a structural axis. Recorded in docs/OPEN_DECISIONS.md; the
+    filter scorecard is calibrated at this setting.
+
     Mutates verdicts in place.
     """
     structure_of = {p.alpha_id: p.structure for p in surface}
@@ -333,9 +358,7 @@ def evaluate(
     ledger: TrialLedger | None = None,
 ) -> list[Verdict]:
     """Score every simulated point in a family using the honest statistical gate stack."""
-    from app.services.clustering import cluster_family
     from app.services.correlation import (
-        check_portfolio_empirical_correlation,
         submitted_portfolio,
     )
     from app.services.pnl_storage import get_pnl_store
@@ -352,8 +375,8 @@ def evaluate(
     store = pnl_store or get_pnl_store()
     trial_ledger = ledger or build_ledger(db, store, cfg=cfg)
 
-    from app.services.family_matrix import build_family_matrix
     from app.services.correlation import compute_correlation_matrix
+    from app.services.family_matrix import build_family_matrix
     from app.services.subperiod import compute_effective_trials
 
     fam_matrix = build_family_matrix(db, family_key, pnl_store=store)

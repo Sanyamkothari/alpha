@@ -7,7 +7,6 @@ trial counts (N_eff), and Combinatorially Symmetric Cross-Validation (CSCV) for 
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Sequence
 
 import numpy as np
 import structlog

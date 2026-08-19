@@ -35,8 +35,7 @@ from __future__ import annotations
 
 import math
 import random
-from dataclasses import dataclass, field as dc_field
-from typing import Any, Sequence
+from dataclasses import dataclass
 
 import numpy as np
 import structlog
@@ -51,7 +50,6 @@ from app.services.constructor import (
     DEFAULT_TS_TRANSFORMS,
     TerritorySignature,
     canonical_territory_key,
-    derive_horizon_band,
     parse_territory_signature,
 )
 from app.services.plateau import family_field_code
@@ -148,13 +146,14 @@ class BudgetPlan:
 # Backward Compatibility: DiscountedThompsonSampler & SimulationBudgetOrchestrator
 # ----------------------------------------------------------------------
 
-from app.services.allocator_bandit import (
+# Re-exported for callers that still import them from this module. Unused here by
+# design, so the lint waiver is the point rather than an oversight.
+from app.services.allocator_bandit import (  # noqa: F401
     BanditArm,
     BudgetAllocation,
     DiscountedThompsonSampler,
     SimulationBudgetOrchestrator,
 )
-
 
 # ----------------------------------------------------------------------
 # Dataset Statistics & Ranking

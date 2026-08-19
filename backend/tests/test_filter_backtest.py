@@ -9,14 +9,13 @@ Verifies:
 from __future__ import annotations
 
 import numpy as np
-import pytest
 
 from app.services.filter_backtest import (
     generate_family_pnl_matrix,
     generate_synthetic_pnl,
     run_filter_backtest,
 )
-from app.services.filter_config import DEFAULT_FILTER_CONFIG, FilterConfig
+from app.services.filter_config import DEFAULT_FILTER_CONFIG
 from app.services.subperiod import evaluate_subperiod_stability
 
 

@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import pytest
-
 from app.services.alpha_library import AlphaSettings
 from app.services.composite_constructor import CompositeSpec, expand_composite
 from app.services.constructor import GridAxes
