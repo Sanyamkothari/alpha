@@ -9,12 +9,13 @@ rejected, and a broad ridge is promoted. The spike case is the one that matters
 from __future__ import annotations
 
 import math
+import zlib
+
 import numpy as np
-import pytest
 
 from app.models.alphas import Alpha, SubmissionAttempt
 from app.models.results import AlphaMetric, SimulationImport
-from app.services.filter_config import DEFAULT_FILTER_CONFIG, TRADING_DAYS_PER_YEAR
+from app.services.filter_config import TRADING_DAYS_PER_YEAR
 from app.services.plateau import (
     BASE_SHARPE_BAR,
     DECAY_LADDER,
@@ -23,6 +24,12 @@ from app.services.plateau import (
     haircut_bar,
 )
 from app.services.pnl_storage import PnLStore
+
+
+def _seed_for(*parts: object) -> int:
+    """Deterministic seed across processes (unlike hash() on tuples containing str)."""
+    return zlib.crc32("|".join(str(p) for p in parts).encode()) % (2**31)
+
 
 _STRUCTURE = {"ts": "ts_zscore", "cs": "rank", "group": None, "truncation": 0.08}
 
@@ -79,7 +86,10 @@ def _point(
         dates = [f"d_{i:04d}" for i in range(n_days)]
         daily_sharpe = sharpe / math.sqrt(TRADING_DAYS_PER_YEAR)
         daily_vol = 0.01
-        rng = np.random.default_rng(hash((family, window, decay)) % (2**31))
+        # Seed from the row's own integer coordinates: hash() of a tuple containing a
+        # str is salted per process, which would make this fixture a different
+        # fixture on every run.
+        rng = np.random.default_rng(_seed_for(family, window, decay))
         pnl = rng.normal(daily_sharpe * daily_vol, daily_vol, n_days)
         # Ensure sample Sharpe matches reported Sharpe within tolerance
         std = float(np.std(pnl, ddof=1))
