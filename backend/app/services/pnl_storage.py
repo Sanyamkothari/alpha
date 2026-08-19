@@ -3,15 +3,22 @@
 Persists PnL arrays as fast individual .npy files under USER_DATA_DIR/database/pnl/
 with an in-memory cache for fast sub-millisecond matrix intersections.
 Enforces boundary normalisation (differencing cumulative curves) and Sharpe reconciliation.
+
+Files are keyed by ``alpha_id``, which is only unique *within one database*. The
+default directory is therefore bound to the default database, and any other
+DATABASE_URL gets its own directory — otherwise a second or rebuilt database
+reusing ids 1..N would silently inherit the first one's PnL and feed it to the
+DSR, sub-period and correlation gates as if it were its own.
 """
 
 from __future__ import annotations
 
+import hashlib
 import json
 import math
+import threading
 from dataclasses import dataclass
 from pathlib import Path
-import threading
 from typing import Literal
 
 import numpy as np
@@ -65,11 +72,30 @@ def is_cumulative_series(arr: np.ndarray) -> bool:
     return autocorr > 0.99 and (frac_pos > 0.95 or frac_pos < 0.05)
 
 
+def default_pnl_dir() -> Path:
+    """The PnL directory bound to the database this process is configured for.
+
+    The default database keeps the historic ``database/pnl`` path, so an existing
+    single-database install loses nothing. Every other DATABASE_URL — a second
+    project, a rebuilt database, a temporary one in a test or script — gets its own
+    directory keyed by a digest of the URL, because ``alpha_id`` 42 in one database
+    has nothing to do with ``alpha_id`` 42 in another.
+    """
+    from app.config import settings
+
+    base = USER_DATA_DIR / "database"
+    url = settings.effective_database_url
+    default_url = f"sqlite:///{(settings.effective_database_dir / 'wq.db').as_posix()}"
+    if url == default_url:
+        return base / "pnl"
+    return base / f"pnl-{hashlib.sha256(url.encode()).hexdigest()[:12]}"
+
+
 class PnLStore:
     """Thread-safe persistent store for daily PnL vectors."""
 
     def __init__(self, base_dir: Path | None = None) -> None:
-        self._dir = base_dir or (USER_DATA_DIR / "database" / "pnl")
+        self._dir = base_dir or default_pnl_dir()
         self._dir.mkdir(parents=True, exist_ok=True)
         self._cache: dict[int, tuple[list[str], np.ndarray]] = {}
         self._lock = threading.Lock()

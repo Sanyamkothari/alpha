@@ -7,14 +7,12 @@ Usage:
 from __future__ import annotations
 
 import sys
-from pathlib import Path
-import numpy as np
+
 import structlog
 
 from app.db.session import SessionLocal
-from app.models.alphas import Alpha
 from app.models.results import AlphaMetric
-from app.services.filter_config import DEFAULT_FILTER_CONFIG, TRADING_DAYS_PER_YEAR
+from app.services.filter_config import DEFAULT_FILTER_CONFIG
 from app.services.pnl_storage import (
     PnLStore,
     compute_lag1_autocorr,

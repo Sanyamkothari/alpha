@@ -594,3 +594,85 @@ def test_uncorrelated_candidate_still_passes(db_session: Session, tmp_path: Path
 
     assert not is_corr, f"independent series must pass, got: {reason}"
     assert abs(max_corr) < 0.55
+
+
+# --------------------------------------------------------------------------------------
+# PnL files are keyed by alpha_id, which is only unique within one database
+# --------------------------------------------------------------------------------------
+
+
+def test_pnl_dir_is_bound_to_the_configured_database(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A second database must not inherit the first one's PnL.
+
+    alpha_id 42 in a rebuilt or temporary database is a different alpha from
+    alpha_id 42 in the main one. Sharing one flat directory silently feeds one
+    alpha's returns into another's DSR, sub-period and correlation gates — the
+    failure is invisible because every file loads successfully.
+    """
+    from app.config import settings
+    from app.services.pnl_storage import default_pnl_dir
+
+    monkeypatch.setattr(settings, "database_url", "", raising=False)
+    default_dir = default_pnl_dir()
+    assert default_dir.name == "pnl", "the default database keeps the historic path"
+
+    monkeypatch.setattr(settings, "database_url", "sqlite:////tmp/some-other.db", raising=False)
+    other_dir = default_pnl_dir()
+
+    assert other_dir != default_dir, "a different database must get a different PnL directory"
+    assert other_dir.name.startswith("pnl-")
+
+    monkeypatch.setattr(settings, "database_url", "sqlite:////tmp/a-third.db", raising=False)
+    assert default_pnl_dir() != other_dir, "each database gets its own directory"
+
+    monkeypatch.setattr(settings, "database_url", "sqlite:////tmp/some-other.db", raising=False)
+    assert default_pnl_dir() == other_dir, "and the mapping is stable for a given URL"
+
+
+def test_submitted_sibling_blocks_even_when_status_lags(db_session: Session) -> None:
+    """Membership is decided by the submission attempt, not by Alpha.status.
+
+    The two are kept in sync by sync_alpha_platform_outcome today, so this is a
+    guard rather than a live bug: if any future path records an attempt without
+    touching status, a genuinely submitted sibling must not quietly stop blocking.
+    """
+    fam = "lagstatus/cap@USA/TOP3000/d1"
+    siblings = [
+        _point_passed(
+            db_session, fam, w, 4, 2.0,
+            structural_hash="family_hash_lag", status=AlphaStatus.PASSED.value,
+        )
+        for w in (5, 10)
+    ]
+    db_session.flush()
+
+    # A real submission, recorded without the status write.
+    db_session.add(SubmissionAttempt(alpha_id=siblings[0].id, result="submitted"))
+    db_session.flush()
+    assert siblings[0].status != AlphaStatus.SUBMITTED.value, "precondition: status lags"
+
+    is_corr, reason = check_portfolio_correlation(db_session, siblings[1].id)
+
+    assert is_corr, "a sibling with a live submission attempt must still block"
+    assert reason is not None and f"#{siblings[0].id}" in reason
+    assert "submitted alpha" in reason, f"and must be labelled submitted, got: {reason}"
+
+
+def test_recalled_submission_stops_blocking(db_session: Session) -> None:
+    """A recalled submission is not a live position, so it must stop blocking."""
+    fam = "recalled/cap@USA/TOP3000/d1"
+    siblings = [
+        _point_passed(
+            db_session, fam, w, 4, 2.0,
+            structural_hash="family_hash_recalled", status=AlphaStatus.PASSED.value,
+        )
+        for w in (5, 10)
+    ]
+    db_session.flush()
+    db_session.add(
+        SubmissionAttempt(alpha_id=siblings[0].id, result="submitted", is_recalled=True)
+    )
+    db_session.flush()
+
+    is_corr, reason = check_portfolio_correlation(db_session, siblings[1].id)
+    assert not is_corr, f"a recalled submission must not block, got: {reason}"

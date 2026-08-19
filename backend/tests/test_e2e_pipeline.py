@@ -21,30 +21,24 @@ Executes the complete alpha mining and vetting workflow in strict production ord
 from __future__ import annotations
 
 import math
+
 import numpy as np
-import pytest
 from fastapi.testclient import TestClient
 
 from app.models.alphas import Alpha
 from app.models.enums import AlphaStatus, ImportSource
-from app.models.results import AlphaMetric, SimulationImport
 from app.services.allocator import (
     DiscountedThompsonSampler,
     SimulationBudgetOrchestrator,
 )
 from app.services.composite_constructor import CompositeSpec, expand_composite
 from app.services.constructor import GridAxes
-from app.services.correlation import (
-    check_portfolio_empirical_correlation,
-    compute_correlation_matrix,
-)
 from app.services.evolution import EvolutionConfig, evolve_generation
 from app.services.plateau import evaluate
 from app.services.pnl_storage import PnLStore
 from app.services.proxy_calibration import is_degenerate_signal
 from app.services.report import build
 from app.services.result_import import import_result
-from app.services.subperiod import compute_dsr, evaluate_subperiod_stability
 from app.validator import ValidatorKB
 
 

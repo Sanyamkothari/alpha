@@ -111,9 +111,10 @@ def test_brain_fetch_log_allows_get(engine) -> None:
 
 def test_alembic_migrations_roundtrip(tmp_path) -> None:
     """Ensure alembic migrations can upgrade to head, downgrade -1, and re-upgrade on throwaway DB."""
-    from alembic.config import Config
-    from alembic import command
     from pathlib import Path
+
+    from alembic import command
+    from alembic.config import Config
 
     alembic_ini = Path(__file__).resolve().parents[1] / "alembic.ini"
     cfg = Config(str(alembic_ini))
@@ -136,14 +137,15 @@ def test_alembic_migrations_roundtrip(tmp_path) -> None:
 def test_suite_never_touches_production_database(tmp_path) -> None:
     """Regression test: assert that tests never mutate or write to the production database."""
     from pathlib import Path
+
     from app.config import REPO_ROOT
 
     prod_db = REPO_ROOT / "database" / "wq.db"
     if prod_db.exists():
         initial_mtime = prod_db.stat().st_mtime
         # Re-run a schema inspection
-        from alembic.config import Config
         from alembic import command
+        from alembic.config import Config
 
         alembic_ini = Path(__file__).resolve().parents[1] / "alembic.ini"
         cfg = Config(str(alembic_ini))

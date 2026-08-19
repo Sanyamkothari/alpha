@@ -7,10 +7,10 @@ Validates:
 from __future__ import annotations
 
 from datetime import date
-import pytest
+
 from sqlalchemy.orm import Session
 
-from app.models.alphas import Alpha, AlphaProductionSnapshot
+from app.models.alphas import AlphaProductionSnapshot
 from app.models.enums import AlphaStatus
 from app.models.fields import DataField, Dataset
 from app.models.results import AlphaMetric, SimulationImport

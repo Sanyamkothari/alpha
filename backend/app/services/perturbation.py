@@ -11,8 +11,8 @@ Isolated lucky spikes have high fragility (>= 0.35) and fail promotion.
 from __future__ import annotations
 
 import statistics
+from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Sequence
 
 from app.services.plateau import SurfacePoint
 

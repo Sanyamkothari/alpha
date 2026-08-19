@@ -77,7 +77,6 @@ def main() -> int:
     args = ap.parse_args()
 
     from app.services.constructor import (
-        GridAxes,
         STANDARD_DECAYS,
         STANDARD_WINDOWS,
         WIDE_DECAYS,

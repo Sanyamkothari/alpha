@@ -26,13 +26,12 @@ row so the simulation runner reproduces them exactly.
 
 from __future__ import annotations
 
-from collections import defaultdict
 import itertools
 import random
-from collections.abc import Iterable
+from collections import defaultdict
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from dataclasses import field as dc_field
-from typing import Any, Callable
 
 import structlog
 from sqlalchemy.orm import Session

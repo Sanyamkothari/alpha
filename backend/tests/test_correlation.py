@@ -12,14 +12,13 @@ Tests:
 from __future__ import annotations
 
 import numpy as np
-import pytest
 
 from app.models.alphas import Alpha, SubmissionAttempt
 from app.models.enums import AlphaStatus
 from app.services.correlation import (
+    check_portfolio_empirical_correlation,
     compute_correlation_matrix,
     compute_pairwise_correlation,
-    check_portfolio_empirical_correlation,
 )
 from app.services.pnl_storage import PnLStore
 

@@ -16,8 +16,8 @@ from __future__ import annotations
 
 import concurrent.futures
 import math
+
 import numpy as np
-import pytest
 
 from app.services.pnl_storage import PnLStore
 from app.services.subperiod import (

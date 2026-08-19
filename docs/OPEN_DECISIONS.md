@@ -123,3 +123,48 @@ In `backend/app/services/allocator.py`, the dataclass `BudgetAllocation` contain
 - **Current State:** Generates multi-factor blends, spreads, residuals, and conditional triggers. Tested in unit tests, but not scheduled by the campaign runner.
 - **Tradeoff:** Multi-factor grids have exponential parameter spaces ($49 \times 49 = 2,401$ combinations), which would exhaust nightly simulation budgets on a single interaction.
 - **Recommendation:** Retain `composite_constructor.py` as a targeted CLI tool (`scripts/run_composite.py`) for hypothesis-driven research. Keep automated nightly campaigns strictly focused on single-field 7×7 grids for statistical rigor.
+
+---
+
+## 4. Decision B5: Representative Election Granularity — **RESOLVED**
+
+### 4.1 Context
+
+`plateau._select_representatives()` demotes all but one promoted point per group, so
+the group key decides how many alphas one family can put in front of the operator.
+Two candidate keys existed, and the code and the docs disagreed about which was in
+use — the implementation grouped by the surface `structure` tuple while the docstring
+and the walkthrough said "structural skeleton" (`structural_hash`), which is finer.
+
+| Key | Groups per 49-point family | Shortlist effect |
+|---|---|---|
+| `structure` = `(ts, cs, group, neutralization, truncation, universe, hump)` | 1 per surface | one row per swept surface |
+| `structural_hash` (window bucketed fast/slow) | ~4 per surface | several adjacent ridge points per surface |
+
+### 4.2 The deciding argument
+
+Sibling points are **not** correlation-checked against each other. The empirical gate
+runs a candidate against the *submitted portfolio*, and siblings are not in it; the
+structural proxy deliberately skips non-submitted same-family alphas (Decision D2,
+without which nothing could ever promote). So nothing downstream would catch two
+elected representatives off the same surface being near-duplicates.
+
+Electing per `structural_hash` would therefore hand the operator up to four rows that
+no gate has ever compared, on a platform that pays only for uncorrelated alphas.
+Electing per `structure` guarantees that anything reaching the shortlist has already
+been separated by a structural axis, not merely by lookback window.
+
+### 4.3 Resolution
+
+**Group by `structure`** — the behaviour already implemented. The docstring and
+walkthrough wording are corrected to match. The filter scorecard
+(`scripts/calibrate_filter.py`: FDR 3.3%, signal survival 86.7%) is calibrated at this
+setting, so changing it would invalidate that measurement as well.
+
+### 4.4 What would reopen this
+
+If an intra-family empirical correlation check is added between elected
+representatives — measuring them against each other rather than only against the
+portfolio — then the finer `structural_hash` key becomes safe, and it would surface
+genuinely distinct fast/slow variants that are currently discarded as redundant. That
+is the natural next step if the shortlist proves too thin in practice.

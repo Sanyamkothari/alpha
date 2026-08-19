@@ -80,8 +80,11 @@ def check_portfolio_empirical_correlation(
     The reported correlation keeps its sign so the operator can still tell an
     anti-correlated collision from a co-moving one.
 
-    Portfolio alphas we could not measure (no PnL, or too little date overlap) do not
-    silently pass — they fall through to the structural proxy below.
+    Portfolio alphas we could not measure (no PnL, or too little date overlap) fall
+    through to the structural proxy below. Note that this is a weaker guarantee than
+    blocking: the proxy clears an unmeasured pair whose skeletons differ, so an
+    unmeasurable collision between two structurally distinct alphas is passed, not
+    caught. Backfilling PnL is what closes that gap.
 
     Returns (is_correlated, reason_or_collision_desc, max_signed_correlation).
     """

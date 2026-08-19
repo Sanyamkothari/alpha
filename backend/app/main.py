@@ -22,6 +22,7 @@ async def lifespan(app: FastAPI):
     if settings.auto_resume_campaigns:
         try:
             import threading
+
             from app.services.campaign_runner import auto_resume_interrupted_campaigns
             threading.Thread(target=auto_resume_interrupted_campaigns, daemon=True).start()
         except Exception as exc:

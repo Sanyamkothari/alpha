@@ -12,17 +12,18 @@ Implements:
 from __future__ import annotations
 
 import math
+from collections.abc import Sequence
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, Sequence
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
-from scipy import stats
 import structlog
+from scipy import stats
 
 from app.services.filter_config import DEFAULT_FILTER_CONFIG, TRADING_DAYS_PER_YEAR, FilterConfig
 
 if TYPE_CHECKING:
-    from app.services.pnl_storage import PnLStore
+    pass
 
 log = structlog.get_logger("subperiod")
 

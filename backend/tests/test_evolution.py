@@ -12,7 +12,6 @@ Tests:
 
 from __future__ import annotations
 
-import pytest
 from sqlalchemy import text
 
 from app.models.alphas import Alpha
@@ -22,12 +21,10 @@ from app.services.evolution import (
     compute_evolutionary_fitness,
     compute_turnover_penalty,
     crossover_ast,
-    evolve_generation,
     mutate_operators,
     mutate_parameters,
 )
 from app.validator import ValidatorKB
-from app.validator.ast_nodes import Field, Number, OperatorCall
 from app.validator.features import _depth, _operator_count
 from app.validator.parser import parse
 from app.validator.validator import normalize

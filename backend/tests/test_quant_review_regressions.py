@@ -17,9 +17,8 @@ from __future__ import annotations
 
 import math
 import random
-from pathlib import Path
+
 import numpy as np
-import pytest
 from sqlalchemy import select
 
 from app.models.alphas import Alpha, SubmissionAttempt
@@ -28,28 +27,22 @@ from app.models.fields import DataField, Dataset
 from app.models.results import AlphaMetric, SimulationImport
 from app.services.allocator_bandit import (
     DiscountedThompsonSampler,
-    SimulationBudgetOrchestrator,
 )
 from app.services.alpha_library import AlphaSettings, create_alpha
 from app.services.brain.client import BrainClient
-from app.services.clustering import cluster_family, select_orthogonal_batch
+from app.services.clustering import select_orthogonal_batch
 from app.services.constructor import (
+    STANDARD_WINDOWS,
     FamilySpec,
     expand,
-    STANDARD_WINDOWS,
-    STANDARD_DECAYS,
 )
 from app.services.correlation import (
-    check_portfolio_empirical_correlation,
-    compute_pairwise_correlation,
     submitted_portfolio,
 )
-from app.services.evolution import _WINDOW_JITTER, mutate_parameters
-from app.services.filter_config import DEFAULT_FILTER_CONFIG, TRADING_DAYS_PER_YEAR, FilterConfig
-from app.services.plateau import evaluate, load_surface
+from app.services.evolution import _WINDOW_JITTER
+from app.services.filter_config import TRADING_DAYS_PER_YEAR, FilterConfig
+from app.services.plateau import evaluate
 from app.services.pnl_storage import PnLStore
-from app.validator.parser import parse
-from app.validator.validator import normalize
 
 
 def _seed_field(db, dataset_code: str = "reg_ds", field_code: str = "reg_field") -> str:

@@ -7,13 +7,12 @@ one place).
 
 from __future__ import annotations
 
+import os
+import sys
 from functools import lru_cache
 from pathlib import Path
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
-
-import os
-import sys
 
 IS_FROZEN: bool = getattr(sys, "frozen", False)
 

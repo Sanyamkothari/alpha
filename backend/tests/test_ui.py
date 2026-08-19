@@ -138,6 +138,7 @@ def test_unknown_job_is_404_not_a_hang(client: TestClient) -> None:
 
 def test_job_registry_persistence_and_recovery(tmp_path) -> None:
     import time
+
     from app.services.jobs import JobRegistry
 
     storage = tmp_path / "jobs.json"

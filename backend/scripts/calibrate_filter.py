@@ -12,7 +12,7 @@ import sys
 from pathlib import Path
 
 from app.services.filter_backtest import run_filter_backtest
-from app.services.filter_config import DEFAULT_FILTER_CONFIG, FilterConfig
+from app.services.filter_config import DEFAULT_FILTER_CONFIG
 
 
 def main() -> int:

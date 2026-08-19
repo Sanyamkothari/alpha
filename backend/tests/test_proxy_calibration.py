@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import pytest
-
 from app.models.alphas import Alpha
 from app.models.results import AlphaMetric, SimulationImport
 from app.services.proxy_calibration import (
