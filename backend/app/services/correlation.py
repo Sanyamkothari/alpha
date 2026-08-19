@@ -97,6 +97,7 @@ def check_portfolio_empirical_correlation(
     max_corr = 0.0
     colliding_alpha_id: int | None = None
     measured_ids: set[int] = set()
+    short_overlap: dict[int, int] = {}
 
     if cand_pnl_data is not None:
         cand_dates, cand_pnl = cand_pnl_data
@@ -116,6 +117,7 @@ def check_portfolio_empirical_correlation(
             # Intersect dates
             common_dates = sorted(set(cand_dates).intersection(port_dates))
             if len(common_dates) < overlap:
+                short_overlap[port_alpha.id] = len(common_dates)
                 continue
 
             measured_ids.add(port_alpha.id)
@@ -147,6 +149,26 @@ def check_portfolio_empirical_correlation(
         )
         if is_struct_corr:
             return True, struct_collision, max_corr
+
+        # Fail closed. The skeleton heuristic clearing a pair is not a measurement:
+        # two unrelated-looking expressions over the same universe correlate all
+        # the time. A gate that cannot be evaluated must block, or "we never
+        # checked" silently becomes "we checked and it was fine" -- which is the
+        # reading an operator will take from a green shortlist.
+        if cfg.block_on_unmeasurable_portfolio:
+            worst = min(short_overlap.items(), key=lambda kv: kv[1], default=None)
+            if worst is not None:
+                detail = (
+                    f"#{worst[0]} shares only {worst[1]} of the {overlap} trading days required"
+                )
+            else:
+                detail = f"#{unmeasured[0].id} has no stored daily PnL"
+            return (
+                True,
+                f"correlation unmeasurable against {len(unmeasured)} portfolio "
+                f"alpha(s) — {detail}. Backfill PnL to clear this.",
+                max_corr,
+            )
 
     return False, None, max_corr
 

@@ -99,58 +99,89 @@ def _seed_field(db, dataset_code: str = "reg_ds", field_code: str = "reg_field")
 # A1 & F1: Sibling Ridge Clustering and Promotion
 # ----------------------------------------------------------------------
 
-def test_sibling_ridge_promotes_one(db_session, tmp_path) -> None:
-    """A1: A genuine multi-point plateau must promote EXACTLY ONE representative, not zero."""
-    fcode = _seed_field(db_session, "ds_a1", "field_a1")
+def _seed_correlated_ridge(
+    db,
+    store: PnLStore,
+    *,
+    dataset: str = "ds_ridge",
+    field: str = "field_ridge",
+    sharpe: float = 2.60,
+    intra_corr: float = 0.94,
+    seed: int = 123,
+) -> str:
+    """One family, one mechanism, sibling PnL correlated the way a real ridge is.
+
+    Adjacent points on a (window x decay) surface are the same alpha nudged, and
+    they correlate at ~0.9+. A fixture that gives each point independent noise
+    tests a shape that does not occur, and it is exactly the shape the dedup step
+    exists to collapse.
+    """
+    fcode = _seed_field(db, dataset, field)
     settings = AlphaSettings(region="USA", universe="TOP3000", delay=1)
     spec = FamilySpec(field_code=fcode, operator_family="ts_zscore", wrapper_shape="rank")
     fk = spec.family_key(settings)
 
-    candidates = expand(db_session, spec, base_settings=settings, max_candidates=49)
-    assert len(candidates) == 49
-
-    store = PnLStore(tmp_path / "pnl")
+    candidates = expand(db, spec, base_settings=settings, max_candidates=49)
     dates = [f"d_{i:04d}" for i in range(1236)]
-    rng = np.random.default_rng(123)
-
-    # Common plateau factor ensuring sibling correlation >= 0.90
+    rng = np.random.default_rng(seed)
     common_factor = rng.normal(0.0, 0.01, size=len(dates))
-    target_sharpe = 2.60
-    daily_sr = target_sharpe / math.sqrt(TRADING_DAYS_PER_YEAR)
+    daily_sr = sharpe / math.sqrt(TRADING_DAYS_PER_YEAR)
 
     for c in candidates:
-        res = create_alpha(db_session, c.expression, c.settings, family_key=c.family_key, grid=c.grid, source="test")
+        res = create_alpha(
+            db, c.expression, c.settings, family_key=c.family_key, grid=c.grid, source="test"
+        )
         aid = res.alpha.id
         si = SimulationImport(alpha_id=aid, source="brain_api", raw_payload={}, is_latest=True)
-        db_session.add(si)
-        db_session.flush()
-        db_session.add(
+        db.add(si)
+        db.flush()
+        db.add(
             AlphaMetric(
                 simulation_import_id=si.id,
                 alpha_id=aid,
-                sharpe=target_sharpe,
+                sharpe=sharpe,
                 fitness=1.5,
                 turnover=0.3,
                 passed_all_checks=True,
             )
         )
-        # Correlated series (rho >= 0.92)
         idio = rng.normal(0.0, 0.01, size=len(dates))
-        pnl = math.sqrt(0.94) * common_factor + math.sqrt(0.06) * idio
+        pnl = math.sqrt(intra_corr) * common_factor + math.sqrt(1.0 - intra_corr) * idio
         std = float(np.std(pnl, ddof=1))
         if std > 0:
-            target_mean = daily_sr * std
-            pnl = pnl - np.mean(pnl) + target_mean
+            pnl = pnl - np.mean(pnl) + daily_sr * std
         store.save_pnl(aid, dates, pnl)
 
-    db_session.flush()
+    db.flush()
+    return fk
 
-    verdicts = evaluate(db_session, fk, pnl_store=store, ledger=_fixed_ledger())
+
+def test_sibling_ridge_promotes_one(db_session, tmp_path) -> None:
+    """A1: A genuine multi-point plateau must promote EXACTLY ONE representative.
+
+    Zero was the original bug -- every point blocked by its own siblings. Four is
+    the bug that replaced it: grouping by structural skeleton splits one ridge
+    across the skeleton's window buckets and promotes a near-duplicate out of each.
+    """
+    store = PnLStore(tmp_path / "pnl")
+    fk = _seed_correlated_ridge(db_session, store, dataset="ds_a1", field="field_a1")
+
+    verdicts = evaluate(db_session, fk, pnl_store=store, ledger=_fixed_ledger(), portfolio=[])
     promoted = [v for v in verdicts if v.promoted]
-    # Invariant A1: Exactly 1 promoted
     assert len(promoted) == 1, f"expected exactly 1 promoted representative, got {len(promoted)}"
     assert promoted[0].is_plateau is True
     assert promoted[0].is_correlated is False
+
+    # The elected point must be the ridge centre, not the peak. This is the
+    # election that decides which single alpha reaches the operator.
+    rep = promoted[0]
+    assert rep.ridge_score is not None
+    demoted = [v for v in verdicts if v.redundant_with == rep.alpha_id]
+    assert demoted, "the other 48 points must be recorded as clustered, not silently dropped"
+    assert all(
+        (d.ridge_score or -99.0) <= rep.ridge_score for d in demoted
+    ), "the representative must hold the highest ridge_score in its cluster"
+    assert any("clustered into representative" in r for r in demoted[0].reasons)
 
 
 def test_submitted_portfolio_submitted_only(db_session) -> None:
@@ -238,7 +269,7 @@ def test_reconciliation_enforced(db_session, tmp_path) -> None:
 
     db_session.flush()
 
-    verdicts = evaluate(db_session, fk, pnl_store=store, ledger=_fixed_ledger())
+    verdicts = evaluate(db_session, fk, pnl_store=store, ledger=_fixed_ledger(), portfolio=[])
     assert not any(v.promoted for v in verdicts), "unreconciled PnL must NEVER promote"
     assert all(any("reconciliation" in r for r in v.reasons) for v in verdicts)
 
@@ -354,3 +385,158 @@ def test_window_jitter_ladder_sync() -> None:
         assert win in STANDARD_WINDOWS or win in (22, 63, 126, 252)
         for t in targets:
             assert t in STANDARD_WINDOWS or t in (22, 63, 126, 252)
+
+
+# ---------------------------------------------------------------------------
+# Round-2 review regressions. Each of these fails on 01f08bc.
+# ---------------------------------------------------------------------------
+
+
+def test_promotion_bar_uses_programme_ledger_not_family_neff(db_session, tmp_path) -> None:
+    """The bar deflates for every trial the winner was selected from.
+
+    Pinning the *wiring*, not the formula. Handing haircut_bar the family's own
+    N_eff is the failure mode: 49 grid points at rho ~ 0.9 collapse to N_eff ~ 1.2,
+    and the "multiple-testing bar" lands BELOW the flat 1.25 + 0.10*log10(N) it was
+    brought in to replace. The formula was right on both sides of that bug; the
+    argument was not.
+    """
+    import numpy as np
+
+    from app.services.plateau import evaluate, haircut_bar
+    from app.services.subperiod import compute_effective_trials
+
+    siblings = np.full((49, 49), 0.92)
+    np.fill_diagonal(siblings, 1.0)
+    family_neff = compute_effective_trials(siblings)
+    assert family_neff < 2.0, "precondition: a tight ridge collapses to ~1 effective trial"
+    assert haircut_bar(family_neff) < 1.25 + 0.10 * math.log10(400), (
+        "precondition: the family N_eff bar really is weaker than the flat bar"
+    )
+
+    store = PnLStore(tmp_path / "pnl")
+    fam = _seed_correlated_ridge(
+        db_session, store, dataset="ds_bar", field="field_bar"
+    )
+
+    big = _fixed_ledger(n_trials=4000)
+    verdicts = evaluate(db_session, fam, pnl_store=store, ledger=big, portfolio=[])
+    assert verdicts
+
+    expected = haircut_bar(big)
+    assert verdicts[0].haircut_bar == pytest.approx(expected, abs=1e-6), (
+        f"evaluate() reported bar {verdicts[0].haircut_bar:.3f}, expected the "
+        f"programme-ledger bar {expected:.3f}"
+    )
+    assert verdicts[0].haircut_bar > 2.0, "a 4000-trial programme demands a serious bar"
+
+
+def test_unmeasurable_portfolio_correlation_blocks(db_session, tmp_path) -> None:
+    """A gate that cannot be evaluated blocks; it used to pass silently.
+
+    The candidate and the submitted alpha share far too few days to correlate.
+    Passing here would put "we never checked" in front of the operator wearing
+    the same green as "we checked and it was fine".
+    """
+    import numpy as np
+
+    from app.models.alphas import Alpha, SubmissionAttempt
+    from app.services.correlation import check_portfolio_empirical_correlation
+    from app.services.filter_config import FilterConfig
+
+    assert FilterConfig().block_on_unmeasurable_portfolio is True, "fail-closed is the default"
+
+    store = PnLStore(tmp_path / "pnl")
+    rng = np.random.default_rng(11)
+
+    def _mk(tag: str) -> Alpha:
+        a = Alpha(
+            expression=f"rank(ts_zscore(reg_field,{len(tag)}))",
+            normalized_expression=f"rank(ts_zscore(reg_field,{len(tag)}))",
+            expression_hash=f"unmeas-{tag}",
+            family_key=f"unmeas/{tag}",
+            status="rejected",
+            source="constructor",
+            region="USA",
+            universe="TOP3000",
+            delay=1,
+            neutralization="SUBINDUSTRY",
+            decay=4,
+            truncation=0.08,
+            is_valid=True,
+            generation=0,
+            feature_json={"structural_hash": f"skeleton-{tag}", "grid": {"window": 22, "decay": 4}},
+        )
+        db_session.add(a)
+        db_session.flush()
+        return a
+
+    submitted = _mk("sub")
+    candidate = _mk("cand")
+    db_session.add(SubmissionAttempt(alpha_id=submitted.id, result="submitted", is_recalled=False))
+    db_session.flush()
+
+    # 200 shared days against a 500-day requirement: unmeasurable, and the two
+    # skeletons differ, so the structural proxy has nothing to say either.
+    dates = [f"u_{i:04d}" for i in range(200)]
+    store.save_pnl(submitted.id, dates, rng.normal(size=200))
+    store.save_pnl(candidate.id, dates, rng.normal(size=200))
+
+    is_corr, reason, _ = check_portfolio_empirical_correlation(
+        db_session, candidate.id, pnl_store=store, portfolio=[submitted]
+    )
+    assert is_corr, "an unmeasurable portfolio comparison must block"
+    assert "unmeasurable" in (reason or "")
+    assert "200" in (reason or ""), "the reason must say what is missing"
+
+
+def test_eval_cache_invalidates_when_new_metrics_land(db_session, tmp_path) -> None:
+    """New simulation results must reach the report.
+
+    Keyed on family alone, the cache is correct exactly once per process: a
+    long-running server keeps serving the verdicts it computed before last
+    night's batch landed, and nothing on the page says so.
+    """
+    from app.models.alphas import Alpha
+    from app.models.results import AlphaMetric, SimulationImport
+    from app.services.plateau import _freshness_token, clear_eval_cache
+
+    clear_eval_cache()
+    before = _freshness_token(db_session, [])
+
+    alpha = Alpha(
+        expression="rank(ts_zscore(reg_field,22))",
+        normalized_expression="rank(ts_zscore(reg_field,22))",
+        expression_hash="cache-fresh-1",
+        family_key="cachetest/fresh",
+        status="rejected",
+        source="constructor",
+        region="USA",
+        universe="TOP3000",
+        delay=1,
+        neutralization="SUBINDUSTRY",
+        decay=4,
+        truncation=0.08,
+        is_valid=True,
+        generation=0,
+        feature_json={"grid": {"window": 22, "decay": 4}},
+    )
+    db_session.add(alpha)
+    db_session.flush()
+    imp = SimulationImport(alpha_id=alpha.id, source="brain_api", raw_payload={})
+    db_session.add(imp)
+    db_session.flush()
+    db_session.add(
+        AlphaMetric(
+            alpha_id=alpha.id,
+            simulation_import_id=imp.id,
+            sharpe=2.0,
+            fitness=1.5,
+            turnover=0.3,
+            passed_all_checks=True,
+        )
+    )
+    db_session.flush()
+
+    after = _freshness_token(db_session, [])
+    assert after != before, "inserting metrics must change the freshness token"

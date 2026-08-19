@@ -552,8 +552,22 @@ def evaluate(
     return verdicts
 
 
-# Request-scoped evaluation cache for Decision D3
-_EVAL_CACHE: dict[tuple[str, str], list[Verdict]] = {}
+# Evaluation cache for Decision D3. The key carries a freshness token as well as
+# the config fingerprint: a cache keyed on family alone is correct exactly once
+# per process, and under a long-running uvicorn the morning report would keep
+# serving the verdicts computed before last night's simulations landed -- with no
+# way for the operator to tell.
+_EVAL_CACHE: dict[tuple[str, str, tuple[int, int]], list[Verdict]] = {}
+
+
+def _freshness_token(db: Session, portfolio: list[Alpha]) -> tuple[int, int]:
+    """Cheap monotonic stamp of everything an evaluation depends on.
+
+    New metrics arrive with increasing ids, and the portfolio only changes when a
+    submission is recorded; both are one indexed query.
+    """
+    max_metric_id = db.scalar(select(func.max(AlphaMetric.id))) or 0
+    return (int(max_metric_id), len(portfolio))
 
 
 def evaluate_families(
@@ -571,10 +585,11 @@ def evaluate_families(
     ledger = build_ledger(db, store, cfg=cfg)
 
     fp = cfg.fingerprint()
+    token = _freshness_token(db, port)
     results: dict[str, list[Verdict]] = {}
 
     for fkey in family_keys:
-        cache_key = (fkey, fp)
+        cache_key = (fkey, fp, token)
         if use_cache and cache_key in _EVAL_CACHE:
             results[fkey] = _EVAL_CACHE[cache_key]
         else:

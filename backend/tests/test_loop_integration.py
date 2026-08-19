@@ -129,7 +129,11 @@ def test_c1_end_to_end_campaign_with_fake_brain_client(db_session, monkeypatch, 
     ).scalars().all()
     assert len(campaign_families) > 0
     for fkey in campaign_families:
-        verdicts = P.evaluate(db_session, fkey, pnl_store=store)
+        # No submissions are set up here, so the portfolio to judge against is empty.
+        # Defaulting reads the shared test database, where another module's submitted
+        # alphas have no PnL in *this* store -- and the fail-closed gate correctly
+        # blocks on what it cannot measure.
+        verdicts = P.evaluate(db_session, fkey, pnl_store=store, portfolio=[])
         assert len(verdicts) > 0
 
 
@@ -381,7 +385,11 @@ def test_c5_invariant8_spike_vs_ridge_selection(db_session, tmp_path):
 
     db_session.flush()
 
-    verdicts = P.evaluate(db_session, fkey, pnl_store=store)
+    # No submissions are set up here, so the portfolio to judge against is empty.
+    # Defaulting reads the shared test database, where another module's submitted
+    # alphas have no PnL in *this* store -- and the fail-closed gate correctly
+    # blocks on what it cannot measure.
+    verdicts = P.evaluate(db_session, fkey, pnl_store=store, portfolio=[])
 
     spike_v = next(v for v in verdicts if v.alpha_id == grid_map[spike_coord])
     ridge_high_v = next(v for v in verdicts if v.alpha_id == grid_map[ridge_high])

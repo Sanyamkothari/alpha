@@ -39,6 +39,9 @@ class FilterConfig:
     portfolio_corr_threshold: float = 0.55
     sibling_cluster_threshold: float = 0.90
     min_common_days: int = 500
+    # A portfolio member we could not measure blocks promotion rather than
+    # passing silently. Turn off only with a deliberate, recorded reason.
+    block_on_unmeasurable_portfolio: bool = True
 
     # Reconciliation
     sharpe_reconciliation_tolerance: float = 0.10  # accommodate BRAIN sqrt(250) vs local sqrt(252)

@@ -88,11 +88,15 @@ def test_sub_500_day_overlap_rejection(tmp_path, db_session) -> None:
     store.save_pnl(a1.id, dates, pnl)
     store.save_pnl(a2.id, dates, pnl)
 
-    # Should NOT trigger empirical correlation due to insufficient overlap (< 500 common days)
+    # An overlap too short to measure BLOCKS. It used to pass silently, which meant
+    # "we never checked" reached the operator looking identical to "we checked and
+    # it was fine" -- on the one gate whose whole job is to stop a duplicate
+    # submission.
     is_corr, reason, max_corr = check_portfolio_empirical_correlation(
         db_session, a2.id, pnl_store=store, min_overlap=500
     )
-    assert not is_corr
+    assert is_corr
+    assert "unmeasurable" in (reason or "")
 
 
 def test_portfolio_correlation_gate_threshold(tmp_path, db_session) -> None:

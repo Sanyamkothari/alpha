@@ -120,7 +120,7 @@ def test_isolated_spike_is_not_promoted(db_session, tmp_path) -> None:
             sharpe = 9.0 if (w, d) == (target_w, target_d) else 0.05
             _point(db_session, fam, w, d, sharpe, passes=(w, d) == (target_w, target_d), pnl_store=store)
 
-    verdicts = {v.alpha_id: v for v in evaluate(db_session, fam, pnl_store=store, ledger=_fixed_ledger())}
+    verdicts = {v.alpha_id: v for v in evaluate(db_session, fam, pnl_store=store, ledger=_fixed_ledger(), portfolio=[])}
     spike = next(v for v in verdicts.values() if v.sharpe == 9.0)
     assert spike.clears_bar, "precondition: BRAIN checks passed"
     assert not spike.is_plateau, "a lone spike must not read as a plateau"
@@ -136,7 +136,7 @@ def test_broad_plateau_is_promoted(db_session, tmp_path) -> None:
         for d in DECAY_LADDER:
             _point(db_session, fam, w, d, 2.5, passes=True, pnl_store=store)
 
-    verdicts = evaluate(db_session, fam, pnl_store=store, ledger=_fixed_ledger())
+    verdicts = evaluate(db_session, fam, pnl_store=store, ledger=_fixed_ledger(), portfolio=[])
     assert any(v.promoted for v in verdicts), "a uniform high surface must promote"
     best = next(v for v in verdicts if v.promoted)
     assert best.is_plateau
@@ -151,7 +151,7 @@ def test_failing_brain_checks_blocks_promotion(db_session, tmp_path) -> None:
         for d in DECAY_LADDER:
             _point(db_session, fam, w, d, 3.0, passes=False, pnl_store=store)
 
-    verdicts = evaluate(db_session, fam, pnl_store=store, ledger=_fixed_ledger())
+    verdicts = evaluate(db_session, fam, pnl_store=store, ledger=_fixed_ledger(), portfolio=[])
     assert not any(v.promoted for v in verdicts)
     assert all("fails BRAIN checks" in v.reasons for v in verdicts)
 
@@ -161,7 +161,7 @@ def test_incomplete_surface_is_not_promoted(db_session, tmp_path) -> None:
     fam = "lonely/test"
     store = PnLStore(tmp_path / "pnl")
     _point(db_session, fam, WINDOW_LADDER[2], DECAY_LADDER[3], 5.0, passes=True, pnl_store=store)
-    verdicts = evaluate(db_session, fam, pnl_store=store, ledger=_fixed_ledger())
+    verdicts = evaluate(db_session, fam, pnl_store=store, ledger=_fixed_ledger(), portfolio=[])
     assert not verdicts[0].promoted
     assert any("no simulated neighbours" in r for r in verdicts[0].reasons)
 
@@ -211,6 +211,8 @@ def test_portfolio_correlation_blocks_promotion(db_session, tmp_path) -> None:
             }
     db_session.flush()
 
+    # This one keeps the real portfolio: the submitted alpha above IS what the
+    # test is about.
     verdicts = evaluate(db_session, fam, pnl_store=store, ledger=_fixed_ledger())
     assert not any(v.promoted for v in verdicts), "colliding family alphas must not be promoted"
     assert any(v.is_correlated for v in verdicts)

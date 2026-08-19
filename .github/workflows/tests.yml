@@ -1,0 +1,48 @@
+# Runs the suite against the COMMITTED tree.
+#
+# This exists because a remediation was reported as "238 passed" while the
+# pushed commit failed 18 tests on a TypeError in the promotion path: the run
+# had happened in a working tree that was never committed. A green suite is
+# only evidence about the code someone else will check out.
+name: tests
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+jobs:
+  pytest:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+
+      - name: Install project
+        run: |
+          uv venv --python 3.11 .venv
+          uv pip install -e ".[dev]"
+
+      - name: Run tests
+        run: .venv/bin/python -m pytest -q
+
+      # The suite shares one SQLite database across modules, and the promotion bar
+      # deflates for every trial in it -- so a test can pass only because of what
+      # its neighbours inserted, or fail only because of it. Running each module
+      # alone catches both directions of that coupling.
+      - name: Run each test module in isolation
+        run: |
+          status=0
+          for f in tests/test_*.py; do
+            .venv/bin/python -m pytest -q "$f" || { echo "::error::$f fails in isolation"; status=1; }
+          done
+          exit $status
