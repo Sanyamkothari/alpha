@@ -89,9 +89,13 @@ DEFAULT_CROSS_SECTION: tuple[str | None, ...] = ("rank", "zscore", "normalize", 
 # Group-relative variants; None = ungrouped.
 DEFAULT_GROUPS: tuple[str | None, ...] = (None, "sector", "industry", "subindustry")
 
+DEFAULT_VECTOR_REDUCERS: tuple[str, ...] = ("vec_avg", "vec_sum", "vec_count", "vec_max", "vec_min")
+
 DEFAULT_NEUTRALIZATIONS: tuple[str, ...] = ("SUBINDUSTRY", "INDUSTRY", "SECTOR", "MARKET", "NONE")
 
 DEFAULT_TRUNCATIONS: tuple[float, ...] = (0.01, 0.08)
+
+DEFAULT_HUMPS: tuple[float | None, ...] = (None,)
 
 # Universes to sweep
 DEFAULT_UNIVERSES: tuple[str, ...] = ("TOP3000",)
@@ -125,6 +129,8 @@ class GridAxes:
     decays: tuple[int, ...] = DEFAULT_DECAYS
     truncations: tuple[float, ...] = DEFAULT_TRUNCATIONS
     universes: tuple[str, ...] = DEFAULT_UNIVERSES
+    humps: tuple[float | None, ...] = DEFAULT_HUMPS
+    vector_reducers: tuple[str, ...] = DEFAULT_VECTOR_REDUCERS
 
 
 def derive_horizon_band(window: int | None) -> str | None:
@@ -220,6 +226,8 @@ class FamilySpec:
     operator_family: str | None = None
     wrapper_shape: str | None = None
     horizon_band: str | None = None
+    vector_reducer: str | None = None
+    is_event_field: bool = False
     grid_mode: str = "standard"
     axes: GridAxes = dc_field(default_factory=GridAxes)
 
@@ -236,7 +244,8 @@ class FamilySpec:
         op = f":{self.operator_family}" if self.operator_family else ""
         wrap = f":{self.wrapper_shape}" if self.wrapper_shape else ""
         hz = f":{self.horizon_band}" if self.horizon_band else ""
-        return f"{self.field_code}{denom}{sec}{op}{wrap}{hz}@{s.region}/{s.universe}/d{s.delay}"
+        vec = f":{self.vector_reducer}" if self.vector_reducer else ""
+        return f"{self.field_code}{denom}{sec}{op}{wrap}{hz}{vec}@{s.region}/{s.universe}/d{s.delay}"
 
 
 @dataclass
@@ -261,8 +270,11 @@ class SurfaceConfig:
     builder_fn: Callable[[int], Node]
 
 
-def _base_node(spec: FamilySpec) -> Node:
+def _base_node(spec: FamilySpec, vector_reducer: str | None = None) -> Node:
     base: Node = Field(name=spec.field_code)
+    reducer = vector_reducer or spec.vector_reducer
+    if reducer:
+        base = OperatorCall(reducer, [base])
     if spec.effective_backfill:
         base = OperatorCall(
             "ts_backfill",
@@ -277,6 +289,13 @@ def _base_node(spec: FamilySpec) -> Node:
             )
         base = OperatorCall("divide", [base, denom])
     return base
+
+
+def _wrap_hump(node: Node, hump: float | None) -> Node:
+    if hump is not None and hump > 0:
+        from app.validator.ast_nodes import KeywordArg
+        return OperatorCall("hump", [node], [KeywordArg("hump", Number(float(hump), False))])
+    return node
 
 
 def _wrap_cross_section(node: Node, cs_op: str | None, group: str | None) -> Node:
@@ -496,6 +515,11 @@ def expand(
     )
     num_settings = min(len(settings_combinations), max(1, policy.settings_per_structure))
 
+    is_vector = (kb.field_type(spec.field_code) == "VECTOR") or (spec.vector_reducer is not None)
+    vec_reducers: list[str | None] = (
+        [spec.vector_reducer] if spec.vector_reducer else list(axes.vector_reducers)
+    ) if is_vector else [None]
+
     all_surface_configs: list[SurfaceConfig] = []
 
     for settings_idx in range(num_settings):
@@ -503,108 +527,149 @@ def expand(
         if (family_key, neutralization, truncation) in submitted_slices:
             continue
 
-        # ------------------------------------------------------------------
-        # Layer 1: Depth-1 templates (the single-operator grid)
-        # ------------------------------------------------------------------
-        for ts_op, cs_op, group in itertools.product(ts_transforms, cross_sections, groups):
-            def make_depth1_builder(_ts=ts_op, _cs=cs_op, _grp=group):
-                def _builder(window: int) -> Node:
-                    node = OperatorCall(_ts, [_base_node(spec), Number(float(window), True)])
-                    return _wrap_cross_section(node, _cs, _grp)
-                return _builder
-
-            grid_extra = {
-                "ts": ts_op, "cs": cs_op, "group": group, "depth": 1,
-                "neutralization": neutralization, "truncation": truncation,
-                "universe": universe,
-            }
-            all_surface_configs.append(
-                SurfaceConfig(
-                    layer=1,
-                    ts_sig=ts_op,
-                    grid_extra=grid_extra,
-                    builder_fn=make_depth1_builder(),
-                )
-            )
-
-        # ------------------------------------------------------------------
-        # Layer 2: Depth-2 templates (nested operator pairs)
-        # ------------------------------------------------------------------
-        if not spec.operator_family:
-            for (outer_op, inner_op), cs_op, group in itertools.product(
-                axes.depth2_pairs, cross_sections, groups
-            ):
-                def make_depth2_builder(_outer=outer_op, _inner=inner_op, _cs=cs_op, _grp=group):
+        for vec_reducer in vec_reducers:
+            # ------------------------------------------------------------------
+            # Layer 1: Depth-1 templates (the single-operator grid)
+            # ------------------------------------------------------------------
+            for ts_op, cs_op, group, hump in itertools.product(ts_transforms, cross_sections, groups, axes.humps):
+                def make_depth1_builder(_ts=ts_op, _cs=cs_op, _grp=group, _hump=hump, _vec=vec_reducer):
                     def _builder(window: int) -> Node:
-                        inner_w = None
-                        for iw in sorted(axes.inner_windows, reverse=True):
-                            if iw < window:
-                                inner_w = iw
-                                break
-                        if inner_w is None:
-                            inner_w = min(axes.inner_windows) if axes.inner_windows else 5
-
-                        inner_node = OperatorCall(
-                            _inner, [_base_node(spec), Number(float(inner_w), True)]
-                        )
-                        outer_node = OperatorCall(
-                            _outer, [inner_node, Number(float(window), True)]
-                        )
-                        return _wrap_cross_section(outer_node, _cs, _grp)
+                        node = OperatorCall(_ts, [_base_node(spec, vector_reducer=_vec), Number(float(window), True)])
+                        wrapped = _wrap_cross_section(node, _cs, _grp)
+                        return _wrap_hump(wrapped, _hump)
                     return _builder
 
-                ts_sig = f"{outer_op}({inner_op})"
+                base_ts_sig = f"{vec_reducer}:{ts_op}" if vec_reducer else ts_op
+                ts_sig = f"hump({base_ts_sig},{hump})" if (hump is not None and hump > 0) else base_ts_sig
                 grid_extra = {
-                    "ts": ts_sig, "cs": cs_op, "group": group,
-                    "depth": 2, "neutralization": neutralization, "truncation": truncation,
+                    "ts": ts_sig, "cs": cs_op, "group": group, "depth": 1,
+                    "neutralization": neutralization, "truncation": truncation,
                     "universe": universe,
+                    "hump": hump,
                 }
+                if vec_reducer:
+                    grid_extra["vec_reducer"] = vec_reducer
                 all_surface_configs.append(
                     SurfaceConfig(
-                    layer=2,
-                    ts_sig=ts_sig,
-                    grid_extra=grid_extra,
-                    builder_fn=make_depth2_builder(),
-                )
-            )
-
-        # ------------------------------------------------------------------
-        # Layer 3: Multi-field signal templates (ts_corr)
-        # ------------------------------------------------------------------
-        if spec.secondary_field and not spec.operator_family:
-            for cs_op, group in itertools.product(cross_sections, groups):
-                def make_corr_builder(_cs=cs_op, _grp=group, _sec=spec.secondary_field):
-                    def _builder(window: int) -> Node:
-                        node = OperatorCall(
-                            "ts_corr",
-                            [
-                                _base_node(spec),
-                                Field(name=_sec),
-                                Number(float(window), True),
-                            ],
-                        )
-                        return _wrap_cross_section(node, _cs, _grp)
-                    return _builder
-
-                grid_extra = {
-                    "ts": "ts_corr",
-                    "secondary": spec.secondary_field,
-                    "cs": cs_op,
-                    "group": group,
-                    "depth": 1,
-                    "multi_field": True,
-                    "neutralization": neutralization,
-                    "truncation": truncation,
-                    "universe": universe,
-                }
-                all_surface_configs.append(
-                    SurfaceConfig(
-                        layer=3,
-                        ts_sig="ts_corr",
+                        layer=1,
+                        ts_sig=ts_sig,
                         grid_extra=grid_extra,
-                        builder_fn=make_corr_builder(),
+                        builder_fn=make_depth1_builder(),
                     )
                 )
+
+                # Event-time template variant if requested
+                if spec.is_event_field:
+                    def make_event_builder(_ts=ts_op, _cs=cs_op, _grp=group, _hump=hump, _vec=vec_reducer):
+                        def _builder(window: int) -> Node:
+                            evt = OperatorCall("days_from_last_change", [_base_node(spec, vector_reducer=_vec)])
+                            node = OperatorCall(_ts, [evt, Number(float(window), True)])
+                            wrapped = _wrap_cross_section(node, _cs, _grp)
+                            return _wrap_hump(wrapped, _hump)
+                        return _builder
+
+                    evt_ts_sig = f"days_from_last_change:{base_ts_sig}"
+                    grid_extra_evt = dict(grid_extra, ts=evt_ts_sig, event_time=True)
+                    all_surface_configs.append(
+                        SurfaceConfig(
+                            layer=1,
+                            ts_sig=evt_ts_sig,
+                            grid_extra=grid_extra_evt,
+                            builder_fn=make_event_builder(),
+                        )
+                    )
+
+            # ------------------------------------------------------------------
+            # Layer 2: Depth-2 templates (nested operator pairs)
+            # ------------------------------------------------------------------
+            if not spec.operator_family:
+                for (outer_op, inner_op), cs_op, group, hump in itertools.product(
+                    axes.depth2_pairs, cross_sections, groups, axes.humps
+                ):
+                    def make_depth2_builder(_outer=outer_op, _inner=inner_op, _cs=cs_op, _grp=group, _hump=hump, _vec=vec_reducer):
+                        def _builder(window: int) -> Node:
+                            inner_w = None
+                            for iw in sorted(axes.inner_windows, reverse=True):
+                                if iw < window:
+                                    inner_w = iw
+                                    break
+                            if inner_w is None:
+                                inner_w = min(axes.inner_windows) if axes.inner_windows else 5
+
+                            inner_node = OperatorCall(
+                                _inner, [_base_node(spec, vector_reducer=_vec), Number(float(inner_w), True)]
+                            )
+                            outer_node = OperatorCall(
+                                _outer, [inner_node, Number(float(window), True)]
+                            )
+                            wrapped = _wrap_cross_section(outer_node, _cs, _grp)
+                            return _wrap_hump(wrapped, _hump)
+                        return _builder
+
+                    base_sig = f"{outer_op}({inner_op})"
+                    if vec_reducer:
+                        base_sig = f"{vec_reducer}:{base_sig}"
+                    ts_sig = f"hump({base_sig},{hump})" if (hump is not None and hump > 0) else base_sig
+                    grid_extra = {
+                        "ts": ts_sig, "cs": cs_op, "group": group,
+                        "depth": 2, "neutralization": neutralization, "truncation": truncation,
+                        "universe": universe,
+                        "hump": hump,
+                    }
+                    if vec_reducer:
+                        grid_extra["vec_reducer"] = vec_reducer
+                    all_surface_configs.append(
+                        SurfaceConfig(
+                            layer=2,
+                            ts_sig=ts_sig,
+                            grid_extra=grid_extra,
+                            builder_fn=make_depth2_builder(),
+                        )
+                    )
+
+            # ------------------------------------------------------------------
+            # Layer 3: Multi-field signal templates (ts_corr)
+            # ------------------------------------------------------------------
+            if spec.secondary_field and not spec.operator_family:
+                for cs_op, group, hump in itertools.product(cross_sections, groups, axes.humps):
+                    def make_corr_builder(_cs=cs_op, _grp=group, _sec=spec.secondary_field, _hump=hump, _vec=vec_reducer):
+                        def _builder(window: int) -> Node:
+                            node = OperatorCall(
+                                "ts_corr",
+                                [
+                                    _base_node(spec, vector_reducer=_vec),
+                                    Field(name=_sec),
+                                    Number(float(window), True),
+                                ],
+                            )
+                            wrapped = _wrap_cross_section(node, _cs, _grp)
+                            return _wrap_hump(wrapped, _hump)
+                        return _builder
+
+                    base_sig = f"{vec_reducer}:ts_corr" if vec_reducer else "ts_corr"
+                    ts_sig = f"hump({base_sig},{hump})" if (hump is not None and hump > 0) else base_sig
+                    grid_extra = {
+                        "ts": ts_sig,
+                        "secondary": spec.secondary_field,
+                        "cs": cs_op,
+                        "group": group,
+                        "depth": 1,
+                        "multi_field": True,
+                        "neutralization": neutralization,
+                        "truncation": truncation,
+                        "universe": universe,
+                        "hump": hump,
+                    }
+                    if vec_reducer:
+                        grid_extra["vec_reducer"] = vec_reducer
+                    all_surface_configs.append(
+                        SurfaceConfig(
+                            layer=3,
+                            ts_sig=ts_sig,
+                            grid_extra=grid_extra,
+                            builder_fn=make_corr_builder(),
+                        )
+                    )
 
     # Stratified selection
     chosen_configs = select_surface_configs(all_surface_configs, budget_surfaces, rng=rng)

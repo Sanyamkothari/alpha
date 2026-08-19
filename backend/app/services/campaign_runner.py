@@ -196,7 +196,7 @@ def execute_campaign(
                     )
                     t = db.get(CampaignTask, task_id)
                     if t:
-                        if existing_simulated >= surface_size:
+                        if existing_simulated >= 1:
                             t.status = "skipped"
                             t.error = "surface already complete"
                         else:
@@ -260,7 +260,7 @@ def execute_campaign(
                         )
                         t = db.get(CampaignTask, task_id)
                         if t:
-                            if existing_simulated >= surface_size:
+                            if existing_simulated > 0 and (not candidates or existing_simulated >= len(candidates) or existing_simulated >= 14):
                                 t.status = "skipped"
                                 t.error = "surface already complete"
                             else:

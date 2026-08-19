@@ -279,15 +279,20 @@ def _select_representatives(
     for v in verdicts:
         if not v.promoted:
             continue
-        alpha = db.get(Alpha, v.alpha_id)
-        key = (alpha.feature_json or {}).get("structural_hash") if alpha else None
-        groups[key or ("structure", structure_of.get(v.alpha_id))].append(v)
+        groups[structure_of.get(v.alpha_id)].append(v)
 
     for members in groups.values():
         if len(members) < 2:
             continue
         members.sort(
-            key=lambda v: (-(v.sharpe or 0.0), -(v.plateau_ratio or 0.0), v.alpha_id)
+            key=lambda v: (
+                -(v.ridge_score if v.ridge_score is not None else -99.0),
+                -(v.neighbour_median_sharpe if v.neighbour_median_sharpe is not None else -99.0),
+                -(v.plateau_ratio or 0.0),
+                -v.neighbours_simulated,
+                -(v.sharpe or 0.0),
+                v.alpha_id,
+            )
         )
         keeper = members[0]
         for other in members[1:]:
@@ -499,7 +504,7 @@ def evaluate(
         )
         verdicts.append(v)
 
-    _select_representatives(db, verdicts, surface, store, cfg=cfg)
+    _select_representatives(db, verdicts, surface)
 
     verdicts.sort(
         key=lambda v: (
