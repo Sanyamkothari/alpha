@@ -23,6 +23,16 @@ class FilterConfig:
 
     # Baseline promotion bar
     target_sharpe: float = 1.25
+    # How the multiple-testing correction combines with the economic target.
+    #   "noise_floor" -> max(target, se * E[max N]).  Ask: is this distinguishable
+    #                   from the best of N noise draws, and is it economically
+    #                   worth submitting? Two conditions, whichever binds.
+    #   "debias"      -> target + se * E[max N].  Ask: after subtracting the
+    #                   selection inflation a winner carries, is the TRUE Sharpe
+    #                   still above target?
+    # "debias" is the stricter reading and the one this project shipped first. The
+    # filter backtest measures what each costs; see docs/CALIBRATION.md.
+    bar_form: str = "noise_floor"
     backtest_days: int = 1236
 
     # Stability (Lo 2002 standard error Z-score thresholds)

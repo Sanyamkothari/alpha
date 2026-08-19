@@ -26,6 +26,7 @@ from app.models.operators import Operator, OperatorArgument
 from app.models.results import AlphaMetric, SimulationImport
 from app.services.alpha_library import AlphaSettings, create_alpha
 from app.services.constructor import FamilySpec, expand
+from app.services.trials import TrialLedger
 from app.services.filter_config import (
     DEFAULT_FILTER_CONFIG,
     TRADING_DAYS_PER_YEAR,
@@ -60,6 +61,54 @@ class FilterScorecard:
     true_signal_survival_rate: float
     stage_attrition: dict[str, int] = field(default_factory=dict)
     config_fingerprint: str = ""
+    null_rate_ci95: tuple[float, float] = (0.0, 1.0)
+    signal_rate_ci95: tuple[float, float] = (0.0, 1.0)
+    programme_trials: int = 0
+
+
+def wilson_interval(successes: int, trials: int, z: float = 1.96) -> tuple[float, float]:
+    """95% Wilson score interval for a binomial rate.
+
+    Reported alongside every rate because the point estimate is what misleads:
+    zero promotions out of twenty nulls reads as "0% false discovery" and is
+    equally consistent with 13%. Normal approximation degenerates at p=0, which
+    is exactly the case this harness is used to argue about.
+    """
+    if trials <= 0:
+        return (0.0, 1.0)
+    p = successes / trials
+    denom = 1.0 + z**2 / trials
+    centre = (p + z**2 / (2 * trials)) / denom
+    margin = (z / denom) * math.sqrt(p * (1 - p) / trials + z**2 / (4 * trials**2))
+    return (max(0.0, centre - margin), min(1.0, centre + margin))
+
+
+def _deepest_stage(verdicts: list) -> str:
+    """The furthest gate any candidate in a family reached.
+
+    Which gate is binding is the only thing that makes a threshold argument
+    settleable: "nothing promotes" is compatible with a bar that is too high and
+    with a stability test that is too strict, and those want opposite fixes.
+    """
+    if not verdicts:
+        return "no_candidates"
+    if any(v.promoted for v in verdicts):
+        return "promoted"
+    stages = [
+        ("brain_checks", lambda v: v.clears_bar),
+        ("plateau", lambda v: v.is_plateau),
+        ("haircut_bar", lambda v: v.sharpe is not None and v.sharpe >= v.haircut_bar),
+        ("subperiod", lambda v: v.subperiod_passed is True),
+        ("dsr", lambda v: v.dsr_passed is True),
+        ("correlation", lambda v: not v.is_correlated),
+    ]
+    deepest = "brain_checks"
+    for name, ok in stages:
+        if any(ok(v) for v in verdicts):
+            deepest = name
+        else:
+            return f"died_at_{name}"
+    return f"died_after_{deepest}"
 
 
 def generate_synthetic_pnl(
@@ -126,9 +175,23 @@ def run_filter_backtest(
     true_sharpe: float = 1.50,
     cfg: FilterConfig = DEFAULT_FILTER_CONFIG,
     seed: int = 42,
+    programme_trials: int = 4000,
 ) -> FilterScorecard:
-    """Run full calibration backtest over synthetic null and signal families."""
+    """Score the gate stack as a classifier against families with known truth.
+
+    ``programme_trials`` pins the trial universe the promotion bar deflates for.
+    Letting evaluate() build its own ledger makes the bar climb as replications
+    accumulate in the shared in-memory database, so early families are judged
+    against a lower bar than late ones and the measured rate depends on
+    replication index rather than on the filter.
+    """
     rng = np.random.default_rng(seed)
+    ledger = TrialLedger(
+        n_trials=programme_trials,
+        n_eff=float(programme_trials),
+        sigma_sr_daily=0.35 / math.sqrt(TRADING_DAYS_PER_YEAR),
+        window_days=cfg.backtest_days,
+    )
     stage_attrition: dict[str, int] = defaultdict(int)
 
     promoted_null = 0
@@ -217,7 +280,8 @@ def run_filter_backtest(
                 )
             db.commit()
 
-            verdicts = evaluate(db, fk, pnl_store=store, cfg=cfg)
+            verdicts = evaluate(db, fk, pnl_store=store, cfg=cfg, ledger=ledger, portfolio=[])
+            stage_attrition[f"null:{_deepest_stage(verdicts)}"] += 1
             if any(v.promoted for v in verdicts):
                 promoted_null += 1
 
@@ -266,7 +330,8 @@ def run_filter_backtest(
                 )
             db.commit()
 
-            verdicts = evaluate(db, fk, pnl_store=store, cfg=cfg)
+            verdicts = evaluate(db, fk, pnl_store=store, cfg=cfg, ledger=ledger, portfolio=[])
+            stage_attrition[f"signal:{_deepest_stage(verdicts)}"] += 1
             if any(v.promoted for v in verdicts):
                 promoted_signal += 1
             else:
@@ -288,4 +353,7 @@ def run_filter_backtest(
         true_signal_survival_rate=signal_survival,
         stage_attrition=dict(stage_attrition),
         config_fingerprint=cfg.fingerprint(),
+        null_rate_ci95=wilson_interval(promoted_null, n_null_replications),
+        signal_rate_ci95=wilson_interval(promoted_signal, n_signal_replications),
+        programme_trials=programme_trials,
     )

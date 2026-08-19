@@ -167,10 +167,21 @@ def test_incomplete_surface_is_not_promoted(db_session, tmp_path) -> None:
 
 
 def test_haircut_grows_with_family_size(db_session) -> None:
-    """A winner drawn from 2,000 candidates needs a higher bar than one from 20."""
+    """A winner drawn from 2,000 trials needs a higher bar than one from 20.
+
+    Under the noise-floor form the bar is ``max(economic target, noise ceiling)``,
+    so it is FLAT while the target binds and starts climbing once searching enough
+    trials makes noise alone capable of clearing 1.25. On a five-year backtest
+    that crossover sits near 200 effective trials -- which is itself the useful
+    number: below it, searching harder costs you nothing.
+    """
     assert haircut_bar(1) == BASE_SHARPE_BAR
-    assert haircut_bar(20) > BASE_SHARPE_BAR
-    assert haircut_bar(2000) > haircut_bar(20)
+    assert haircut_bar(20) == BASE_SHARPE_BAR, "the economic target still binds at 20 trials"
+    assert haircut_bar(2000) > haircut_bar(20), "the noise ceiling binds by 2,000"
+    assert haircut_bar(20000) > haircut_bar(2000), "and keeps climbing"
+
+    crossover = next(n for n in range(2, 5000) if haircut_bar(n) > BASE_SHARPE_BAR)
+    assert 100 < crossover < 400, f"crossover at {crossover} effective trials"
 
 
 def test_portfolio_correlation_blocks_promotion(db_session, tmp_path) -> None:

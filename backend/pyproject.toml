@@ -65,5 +65,9 @@ plugins = []
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = "-q"
+# The slow lane is the calibration evidence: 500-replication Monte Carlo runs that
+# take minutes. Excluded by default so the fast suite stays a development tool;
+# CI runs `-m slow` on a schedule.
+addopts = "-q -m 'not slow'"
+markers = ["slow: calibration runs measured in minutes, not seconds"]
 filterwarnings = ["ignore::DeprecationWarning"]

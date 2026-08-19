@@ -340,8 +340,10 @@ def haircut_bar(
         window_days = cfg.backtest_days
 
     se = math.sqrt(TRADING_DAYS_PER_YEAR / max(252, window_days))
-    evt_max = expected_max_normal(n_eff)
-    return float(cfg.target_sharpe + se * evt_max)
+    noise_ceiling = se * expected_max_normal(n_eff)
+    if cfg.bar_form == "debias":
+        return float(cfg.target_sharpe + noise_ceiling)
+    return float(max(cfg.target_sharpe, noise_ceiling))
 
 
 def evaluate(

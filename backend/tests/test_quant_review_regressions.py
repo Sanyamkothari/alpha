@@ -428,7 +428,10 @@ def test_promotion_bar_uses_programme_ledger_not_family_neff(db_session, tmp_pat
         f"evaluate() reported bar {verdicts[0].haircut_bar:.3f}, expected the "
         f"programme-ledger bar {expected:.3f}"
     )
-    assert verdicts[0].haircut_bar > 2.0, "a 4000-trial programme demands a serious bar"
+    assert verdicts[0].haircut_bar > haircut_bar(family_neff) + 0.25, (
+        "the programme bar must be materially above the one the family's own "
+        "N_eff would have produced -- that gap is the entire finding"
+    )
 
 
 def test_unmeasurable_portfolio_correlation_blocks(db_session, tmp_path) -> None:
