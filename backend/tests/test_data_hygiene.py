@@ -109,10 +109,13 @@ def test_missing_counts_are_not_treated_as_empty() -> None:
 # ---------------------------------------------------------------------------
 
 
-def _add_family(db: Session, family: str, rows: list[dict], code: str) -> None:
+def _add_family(db: Session, family: str, rows: list[dict], code: str, offset: int = 0) -> None:
+    """Seed one family. `offset` shifts the windows so two families on the same field
+    produce distinct expressions — create_alpha dedupes on expression hash, so without
+    it the second family's rows are silently dropped as duplicates."""
     for i, r in enumerate(rows):
         alpha = create_alpha(
-            db, f"rank(ts_zscore({code},{5 + i}))",
+            db, f"rank(ts_zscore({code},{5 + offset + i}))",
             AlphaSettings(region="USA", universe="TOP3000", delay=1),
             family_key=family, grid={"window": 5 + i, "decay": 0}, source="test",
         ).alpha
@@ -220,20 +223,37 @@ def test_varied_real_metrics_stay_clean(db_session: Session) -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_field_with_no_book_is_dead(db_session: Session) -> None:
+def test_field_dead_across_two_templates(db_session: Session) -> None:
+    """Corroboration across templates is the cheap way to be sure."""
     from app.services.field_health import dead_field_codes, field_health
 
     code = _seed_field(db_session, "f_dead_health")
-    rows = [
-        {"sharpe": 0.0, "fitness": 0.0, "turnover": 0.0, "returns": 0.0,
-         "longCount": 0, "shortCount": 0}
-    ] * 5
-    _add_family(db_session, "health/dead", rows, code)
+    empty = {"sharpe": 0.0, "fitness": 0.0, "turnover": 0.0, "returns": 0.0,
+             "longCount": 0, "shortCount": 0}
+    _add_family(db_session, "health/dead-a", [empty] * 2, code)
+    _add_family(db_session, "health/dead-b", [empty] * 2, code, offset=50)
     db_session.flush()
 
     health = field_health(db_session)[code]
     assert health.is_dead
+    assert "2 distinct templates" in health.evidence
     assert code in dead_field_codes(db_session)
+
+
+def test_single_template_needs_a_long_run(db_session: Session) -> None:
+    """A handful of empties from ONE template cannot distinguish a dead field from a
+    broken template, and retiring on that basis would discard real territory."""
+    from app.services.field_health import field_health
+
+    code = _seed_field(db_session, "f_one_template")
+    empty = {"sharpe": 0.0, "fitness": 0.0, "turnover": 0.0, "returns": 0.0,
+             "longCount": 0, "shortCount": 0}
+    _add_family(db_session, "health/one-template", [empty] * 5, code)
+    db_session.flush()
+
+    health = field_health(db_session)[code]
+    assert not health.is_dead
+    assert "failing template" in health.evidence
 
 
 def test_field_that_ever_traded_is_not_dead(db_session: Session) -> None:
