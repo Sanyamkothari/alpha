@@ -13,6 +13,7 @@ import math
 import re
 from dataclasses import dataclass, field
 
+import structlog
 from sqlalchemy import update
 from sqlalchemy.orm import Session
 
@@ -49,6 +50,8 @@ _FAIL_TOKENS = {"FAIL", "FAILED", "ERROR", "FALSE", "NO"}
 # from "this was a dict whose only key happened to be raw_text".
 RAW_TEXT_KEY = "__raw_text__"
 
+
+log = structlog.get_logger("result_import")
 
 @dataclass
 class ParsedResult:
@@ -223,7 +226,31 @@ class ImportResult:
     new_status: str
 
 
+def held_no_positions(parsed: ParsedResult) -> bool:
+    """True when the simulation produced no book at all.
+
+    Two families in this database (``fnd6_newqv1300_spcep12``,
+    ``fnd6_newqv1300_xoptdq``) burned 44 simulations between them returning
+    ``long_count == short_count == 0`` with every metric zero — the underlying field
+    is empty for the configured region/delay/universe, so the expression evaluated to
+    nothing on every day. Nothing checked, so the campaign kept feeding the same dead
+    field more slots.
+
+    An empty book is not a bad alpha, it is an absent one. It must not be recorded as
+    ``rejected`` alongside alphas that genuinely traded and lost, because that
+    silently pollutes every hit-rate and every trial count computed from status.
+    """
+    longs = parsed.columns.get("long_count")
+    shorts = parsed.columns.get("short_count")
+    if longs is None and shorts is None:
+        return False
+    return (longs or 0) == 0 and (shorts or 0) == 0
+
+
 def _status_for(parsed: ParsedResult) -> str:
+    if held_no_positions(parsed):
+        # Not a verdict on the idea — there was nothing to judge.
+        return AlphaStatus.ARCHIVED.value
     if parsed.passed_all_checks is True:
         return AlphaStatus.PASSED.value
     if parsed.passed_all_checks is False:
@@ -269,7 +296,16 @@ def import_result(
 
     new_status = _status_for(parsed)
     sharpe = parsed.columns.get("sharpe")
-    note = f"result imported (sharpe={sharpe})" if sharpe is not None else "result imported"
+    if held_no_positions(parsed):
+        note = "result imported — EMPTY BOOK (0 long, 0 short); field likely unavailable here"
+        log.warning(
+            "empty_book_simulation",
+            alpha_id=alpha.id,
+            family=alpha.family_key,
+            expression=alpha.expression[:120],
+        )
+    else:
+        note = f"result imported (sharpe={sharpe})" if sharpe is not None else "result imported"
     transition_status(db, alpha, new_status, note=note)
 
     return ImportResult(simulation_import=sim, metrics=metric, parsed=parsed, new_status=new_status)
