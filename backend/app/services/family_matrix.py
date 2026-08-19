@@ -7,8 +7,6 @@ trial counts (N_eff), and Combinatorially Symmetric Cross-Validation (CSCV) for 
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Sequence
-
 import numpy as np
 import structlog
 from sqlalchemy import select
@@ -41,7 +39,10 @@ def build_family_matrix(
 ) -> FamilyPnLMatrix | None:
     """Assemble a date-aligned daily PnL matrix over simulated family members.
 
-    Returns None if fewer than 2 valid reconcilable series exist with sufficient date overlap.
+    Returns None if fewer than 2 series exist with sufficient date overlap. Note this
+    filters on length and overlap only — reconciliation against the reported Sharpe is
+    enforced at the storage boundary (``PnLStore.save_pnl``), so an unreconcilable
+    series never reaches the store to be picked up here.
     """
     store = pnl_store or get_pnl_store()
 
@@ -57,12 +58,12 @@ def build_family_matrix(
         return None
 
     # Filter by structure if specified
+    from app.services.plateau import _structure_of
+
     alpha_ids: list[int] = []
     for aid, feat in rows:
         if structure is not None:
             grid = (feat or {}).get("grid") or {}
-            from app.services.plateau import _structure_of
-
             if _structure_of(grid) != structure:
                 continue
         alpha_ids.append(aid)

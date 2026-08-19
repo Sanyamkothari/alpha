@@ -103,10 +103,9 @@ class PnLStore:
             detected_kind = "cumulative"
             # Difference the cumulative curve to recover daily increments
             if len(arr) > 1:
-                diff_arr = np.diff(arr)
-                diff_dates = dates[1:]
-                # Anchor first day diff as 0.0 or prepend original first point if sensible
-                arr = np.concatenate([[arr[0]], diff_arr])
+                # cum[0] is the first day's PnL, so it carries through unchanged and
+                # the dates array stays aligned with the values.
+                arr = np.concatenate([[arr[0]], np.diff(arr)])
                 log.info("cumulative_pnl_differenced", alpha_id=alpha_id, original_len=len(pnl_values))
 
         recomputed_sr = compute_vector_sharpe(arr)

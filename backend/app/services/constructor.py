@@ -558,6 +558,12 @@ def expand(
 
     budget_surfaces = max(1, max_candidates // surface_size)
     policy = policy or BudgetPolicy(max_surfaces=budget_surfaces, settings_per_structure=1)
+    # Honour an explicitly supplied policy. This was previously constructed and then
+    # ignored — select_surface_configs took the candidate-derived budget, so a caller
+    # passing BudgetPolicy(max_surfaces=3) silently got something else. The candidate
+    # cap still binds: a policy may narrow the budget, never widen it past what
+    # max_candidates pays for.
+    budget_surfaces = max(1, min(budget_surfaces, policy.max_surfaces))
 
     settings_combinations = list(
         itertools.product(axes.neutralizations, axes.truncations, axes.universes)
@@ -571,10 +577,26 @@ def expand(
 
     all_surface_configs: list[SurfaceConfig] = []
 
+    # F11: when num_settings == 1 a `continue` here emitted nothing at all for the
+    # whole family — every structure lost, because one settings tuple was already
+    # submitted. Skip forward to the next unused settings tuple instead, and only
+    # give up if every one of them is exhausted.
+    usable_settings = [
+        combo
+        for combo in settings_combinations
+        if (family_key, combo[0], combo[1]) not in submitted_slices
+    ]
+    if not usable_settings:
+        log.warning(
+            "family_settings_exhausted",
+            family=family_key,
+            combinations=len(settings_combinations),
+        )
+        return []
+    num_settings = min(len(usable_settings), max(1, policy.settings_per_structure))
+
     for settings_idx in range(num_settings):
-        neutralization, truncation, universe = settings_combinations[settings_idx]
-        if (family_key, neutralization, truncation) in submitted_slices:
-            continue
+        neutralization, truncation, universe = usable_settings[settings_idx]
 
         for vec_reducer in vec_reducers:
             # ------------------------------------------------------------------
