@@ -162,20 +162,38 @@ def q2_turnover_vs_subuniverse(db) -> None:
     if fast:
         print(f"    turnover >  0.125 : median sub-universe Sharpe {st.median(fast):.3f}  (n={len(fast)})")
 
-    if len(slow) >= 5 and len(fast) >= 5:
-        diff = st.median(slow) - st.median(fast)
-        if diff < -0.05:
-            print("\n  ANSWER: YES — slow alphas score WORSE on the sub-universe check.")
-            print("  The 'aim for turnover <= 0.125' idea is buying fitness at the cost of a")
-            print("  check that has already sunk one family. Do not pursue it as stated.")
-        elif diff > 0.05:
-            print("\n  ANSWER: NO — slow alphas score BETTER here. The floor idea survives")
-            print("  this objection and is worth a probe.")
+    # The levels above cannot settle the question, and it is worth being explicit about
+    # why. Q1 established the check is `sub >= k * own Sharpe`, so what decides pass or
+    # fail is the RATIO. A cohort with a lower sub-universe Sharpe passes comfortably if
+    # its main Sharpe is lower in the same proportion. Measure the ratio directly.
+    ratio_rows = [
+        (m.turnover, m.subuniverse_sharpe / m.sharpe)
+        for m in rows
+        if m.sharpe not in (None, 0) and m.sharpe > 0.01
+    ]
+    slow_r = [r for t, r in ratio_rows if t <= 0.125]
+    fast_r = [r for t, r in ratio_rows if t > 0.125]
+
+    print("\n  The check is a ratio, so compare ratios, not levels:")
+    if len(slow_r) >= 5 and len(fast_r) >= 5:
+        ms, mf = st.median(slow_r), st.median(fast_r)
+        print(f"    turnover <= 0.125 : median sub/own Sharpe {ms:.3f}  (n={len(slow_r)})")
+        print(f"    turnover >  0.125 : median sub/own Sharpe {mf:.3f}  (n={len(fast_r)})")
+        diff = ms - mf
+        if diff < -0.03:
+            print("\n  ANSWER: YES — slow alphas hold a WORSE sub-to-own Sharpe ratio, which is")
+            print("  exactly what this check tests. Lowering turnover really does trade one bar")
+            print("  for another. Do not pursue the turnover floor as stated.")
+        elif diff > 0.03:
+            print("\n  ANSWER: NO — slow alphas hold a BETTER ratio. The level gap was an")
+            print("  artefact of their lower headline Sharpe. The floor idea survives.")
         else:
-            print("\n  ANSWER: no meaningful relationship. Turnover and the sub-universe check")
-            print("  are independent, so the floor idea is not blocked by it.")
+            print("\n  ANSWER: the ratio is flat across turnover. Whatever the levels do, this")
+            print("  check does not discriminate by turnover, so it does not block the floor idea.")
     else:
-        print("\n  CANNOT DETERMINE — one side of the split has too few rows.")
+        print("\n  CANNOT DETERMINE from ratios — one side has too few positive-Sharpe rows.")
+        print("  The level comparison above is NOT a substitute: a lower sub-universe Sharpe")
+        print("  passes fine if the main Sharpe fell with it.")
     print()
 
 

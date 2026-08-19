@@ -104,8 +104,48 @@ class Verdict:
     family_pbo_reason: str | None = None     # why PBO is unavailable, when it is
     neutralization_retention: float | None = None   # E2: fraction of Sharpe held one rung along
     neutralization_robust: bool | None = None       # None = no adjacent surface simulated
+    subuniverse_ratio: float | None = None          # sub-universe Sharpe / own Sharpe
+    subuniverse_margin: str | None = None           # human note when it sits near the bar
     reasons: list[str] = dc_field(default_factory=list)
     config_fingerprint: str = ""
+
+
+
+def _subuniverse_margin(
+    db: Session, alpha_id: int, cfg: FilterConfig
+) -> tuple[float | None, str | None]:
+    """How much room an alpha has on BRAIN's sub-universe robustness check.
+
+    BRAIN requires ``subuniverse_sharpe >= k * sharpe``, with k measured at 0.433 across
+    our own stored check payloads. Returns the observed ratio and, when it sits at or
+    below the bar plus a margin, a note saying so. Returns ``(None, None)`` when the
+    sub-universe figure was never captured — absence is not a failure.
+    """
+    metric = db.execute(
+        select(AlphaMetric)
+        .where(AlphaMetric.alpha_id == alpha_id)
+        .order_by(AlphaMetric.id.desc())
+        .limit(1)
+    ).scalars().first()
+
+    if metric is None or metric.subuniverse_sharpe is None:
+        return None, None
+    if not metric.sharpe or metric.sharpe <= 0.01:
+        return None, None
+
+    ratio = metric.subuniverse_sharpe / metric.sharpe
+    bar = cfg.subuniverse_ratio
+    if ratio < bar:
+        return ratio, (
+            f"sub-universe ratio {ratio:.2f} is below the measured "
+            f"LOW_SUB_UNIVERSE_SHARPE bar (~{bar:.2f} x own Sharpe)"
+        )
+    if ratio < bar + cfg.subuniverse_ratio_margin:
+        return ratio, (
+            f"sub-universe ratio {ratio:.2f} sits within {cfg.subuniverse_ratio_margin:.2f} "
+            f"of the ~{bar:.2f} bar — little room"
+        )
+    return ratio, None
 
 
 def check_portfolio_correlation(
@@ -527,6 +567,16 @@ def evaluate(
         if neut_rob.is_robust is False:
             reasons.append(neut_rob.reason)
 
+        # LOW_SUB_UNIVERSE_SHARPE, modelled rather than discovered after the fact.
+        # An entire 16-simulation family was completed before anyone noticed every point
+        # failed this check; nothing local could see it, because the sub-universe figure
+        # was being parsed away and the rule was assumed to be a constant. Advisory: the
+        # ratio is measured from our own results, not published, so it warns and never
+        # rejects.
+        sub_ratio, sub_note = _subuniverse_margin(db, point.alpha_id, cfg)
+        if sub_note:
+            reasons.append(sub_note)
+
         v = Verdict(
             alpha_id=point.alpha_id,
             expression=point.expression,
@@ -552,6 +602,8 @@ def evaluate(
             family_pbo_reason=family_pbo_reason,
             neutralization_retention=neut_rob.retention,
             neutralization_robust=neut_rob.is_robust,
+            subuniverse_ratio=sub_ratio,
+            subuniverse_margin=sub_note,
             redundant_with=None,
             reasons=reasons,
             config_fingerprint=cfg.fingerprint(),

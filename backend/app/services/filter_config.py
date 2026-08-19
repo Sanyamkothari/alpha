@@ -35,6 +35,20 @@ class FilterConfig:
     dsr_threshold: float = 0.95
     dsr_re_promotion_threshold: float = 0.97
 
+    # Sub-universe robustness (LOW_SUB_UNIVERSE_SHARPE).
+    #
+    # BRAIN does not apply a fixed bar here. Measured across 393 stored check payloads,
+    # the limit it applies is 0.433 x the alpha's OWN Sharpe (sd 0.016, 93% of rows
+    # within 0.02). That makes this a *robustness* test, not a quality one: a stronger
+    # signal raises the bar in proportion and cannot outrun it.
+    #
+    # Empirically derived from our own results, NOT documented by the platform - so it
+    # is used to warn, never to reject. Being wrong about it in the rejecting direction
+    # would silently discard good alphas, which is far worse than letting a doomed one
+    # through to a simulation we have already paid for.
+    subuniverse_ratio: float = 0.433
+    subuniverse_ratio_margin: float = 0.05  # slack before we say anything
+
     # Correlation & portfolio gates
     portfolio_corr_threshold: float = 0.55
     sibling_cluster_threshold: float = 0.90
