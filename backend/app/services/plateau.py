@@ -264,40 +264,66 @@ def _neighbours(point: SurfacePoint, surface: list[SurfacePoint]) -> tuple[list[
 
 
 def _select_representatives(
-    db: Session, verdicts: list[Verdict], surface: list[SurfacePoint]
+    db: Session,
+    verdicts: list[Verdict],
+    surface: list[SurfacePoint],
+    pnl_store: PnLStore | None = None,
+    *,
+    cfg: FilterConfig = DEFAULT_FILTER_CONFIG,
 ) -> None:
-    """Keep one promoted point per distinct structural skeleton.
+    """Keep one promoted point per *correlated* ridge cluster. Mutates in place.
 
-    A family sweeps one mechanism across settings, so a promoted ridge usually
-    arrives as a dozen adjacent points that would all be the same submission. The
-    correlation gate used to absorb this implicitly by rejecting all of them; doing
-    it here instead keeps the shortlist short AND says out loud what happened.
-    Mutates verdicts in place.
+    Grouping is by measured daily-PnL correlation, not by structural skeleton.
+    The skeleton buckets windows coarsely, so one ridge routinely straddles a
+    bucket boundary: grouping on it splits a single mechanism into several groups
+    and promotes a near-duplicate out of each. Measured correlation is the thing
+    the portfolio actually cares about, and it is already on disk.
+
+    Election is by ``ridge_score`` — the median over the point and its simulated
+    neighbours — never by the point's own Sharpe. This is the election that
+    decides which single alpha reaches the operator, and the peak of a ridge is
+    by construction the point carrying the largest positive error.
+
+    Where a pair cannot be measured, the skeleton is the fallback: an unmeasurable
+    pair is grouped rather than assumed independent.
     """
-    structure_of = {p.alpha_id: p.structure for p in surface}
-    groups: dict[object, list[Verdict]] = defaultdict(list)
-    for v in verdicts:
-        if not v.promoted:
-            continue
-        alpha = db.get(Alpha, v.alpha_id)
-        key = (alpha.feature_json or {}).get("structural_hash") if alpha else None
-        groups[key or ("structure", structure_of.get(v.alpha_id))].append(v)
+    from app.services.clustering import cluster_family
 
-    for members in groups.values():
-        if len(members) < 2:
+    promoted = [v for v in verdicts if v.promoted]
+    if len(promoted) < 2:
+        return
+
+    store = pnl_store or get_pnl_store()
+    structure_of = {p.alpha_id: p.structure for p in surface}
+
+    fallback_key: dict[int, object] = {}
+    for v in promoted:
+        alpha = db.get(Alpha, v.alpha_id)
+        skeleton = (alpha.feature_json or {}).get("structural_hash") if alpha else None
+        fallback_key[v.alpha_id] = skeleton or ("structure", structure_of.get(v.alpha_id))
+
+    clusters = cluster_family(
+        promoted, store, cfg=cfg, unmeasured_fallback_key=fallback_key
+    )
+
+    v_by_id = {v.alpha_id: v for v in promoted}
+    for cluster in clusters:
+        keeper = v_by_id.get(cluster.representative_id)
+        if keeper is None:
             continue
-        members.sort(
-            key=lambda v: (-(v.sharpe or 0.0), -(v.plateau_ratio or 0.0), v.alpha_id)
-        )
-        keeper = members[0]
-        for other in members[1:]:
+        for aid in cluster.member_ids:
+            if aid == cluster.representative_id:
+                continue
+            other = v_by_id.get(aid)
+            if other is None:
+                continue
             other.promoted = False
             other.redundant_with = keeper.alpha_id
             other.reasons.append(
-                f"redundant with #{keeper.alpha_id} — same structural skeleton, "
-                f"kept the stronger point (Sharpe {keeper.sharpe:.2f} vs {other.sharpe:.2f})"
+                f"clustered into representative #{keeper.alpha_id} "
+                f"(intra-cluster rho {cluster.intra_max_corr:.2f}) — "
+                f"{cluster.election_reason}"
             )
-
 
 
 def haircut_bar(
@@ -357,8 +383,13 @@ def evaluate(
         corr_mat = compute_correlation_matrix(fam_matrix.matrix)
         fam_n_eff = compute_effective_trials(corr_mat)
 
-    n_trials = fam_n_eff if fam_n_eff is not None else (trial_ledger.n_eff if ledger is not None else max(1, simulated_count))
-    bar = haircut_bar(n_trials, cfg=cfg)
+    # The bar deflates for the trials the WINNER was selected from -- every alpha
+    # this programme has simulated -- so it takes the programme ledger. Passing the
+    # family's own N_eff here is the original F4 defect: 49 points at rho ~= 0.9
+    # collapse to N_eff ~= 1.2, and the "multiple-testing bar" lands at 1.38,
+    # BELOW the flat 1.25 + 0.10*log10(N) it replaced. fam_n_eff keeps its one
+    # legitimate job below: correcting sigma_SR inside the DSR.
+    bar = haircut_bar(trial_ledger, cfg=cfg)
 
     if portfolio is None:
         portfolio = submitted_portfolio(db)

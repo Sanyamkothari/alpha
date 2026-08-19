@@ -67,6 +67,7 @@ def cluster_family(
     pnl_store: PnLStore,
     *,
     cfg: FilterConfig = DEFAULT_FILTER_CONFIG,
+    unmeasured_fallback_key: dict[int, object] | None = None,
 ) -> list[RidgeCluster]:
     """Single-linkage clustering of surviving family candidates by |PnL correlation|.
 
@@ -74,6 +75,13 @@ def cluster_family(
     1. Highest ridge_score (neighbourhood median / shrunk score)
     2. Higher neighbours_simulated (completeness of surface)
     3. Lowest alpha_id (deterministic tiebreaker)
+
+    ``unmeasured_fallback_key`` maps alpha_id -> a coarse identity (the structural
+    skeleton). Pairs whose correlation cannot be measured — too little overlap, or
+    no stored PnL — are unioned when their keys match. An unmeasurable pair is a
+    pair we know nothing about, and in a dedup step the safe reading of "unknown"
+    is "same cluster": promoting both risks two submissions of one idea, while
+    grouping them costs at most one deferred candidate.
     """
     if not candidate_verdicts:
         return []
@@ -96,6 +104,7 @@ def cluster_family(
 
     # Pre-compute pairwise absolute correlations
     corr_matrix: dict[tuple[int, int], float] = {}
+    unmeasured_pairs: list[tuple[int, int]] = []
     for i in range(n):
         for j in range(i + 1, n):
             aid1, aid2 = alpha_ids[i], alpha_ids[j]
@@ -103,6 +112,8 @@ def cluster_family(
             if rho is not None:
                 corr_matrix[(aid1, aid2)] = abs(rho)
                 corr_matrix[(aid2, aid1)] = abs(rho)
+            else:
+                unmeasured_pairs.append((aid1, aid2))
 
     # Disjoint-set union (DSU) for single-linkage clustering
     parent = {aid: aid for aid in alpha_ids}
@@ -120,6 +131,17 @@ def cluster_family(
     for (aid1, aid2), abs_rho in corr_matrix.items():
         if abs_rho >= cfg.sibling_cluster_threshold:
             union(aid1, aid2)
+
+    if unmeasured_fallback_key:
+        merged_unmeasured = 0
+        for aid1, aid2 in unmeasured_pairs:
+            k1 = unmeasured_fallback_key.get(aid1, ("__missing__", aid1))
+            k2 = unmeasured_fallback_key.get(aid2, ("__missing__", aid2))
+            if k1 == k2:
+                union(aid1, aid2)
+                merged_unmeasured += 1
+        if merged_unmeasured:
+            log.info("cluster_unmeasured_fallback", pairs=merged_unmeasured)
 
     # Group by connected component root
     clusters_raw: dict[int, list[int]] = {}

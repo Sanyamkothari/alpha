@@ -48,8 +48,27 @@ from app.services.evolution import _WINDOW_JITTER, mutate_parameters
 from app.services.filter_config import DEFAULT_FILTER_CONFIG, TRADING_DAYS_PER_YEAR, FilterConfig
 from app.services.plateau import evaluate, load_surface
 from app.services.pnl_storage import PnLStore
+from app.services.trials import TrialLedger
 from app.validator.parser import parse
 from app.validator.validator import normalize
+
+
+def _fixed_ledger(n_trials: int = 24) -> TrialLedger:
+    """A trial universe the test controls.
+
+    The promotion bar deflates for every trial the programme has ever run, so an
+    evaluate() that builds its own ledger reads the whole shared test database
+    and a shape test starts depending on how many alphas unrelated tests inserted
+    before it. These tests are about surface shape, not about multiple testing;
+    they pin the bar so the thing under test is the only thing that moves.
+    """
+    return TrialLedger(
+        n_trials=n_trials,
+        n_eff=float(n_trials),
+        sigma_sr_daily=0.35 / math.sqrt(252),
+        window_days=1236,
+    )
+
 
 
 def _seed_field(db, dataset_code: str = "reg_ds", field_code: str = "reg_field") -> str:
@@ -126,7 +145,7 @@ def test_sibling_ridge_promotes_one(db_session, tmp_path) -> None:
 
     db_session.flush()
 
-    verdicts = evaluate(db_session, fk, pnl_store=store)
+    verdicts = evaluate(db_session, fk, pnl_store=store, ledger=_fixed_ledger())
     promoted = [v for v in verdicts if v.promoted]
     # Invariant A1: Exactly 1 promoted
     assert len(promoted) == 1, f"expected exactly 1 promoted representative, got {len(promoted)}"
@@ -219,7 +238,7 @@ def test_reconciliation_enforced(db_session, tmp_path) -> None:
 
     db_session.flush()
 
-    verdicts = evaluate(db_session, fk, pnl_store=store)
+    verdicts = evaluate(db_session, fk, pnl_store=store, ledger=_fixed_ledger())
     assert not any(v.promoted for v in verdicts), "unreconciled PnL must NEVER promote"
     assert all(any("reconciliation" in r for r in v.reasons) for v in verdicts)
 

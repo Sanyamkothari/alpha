@@ -23,6 +23,25 @@ from app.services.plateau import (
     haircut_bar,
 )
 from app.services.pnl_storage import PnLStore
+from app.services.trials import TrialLedger
+
+
+def _fixed_ledger(n_trials: int = 24) -> TrialLedger:
+    """A trial universe the test controls.
+
+    The promotion bar deflates for every trial the programme has ever run, so an
+    evaluate() that builds its own ledger reads the whole shared test database
+    and a shape test starts depending on how many alphas unrelated tests inserted
+    before it. These tests are about surface shape, not about multiple testing;
+    they pin the bar so the thing under test is the only thing that moves.
+    """
+    return TrialLedger(
+        n_trials=n_trials,
+        n_eff=float(n_trials),
+        sigma_sr_daily=0.35 / math.sqrt(252),
+        window_days=1236,
+    )
+
 
 _STRUCTURE = {"ts": "ts_zscore", "cs": "rank", "group": None, "truncation": 0.08}
 
@@ -101,7 +120,7 @@ def test_isolated_spike_is_not_promoted(db_session, tmp_path) -> None:
             sharpe = 9.0 if (w, d) == (target_w, target_d) else 0.05
             _point(db_session, fam, w, d, sharpe, passes=(w, d) == (target_w, target_d), pnl_store=store)
 
-    verdicts = {v.alpha_id: v for v in evaluate(db_session, fam, pnl_store=store)}
+    verdicts = {v.alpha_id: v for v in evaluate(db_session, fam, pnl_store=store, ledger=_fixed_ledger())}
     spike = next(v for v in verdicts.values() if v.sharpe == 9.0)
     assert spike.clears_bar, "precondition: BRAIN checks passed"
     assert not spike.is_plateau, "a lone spike must not read as a plateau"
@@ -117,7 +136,7 @@ def test_broad_plateau_is_promoted(db_session, tmp_path) -> None:
         for d in DECAY_LADDER:
             _point(db_session, fam, w, d, 2.5, passes=True, pnl_store=store)
 
-    verdicts = evaluate(db_session, fam, pnl_store=store)
+    verdicts = evaluate(db_session, fam, pnl_store=store, ledger=_fixed_ledger())
     assert any(v.promoted for v in verdicts), "a uniform high surface must promote"
     best = next(v for v in verdicts if v.promoted)
     assert best.is_plateau
@@ -132,7 +151,7 @@ def test_failing_brain_checks_blocks_promotion(db_session, tmp_path) -> None:
         for d in DECAY_LADDER:
             _point(db_session, fam, w, d, 3.0, passes=False, pnl_store=store)
 
-    verdicts = evaluate(db_session, fam, pnl_store=store)
+    verdicts = evaluate(db_session, fam, pnl_store=store, ledger=_fixed_ledger())
     assert not any(v.promoted for v in verdicts)
     assert all("fails BRAIN checks" in v.reasons for v in verdicts)
 
@@ -142,7 +161,7 @@ def test_incomplete_surface_is_not_promoted(db_session, tmp_path) -> None:
     fam = "lonely/test"
     store = PnLStore(tmp_path / "pnl")
     _point(db_session, fam, WINDOW_LADDER[2], DECAY_LADDER[3], 5.0, passes=True, pnl_store=store)
-    verdicts = evaluate(db_session, fam, pnl_store=store)
+    verdicts = evaluate(db_session, fam, pnl_store=store, ledger=_fixed_ledger())
     assert not verdicts[0].promoted
     assert any("no simulated neighbours" in r for r in verdicts[0].reasons)
 
@@ -192,7 +211,7 @@ def test_portfolio_correlation_blocks_promotion(db_session, tmp_path) -> None:
             }
     db_session.flush()
 
-    verdicts = evaluate(db_session, fam, pnl_store=store)
+    verdicts = evaluate(db_session, fam, pnl_store=store, ledger=_fixed_ledger())
     assert not any(v.promoted for v in verdicts), "colliding family alphas must not be promoted"
     assert any(v.is_correlated for v in verdicts)
     assert any("collision with submitted alpha" in r or "submitted alpha" in r for v in verdicts for r in v.reasons)

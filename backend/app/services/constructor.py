@@ -26,7 +26,7 @@ row so the simulation runner reproduces them exactly.
 
 from __future__ import annotations
 
-from collections import defaultdict
+from collections import Counter, defaultdict
 import itertools
 import random
 from collections.abc import Iterable
@@ -110,7 +110,11 @@ FREQUENCY_BACKFILL: dict[str, int | None] = {
 @dataclass(frozen=True)
 class BudgetPolicy:
     max_surfaces: int = 8
-    settings_per_structure: int = 1  # >1 only for confirmed structure sweeps
+    # 0 = every settings combination is eligible, and the diversity sampler
+    # decides how many actually get emitted. STRATEGY.md Rule 2: settings are a
+    # grid axis, not a wrapper -- pinning them to one combination is the mistake
+    # that produced 0/51. Set >0 only to deliberately cap a confirmed-structure sweep.
+    settings_per_structure: int = 0
 
 
 @dataclass(frozen=True)
@@ -370,40 +374,84 @@ def _emit_surface(
     return [], rejected
 
 
+# Axes the sampler actively spreads across, in priority order. Operator identity
+# comes first because structural diversity is what produces uncorrelated alphas;
+# the settings axes follow because a family sampled at one neutralization is the
+# mistake STRATEGY.md 1.3 is about -- decay and neutralization moved the
+# liabilities/cap family from FAIL to PASS on an unchanged expression.
+_DIVERSITY_AXES: tuple[str, ...] = (
+    "neutralization",
+    "cs",
+    "group",
+    "truncation",
+    "universe",
+)
+
+# Greedy ordering is O(n^2) in the pool; past this many picks the marginal
+# diversity gain is nil and the remainder is simply shuffled.
+_GREEDY_ORDER_CAP = 96
+
+
+def order_surface_configs(
+    configs: list[SurfaceConfig],
+    *,
+    rng: random.Random | None = None,
+) -> list[SurfaceConfig]:
+    """Order configs so that consecutive picks maximise axis coverage.
+
+    Round-robin over ``(layer, ts_sig)`` alone guarantees operator breadth and
+    nothing else: whichever cross-section and neutralization the shuffle happens
+    to put first in each stratum is the one that gets emitted, so the settings
+    axes silently collapse to a single value. This picks, at each slot, the
+    config whose stratum is least used, tie-broken by the least-used value on
+    each settings axis in turn.
+
+    Returns *every* config, ordered. Callers take from the front until their
+    surface budget is filled, which is what lets a discarded surface be refilled
+    rather than consuming the slot.
+    """
+    r = rng or random.Random(42)
+    pool = list(configs)
+    r.shuffle(pool)
+
+    used_stratum: Counter = Counter()
+    used_axis: dict[str, Counter] = {a: Counter() for a in _DIVERSITY_AXES}
+    ordered: list[SurfaceConfig] = []
+
+    while pool and len(ordered) < _GREEDY_ORDER_CAP:
+        best_i = 0
+        best_key: tuple | None = None
+        for i, c in enumerate(pool):
+            axis_counts = tuple(
+                used_axis[a][c.grid_extra.get(a)] for a in _DIVERSITY_AXES
+            )
+            # Sum first, then lexicographic. Comparing lexicographically alone
+            # lets the leading axis absorb every tie, which starves the ones
+            # behind it -- that is how the settings axes collapsed to a single
+            # neutralization while the cross-section looked healthy.
+            key = (used_stratum[(c.layer, c.ts_sig)], sum(axis_counts)) + axis_counts
+            if best_key is None or key < best_key:
+                best_key, best_i = key, i
+        chosen = pool.pop(best_i)
+        ordered.append(chosen)
+        used_stratum[(chosen.layer, chosen.ts_sig)] += 1
+        for a in _DIVERSITY_AXES:
+            used_axis[a][chosen.grid_extra.get(a)] += 1
+
+    ordered.extend(pool)
+    return ordered
+
+
 def select_surface_configs(
     configs: list[SurfaceConfig],
     budget_surfaces: int,
     *,
     rng: random.Random | None = None,
 ) -> list[SurfaceConfig]:
-    """Round-robin across strata, shuffling within each stratum.
-
-    Stratum key: (layer, ts_sig). Guarantees every ts-transform and every
-    depth layer receives a surface before any stratum receives a second one.
-    """
+    """The first ``budget_surfaces`` configs in diversity order."""
     if budget_surfaces <= 0 or not configs:
         return []
-
-    r = rng or random.Random(42)
-    by_stratum: dict[tuple[int, str], list[SurfaceConfig]] = defaultdict(list)
-    for c in configs:
-        by_stratum[(c.layer, c.ts_sig)].append(c)
-
-    for s_list in by_stratum.values():
-        r.shuffle(s_list)
-
-    strata_keys = sorted(by_stratum.keys())
-    selected: list[SurfaceConfig] = []
-    strata_queues = {k: list(by_stratum[k]) for k in strata_keys}
-
-    while len(selected) < budget_surfaces and any(strata_queues.values()):
-        for k in strata_keys:
-            if len(selected) >= budget_surfaces:
-                break
-            if strata_queues[k]:
-                selected.append(strata_queues[k].pop(0))
-
-    return selected
+    return order_surface_configs(configs, rng=rng)[:budget_surfaces]
 
 
 def expand(
@@ -489,12 +537,16 @@ def expand(
         return []
 
     budget_surfaces = max(1, max_candidates // surface_size)
-    policy = policy or BudgetPolicy(max_surfaces=budget_surfaces, settings_per_structure=1)
+    policy = policy or BudgetPolicy(max_surfaces=budget_surfaces)
 
     settings_combinations = list(
         itertools.product(axes.neutralizations, axes.truncations, axes.universes)
     )
-    num_settings = min(len(settings_combinations), max(1, policy.settings_per_structure))
+    num_settings = (
+        len(settings_combinations)
+        if policy.settings_per_structure <= 0
+        else min(len(settings_combinations), policy.settings_per_structure)
+    )
 
     all_surface_configs: list[SurfaceConfig] = []
 
@@ -606,13 +658,19 @@ def expand(
                     )
                 )
 
-    # Stratified selection
-    chosen_configs = select_surface_configs(all_surface_configs, budget_surfaces, rng=rng)
+    # Diversity-ordered selection. We draw until the surface budget is FILLED
+    # rather than taking a fixed slice: a config whose every point fails
+    # validation would otherwise consume a slot and silently shrink the family.
+    ordered_configs = order_surface_configs(all_surface_configs, rng=rng)
 
     out: list[Candidate] = []
     rejected = 0
+    emitted_surfaces = 0
+    starved = 0
 
-    for cfg in chosen_configs:
+    for cfg in ordered_configs:
+        if emitted_surfaces >= budget_surfaces:
+            break
         surface, rej = _emit_surface(
             spec, kb, family_key, base_settings, axes,
             cfg.builder_fn,
@@ -620,7 +678,11 @@ def expand(
             arm=arm, campaign_task_id=campaign_task_id,
         )
         rejected += rej
-        out.extend(surface)
+        if surface:
+            out.extend(surface)
+            emitted_surfaces += 1
+        else:
+            starved += 1
 
     if max_candidates > 0 and len(out) == 0:
         log.warning(
@@ -637,6 +699,9 @@ def expand(
             family=family_key,
             emitted=len(out),
             rejected=rejected,
+            surfaces=emitted_surfaces,
+            budget_surfaces=budget_surfaces,
+            strata_starved=starved,
             truncated=False,
         )
     return out
