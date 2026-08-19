@@ -133,7 +133,7 @@ def test_fabricated_family_is_flagged(db_session: Session) -> None:
 
     verdict = next(v for v in classify(db_session) if v.family_key == "fake/family")
     assert verdict.kind == "fabricated"
-    assert "violate the fitness formula" in verdict.evidence
+    assert "violate BRAIN's own fitness formula" in verdict.evidence
 
 
 def test_real_flat_surface_is_not_flagged(db_session: Session) -> None:
@@ -169,3 +169,47 @@ def test_empty_book_family_is_flagged_separately(db_session: Session) -> None:
     verdict = next(v for v in classify(db_session) if v.family_key == "dead/field")
     assert verdict.kind == "empty-book"
     assert "0 positions" in verdict.evidence
+
+
+def test_varied_metrics_still_flagged_when_the_formula_is_violated(db_session: Session) -> None:
+    """The false negative that escaped the first version of the detector.
+
+    ``close/cap`` had 49 fabricated rows but 5 distinct metric tuples, one more than the
+    diversity threshold allowed, so it was reported clean while violating the fitness
+    formula on every single row. Diversity was only ever a proxy; the formula violation
+    is the proof. BRAIN *computes* fitness with that formula, so genuine output cannot
+    disagree with it systematically no matter how varied the numbers look.
+    """
+    code = _seed_field(db_session, "f_varied_fake")
+    # Six distinct tuples — nothing repetitive — but every fitness is impossible.
+    rows = [
+        {"sharpe": s_, "fitness": 1.20, "turnover": 0.30, "returns": 0.15,
+         "longCount": 500, "shortCount": 500}
+        for s_ in (0.50, 0.55, 0.60, 2.55, 2.60, 2.80, 4.00, 0.52)
+    ]
+    _add_family(db_session, "varied/fake", rows, code)
+    db_session.flush()
+
+    verdict = next(v for v in classify(db_session) if v.family_key == "varied/fake")
+    assert verdict.kind == "fabricated", verdict.evidence
+    assert "distinct tuples" in verdict.evidence
+
+
+def test_varied_real_metrics_stay_clean(db_session: Session) -> None:
+    """The matching negative: varied metrics that DO satisfy the formula are real."""
+    code = _seed_field(db_session, "f_varied_real")
+    rows = []
+    for sharpe, turnover, returns in (
+        (1.40, 0.30, 0.12), (1.55, 0.42, 0.14), (1.20, 0.25, 0.09),
+        (1.70, 0.55, 0.17), (0.95, 0.18, 0.07), (1.33, 0.36, 0.11),
+    ):
+        rows.append({
+            "sharpe": sharpe, "turnover": turnover, "returns": returns,
+            "fitness": round(sharpe * math.sqrt(returns / max(turnover, 0.125)), 4),
+            "longCount": 800, "shortCount": 800,
+        })
+    _add_family(db_session, "varied/real", rows, code)
+    db_session.flush()
+
+    verdict = next(v for v in classify(db_session) if v.family_key == "varied/real")
+    assert verdict.kind == "clean", verdict.evidence
