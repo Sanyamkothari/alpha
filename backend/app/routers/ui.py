@@ -35,10 +35,12 @@ from app.services.plateau import (
     DECAY_LADDER,
     WINDOW_LADDER,
     evaluate,
+    evaluate_families,
     load_surface,
     surface_axes,
 )
 from app.services.spend import summary as spend_summary
+from app.services.trials import build_ledger
 
 router = APIRouter(prefix="/ui", tags=["ui"])
 
@@ -141,8 +143,12 @@ def summary(db: Session = Depends(get_db)) -> dict:
     promoted: list[dict] = []
     near: list[dict] = []
     plateau_count = 0
-    for family in _families(db):
-        for v in evaluate(db, family):
+    # One batched pass. evaluate() builds the programme trial ledger -- a count
+    # over every simulated alpha plus an eigendecomposition of the cross-family
+    # PnL matrix -- so calling it per family in a loop pays for that once per
+    # family, inside a request the operator is waiting on.
+    for family, verdict_list in evaluate_families(db, _families(db)).items():
+        for v in verdict_list:
             if v.is_plateau:
                 plateau_count += 1
             if not (v.promoted or v.clears_bar):
@@ -181,11 +187,12 @@ def summary(db: Session = Depends(get_db)) -> dict:
 @router.get("/families")
 def families(db: Session = Depends(get_db)) -> dict:
     out = []
+    request_ledger = build_ledger(db, get_pnl_store())
     for key in _families(db):
         points = load_surface(db, key)
         done = [p for p in points if p.sharpe is not None]
         total = db.scalar(select(func.count(Alpha.id)).where(Alpha.family_key == key)) or 0
-        verdicts = evaluate(db, key) if done else []
+        verdicts = evaluate(db, key, ledger=request_ledger) if done else []
         out.append(
             {
                 "family_key": key,
@@ -726,8 +733,8 @@ def funnel_telemetry(db: Session = Depends(get_db)) -> dict:
     dsr_gate_count = 0
     cold_start_count = 0
 
-    for family in _families(db):
-        for v in evaluate(db, family):
+    for family, verdict_list in evaluate_families(db, _families(db)).items():
+        for v in verdict_list:
             if v.promoted:
                 promoted_count += 1
             if v.gate_mode == "DSR":
