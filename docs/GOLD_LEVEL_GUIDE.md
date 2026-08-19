@@ -128,23 +128,25 @@ The engine enforces an empirical Pearson correlation gate ($r < 0.70$) across al
 | **7** | [`#5179`](file:///Users/sanya/Projects/alpha/database/wq.db) | `blQmY7br` | `rank(ts_zscore(divide(ts_backfill(ebit,120),cap),63))` | Window 63d, Decay 8 | **1.35** | **1.05** | **10.59%** | **SUBMITTED (OS)** |
 | **8** | [`#5180`](file:///Users/sanya/Projects/alpha/database/wq.db) | `LLG0Y2p9` | `rank(ts_zscore(divide(ts_backfill(anl4_afv4_eps_mean,120),close),252))` | Window 252d, Decay 16 | **1.77** | **1.43** | **4.55%** | **SUBMITTED (OS)** |
 | **9** | [`#5188`](file:///Users/sanya/Projects/alpha/database/wq.db) | `QP7Znjbg` | `rank(ts_zscore(divide(ts_backfill(adj_net_income_avg,120),cap),126))` | Window 126d, Decay 8 | **1.63** | **1.19** | **7.35%** | **SUBMITTED (OS)** |
+| **10** | [`#5189`](file:///Users/sanya/Projects/alpha/database/wq.db) | `6XlmjjjG` | `rank(ts_zscore(divide(ts_backfill(actual_cashflow_per_share_value_quarterly,120),close),63))` | Window 63d, Decay 8 | **1.49** | **1.03** | **10.00%** | **SUBMITTED (OS)** |
 
-### 3.1 Exact 9x9 Pairwise Empirical Correlation Matrix
+### 3.1 Exact 10x10 Pairwise Empirical Correlation Matrix
 *(Computed over 1,236 common historical trading days cached in [`database/pnl/`](file:///Users/sanya/Projects/alpha/database/pnl)):*
 
 ```
-             zqNXMEZE  N1bkwYGw  9qpOZjMq  xANpg6OW  j26KNdKo  RRmwqE5b  blQmY7br  LLG0Y2p9  QP7Znjbg
-zqNXMEZE       1.0000    0.1640    0.4789    0.0447    0.0210    0.6512   -0.0451    0.3484    0.1861
-N1bkwYGw       0.1640    1.0000    0.4948    0.5247    0.6484    0.2921    0.6690    0.4062    0.6512
-9qpOZjMq       0.4789    0.4948    1.0000    0.3799    0.3443    0.6687    0.4342    0.6091    0.5833
-xANpg6OW       0.0447    0.5247    0.3799    1.0000    0.4294    0.1517    0.6502    0.3525    0.5032
-j26KNdKo       0.0210    0.6484    0.3443    0.4294    1.0000    0.1712    0.5841    0.5081    0.6571
-RRmwqE5b       0.6512    0.2921    0.6687    0.1517    0.1712    1.0000    0.0909    0.6539    0.4522
-blQmY7br      -0.0451    0.6690    0.4342    0.6502    0.5841    0.0909    1.0000    0.3889    0.6758
-LLG0Y2p9       0.3484    0.4062    0.6091    0.3525    0.5081    0.6539    0.3889    1.0000    0.6776
-QP7Znjbg       0.1861    0.6512    0.5833    0.5032    0.6571    0.4522    0.6758    0.6776    1.0000
+             zqNXMEZE  N1bkwYGw  9qpOZjMq  xANpg6OW  j26KNdKo  RRmwqE5b  blQmY7br  LLG0Y2p9  QP7Znjbg  6XlmjjjG
+zqNXMEZE       1.0000    0.1640    0.4789    0.0447    0.0210    0.6512   -0.0451    0.3484    0.1861    0.0506
+N1bkwYGw       0.1640    1.0000    0.4948    0.5247    0.6484    0.2921    0.6690    0.4062    0.6512    0.5841
+9qpOZjMq       0.4789    0.4948    1.0000    0.3799    0.3443    0.6687    0.4342    0.6091    0.5833    0.4458
+xANpg6OW       0.0447    0.5247    0.3799    1.0000    0.4294    0.1517    0.6502    0.3525    0.5032    0.4450
+j26KNdKo       0.0210    0.6484    0.3443    0.4294    1.0000    0.1712    0.5841    0.5081    0.6571    0.4790
+RRmwqE5b       0.6512    0.2921    0.6687    0.1517    0.1712    1.0000    0.0909    0.6539    0.4522    0.2733
+blQmY7br      -0.0451    0.6690    0.4342    0.6502    0.5841    0.0909    1.0000    0.3889    0.6758    0.5895
+LLG0Y2p9       0.3484    0.4062    0.6091    0.3525    0.5081    0.6539    0.3889    1.0000    0.6776    0.4577
+QP7Znjbg       0.1861    0.6512    0.5833    0.5032    0.6571    0.4522    0.6758    0.6776    1.0000    0.6094
+6XlmjjjG       0.0506    0.5841    0.4458    0.4450    0.4790    0.2733    0.5895    0.4577    0.6094    1.0000
 ```
-* **Every pair is $< 0.70$** (Max pairwise correlation: **`0.6776`**), ensuring zero self-correlation failure penalties.
+* **Every single pair is $< 0.70$** (Max pairwise correlation across all 45 pairs: **`0.6776`**).
 
 ---
 
