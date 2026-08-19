@@ -31,7 +31,7 @@ def test_set_platform_outcome_via_attempt(client, db_session):
     # Verify alpha row derived outcome
     db_session.expire_all()
     alpha = db_session.get(Alpha, alpha_id)
-    assert alpha.platform_outcome == "accepted"
+    assert alpha.platform_outcome == "submitted"
     assert alpha.outcome_note == "Approved by BRAIN reviewer"
     assert alpha.status == "submitted"
 

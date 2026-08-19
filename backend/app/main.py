@@ -5,7 +5,7 @@ from __future__ import annotations
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Response
 from fastapi.responses import FileResponse
 
 from app import __version__
@@ -16,16 +16,17 @@ from app.routers import alphas, fields, health, operators, system, ui, validate
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 
 
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # On startup: check for interrupted campaigns
-    try:
-        import threading
-        from app.services.campaign_runner import auto_resume_interrupted_campaigns
-        # Run campaign resume in background thread to avoid blocking server boot
-        threading.Thread(target=auto_resume_interrupted_campaigns, daemon=True).start()
-    except Exception:
-        pass
+    if settings.auto_resume_campaigns:
+        try:
+            import threading
+            from app.services.campaign_runner import auto_resume_interrupted_campaigns
+            threading.Thread(target=auto_resume_interrupted_campaigns, daemon=True).start()
+        except Exception as exc:
+            import structlog
+            structlog.get_logger("main").error("auto_resume_startup_failed", error=str(exc))
     yield
 
 
@@ -49,6 +50,12 @@ def create_app() -> FastAPI:
     app.include_router(validate.router, prefix="/api")
     app.include_router(alphas.router, prefix="/api")
     app.include_router(ui.router, prefix="/api")
+
+    @app.get("/favicon.ico", include_in_schema=False)
+    def favicon() -> Response:
+        # The console is deliberately asset-free; 204 keeps devtools clean without
+        # inventing a binary to serve.
+        return Response(status_code=204)
 
     # The UI is one self-contained file — no build step, so there is never a
     # stale bundle and `git clone && run` just works. Served last so it cannot

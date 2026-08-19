@@ -39,76 +39,75 @@ def _norm_type(value: str) -> str:
     return v
 
 
-def run() -> dict[str, int]:
+def load(db: Session) -> dict[str, int]:
     payload = json.loads(FIELDS_FILE.read_text(encoding="utf-8"))
     results = payload.get("results", [])
 
     inserted = updated = 0
-    with session_scope() as db:
-        # Cache datasets/fields by natural key to upsert.
-        ds_cache: dict[tuple, Dataset] = {}
-        for ds in db.query(Dataset).all():
-            ds_cache[(ds.dataset_code, ds.region, ds.delay, ds.universe)] = ds
-        field_cache: dict[tuple, DataField] = {}
-        for f in db.query(DataField).all():
-            field_cache[(f.field_code, f.region, f.delay, f.universe)] = f
+    # Cache datasets/fields by natural key to upsert.
+    ds_cache: dict[tuple, Dataset] = {}
+    for ds in db.query(Dataset).all():
+        ds_cache[(ds.dataset_code, ds.region, ds.delay, ds.universe)] = ds
+    field_cache: dict[tuple, DataField] = {}
+    for f in db.query(DataField).all():
+        field_cache[(f.field_code, f.region, f.delay, f.universe)] = f
 
-        for row in results:
-            region = row.get("region", "USA")
-            delay = int(row.get("delay", 1))
-            universe = row.get("universe", "TOP3000")
-            ds_info = row.get("dataset") or {}
-            ds_code = str(ds_info.get("id", "unknown"))
-            ds_key = (ds_code, region, delay, universe)
-            dataset = ds_cache.get(ds_key)
-            if dataset is None:
-                dataset = Dataset(
-                    dataset_code=ds_code,
-                    name=str(ds_info.get("name", ds_code)),
-                    region=region,
-                    delay=delay,
-                    universe=universe,
-                )
-                db.add(dataset)
-                db.flush()  # need dataset.id
-                ds_cache[ds_key] = dataset
-
-            f_key = (row["field_code"], region, delay, universe)
-            field = field_cache.get(f_key)
-            if field is None:
-                field = DataField(
-                    field_code=row["field_code"], region=region, delay=delay, universe=universe
-                )
-                db.add(field)
-                inserted += 1
-                field_cache[f_key] = field
-            else:
-                updated += 1
-
-            field.description = row.get("description")
-            field.dataset_id = dataset.id
-            field.category = _norm_category(row.get("category", ""))
-            field.field_type = _norm_type(row.get("type", "MATRIX"))
-            field.coverage = row.get("coverage")
-            field.user_count = row.get("user_count")
-            field.alpha_count = row.get("alpha_count")
-            field.instrument_type = row.get("instrument_type", "EQUITY")
-            field.unit = row.get("unit")
-            field.classification_confidence = 1.0  # seeded => trusted
-
-        # Refresh dataset field_count. Flush first: under autoflush=False the
-        # last dataset's freshly-added fields are otherwise unflushed when the
-        # COUNT runs, so its field_count would be stored as 0.
-        db.flush()
-        for dataset in ds_cache.values():
-            dataset.field_count = (
-                db.query(DataField).filter(DataField.dataset_id == dataset.id).count()
+    for row in results:
+        region = row.get("region", "USA")
+        delay = int(row.get("delay", 1))
+        universe = row.get("universe", "TOP3000")
+        ds_info = row.get("dataset") or {}
+        ds_code = str(ds_info.get("id", "unknown"))
+        ds_key = (ds_code, region, delay, universe)
+        dataset = ds_cache.get(ds_key)
+        if dataset is None:
+            dataset = Dataset(
+                dataset_code=ds_code,
+                name=str(ds_info.get("name", ds_code)),
+                region=region,
+                delay=delay,
+                universe=universe,
             )
+            db.add(dataset)
+            db.flush()  # need dataset.id
+            ds_cache[ds_key] = dataset
 
-    with session_scope() as db:
-        total = db.query(DataField).count()
-        groups = db.query(DataField).filter(DataField.field_type == FieldType.GROUP).count()
-        datasets = db.query(Dataset).count()
+        f_key = (row["field_code"], region, delay, universe)
+        field = field_cache.get(f_key)
+        if field is None:
+            field = DataField(
+                field_code=row["field_code"], region=region, delay=delay, universe=universe
+            )
+            db.add(field)
+            inserted += 1
+            field_cache[f_key] = field
+        else:
+            updated += 1
+
+        field.description = row.get("description")
+        field.dataset_id = dataset.id
+        field.category = _norm_category(row.get("category", ""))
+        field.field_type = _norm_type(row.get("type", "MATRIX"))
+        field.coverage = row.get("coverage")
+        field.user_count = row.get("user_count")
+        field.alpha_count = row.get("alpha_count")
+        field.instrument_type = row.get("instrument_type", "EQUITY")
+        field.unit = row.get("unit")
+        field.classification_confidence = 1.0  # seeded => trusted
+
+    # Refresh dataset field_count. Flush first: under autoflush=False the
+    # last dataset's freshly-added fields are otherwise unflushed when the
+    # COUNT runs, so its field_count would be stored as 0.
+    db.flush()
+    for dataset in ds_cache.values():
+        dataset.field_count = (
+            db.query(DataField).filter(DataField.dataset_id == dataset.id).count()
+        )
+
+    db.flush()
+    total = db.query(DataField).count()
+    groups = db.query(DataField).filter(DataField.field_type == FieldType.GROUP).count()
+    datasets = db.query(Dataset).count()
     result = {
         "inserted": inserted,
         "updated": updated,
@@ -118,6 +117,11 @@ def run() -> dict[str, int]:
     }
     log.info("fields_seeded", **result)
     return result
+
+
+def run() -> dict[str, int]:
+    with session_scope() as db:
+        return load(db)
 
 
 if __name__ == "__main__":

@@ -38,8 +38,8 @@ def test_mutate_parameters_jitters_windows() -> None:
     mutated = mutate_parameters(ast)
     expr = normalize(mutated)
     assert expr.startswith("rank(ts_delta(close,")
-    # Window 22 can jitter to 15, 20, or 30
-    assert any(str(w) in expr for w in [15, 20, 30, 22])
+    # Window 22 jitters to on-ladder rungs (10, 63) or stays 22
+    assert any(str(w) in expr for w in [10, 63, 22])
 
 
 def test_mutate_operators_swaps_compatible(db_session) -> None:

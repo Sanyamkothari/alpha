@@ -17,6 +17,7 @@ from __future__ import annotations
 from app.services.alpha_library import AlphaSettings
 from app.services.constructor import (
     FREQUENCY_BACKFILL,
+    BudgetPolicy,
     FamilySpec,
     GridAxes,
     expand,
@@ -89,9 +90,14 @@ def test_respects_max_candidates(db_session) -> None:
 
 
 def test_settings_vary_across_the_grid(db_session) -> None:
-    """Settings are grid axes, not a fixed wrapper — sampling one settings point
-    per idea is precisely why the project's first 51 alphas all failed."""
-    cands = expand(db_session, _spec(), base_settings=AlphaSettings(), max_candidates=200)
+    """Settings are grid axes, varying across surfaces when policy allows settings expansion."""
+    cands = expand(
+        db_session,
+        _spec(),
+        base_settings=AlphaSettings(),
+        max_candidates=200,
+        policy=BudgetPolicy(max_surfaces=10, settings_per_structure=3),
+    )
     assert len({c.settings.neutralization for c in cands}) > 1
     assert len({c.settings.decay for c in cands}) > 1
 

@@ -113,6 +113,19 @@ def structural_hash(node: Node, kb: ValidatorKB) -> str:
     return hashlib.sha256(structural_skeleton(node, kb).encode("utf-8")).hexdigest()
 
 
+def all_subtree_skeletons(node: Node, kb: ValidatorKB) -> list[str]:
+    """Extract structural skeletons for every subtree in the AST."""
+    skeletons = [structural_skeleton(node, kb)]
+    for child in children(node):
+        skeletons.extend(all_subtree_skeletons(child, kb))
+    return skeletons
+
+
+def all_subtree_hashes(node: Node, kb: ValidatorKB) -> list[str]:
+    """Compute SHA-256 hashes for all subtree skeletons in the AST."""
+    return [hashlib.sha256(s.encode("utf-8")).hexdigest() for s in all_subtree_skeletons(node, kb)]
+
+
 def extract_features(ast: Node, kb: ValidatorKB) -> tuple[dict, float]:
     depth = _depth(ast)
     branching = _max_branching(ast)
@@ -136,6 +149,9 @@ def extract_features(ast: Node, kb: ValidatorKB) -> tuple[dict, float]:
     interpretability = round(1.0 / (1.0 + depth + 0.5 * operator_count), 4)
 
     skeleton = structural_skeleton(ast, kb)
+    sub_skeletons = all_subtree_skeletons(ast, kb)
+    sub_hashes = [hashlib.sha256(s.encode("utf-8")).hexdigest() for s in sub_skeletons]
+
     feature_json = {
         "depth": depth,
         "branching": branching,
@@ -150,6 +166,8 @@ def extract_features(ast: Node, kb: ValidatorKB) -> tuple[dict, float]:
         "interpretability": interpretability,
         "structural_skeleton": skeleton,
         "structural_hash": hashlib.sha256(skeleton.encode("utf-8")).hexdigest(),
+        "subtree_skeletons": sub_skeletons,
+        "subtree_hashes": sub_hashes,
     }
 
     complexity_score = round(

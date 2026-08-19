@@ -19,6 +19,8 @@ class Campaign(Base):
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="queued")
     budget_total: Mapped[int] = mapped_column(Integer, nullable=False, default=200)
     budget_completed: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    # Seed for random allocation arm determinism. NULL means "pre-W2, unseeded, not reconstructable".
+    seed: Mapped[int | None] = mapped_column(Integer, nullable=True)
     config_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime, nullable=False, server_default=func.now()
@@ -56,6 +58,7 @@ class CampaignTask(Base):
     alphas_total: Mapped[int] = mapped_column(Integer, nullable=False, default=49)
     alphas_simulated: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     alphas_passed: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    quartile: Mapped[int | None] = mapped_column(Integer, nullable=True)
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime, nullable=False, server_default=func.now()

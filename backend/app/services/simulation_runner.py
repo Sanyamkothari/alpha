@@ -120,6 +120,8 @@ def run_batch(alpha_ids: list[int], *, max_concurrent: int = 3) -> BatchResult:
                     continue
 
                 is_block = dict(payload.get("is") or {})
+                if payload.get("id"):
+                    is_block["id"] = payload["id"]
                 if payload.get("_sim_seconds") is not None:
                     # Rides in the metrics `extra` JSON — no migration needed.
                     is_block["sim_seconds"] = payload["_sim_seconds"]

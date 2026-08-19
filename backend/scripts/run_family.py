@@ -53,6 +53,10 @@ def save(candidates: list[Candidate]) -> dict[str, int]:
     return counts
 
 
+from scripts._cli import cli_main
+
+
+@cli_main
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--field", required=True)
@@ -83,28 +87,14 @@ def main() -> int:
     windows = tuple(args.windows) if args.windows else (WIDE_WINDOWS if args.grid == "wide" else STANDARD_WINDOWS)
     decays = tuple(args.decays) if args.decays else (WIDE_DECAYS if args.grid == "wide" else STANDARD_DECAYS)
     ts_transforms = tuple(args.operators) if args.operators else None
-    cross_section = tuple(args.wrappers) if args.wrappers else None
-
-    axes = GridAxes(
-        windows=windows,
-        decays=decays,
-        ts_transforms=ts_transforms if ts_transforms else GridAxes.ts_transforms,
-        cross_section=cross_section if cross_section else GridAxes.cross_section,
-    )
-
-    # In standard mode, default max_candidates to 49 (1 surface/territory) unless specified
-    max_cands = args.max_candidates or (384 if args.grid == "wide" else 49)
-
+    settings = AlphaSettings(region=args.region, universe=args.universe, delay=args.delay)
     spec = FamilySpec(
         field_code=args.field,
         denominator=args.denominator,
-        mechanism=args.mechanism or f"{args.field} signal",
-        backfill_days=None if args.no_backfill else 120,
-        grid_mode=args.grid,
-        axes=axes,
+        operator_family=args.operator,
+        wrapper_shape=args.wrapper,
+        group=args.group,
     )
-
-    settings = AlphaSettings(region=args.region, universe=args.universe, delay=args.delay)
     family_key = spec.family_key(settings)
 
     if args.simulate:
@@ -120,6 +110,7 @@ def main() -> int:
             print("  (the catalog may still be readable — that does not imply access)")
             return 1
 
+    max_cands = args.max_candidates or (24 if args.grid == "wide" else 49)
     with session_scope() as db:
         candidates = expand(
             db, spec, base_settings=settings, max_candidates=max_cands, arm=args.arm

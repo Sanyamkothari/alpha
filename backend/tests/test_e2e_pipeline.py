@@ -28,7 +28,7 @@ from fastapi.testclient import TestClient
 from app.models.alphas import Alpha
 from app.models.enums import AlphaStatus, ImportSource
 from app.models.results import AlphaMetric, SimulationImport
-from app.services.allocator_bandit import (
+from app.services.allocator import (
     DiscountedThompsonSampler,
     SimulationBudgetOrchestrator,
 )
@@ -102,8 +102,9 @@ def test_full_alpha_mining_e2e_pipeline(client: TestClient, db_session, tmp_path
         db_session.flush()
 
         # Import mock BRAIN simulation with checks[] payload
+        target_sharpe = 2.45 + (0.05 if c.grid["window"] == 10 else -0.05)
         sim_payload = {
-            "sharpe": 1.65 + (0.05 if c.grid["window"] == 10 else -0.05),
+            "sharpe": target_sharpe,
             "fitness": 1.25,
             "turnover": 0.18,
             "checks": [
@@ -116,8 +117,13 @@ def test_full_alpha_mining_e2e_pipeline(client: TestClient, db_session, tmp_path
         res_imp = import_result(db_session, alpha, sim_payload, source=ImportSource.PASTE.value)
         assert res_imp.metrics.passed_all_checks is True
 
-        # Generate robust daily PnL (steady positive Sharpe across 600 days)
-        daily_pnl = np.random.normal(loc=0.0012, scale=0.01, size=len(dates))
+        # Generate robust daily PnL matching reported Sharpe
+        daily_sr = target_sharpe / math.sqrt(252)
+        daily_pnl = np.random.normal(loc=daily_sr * 0.01, scale=0.01, size=len(dates))
+        std = float(np.std(daily_pnl, ddof=1))
+        if std > 0:
+            target_mean = daily_sr * std
+            daily_pnl = daily_pnl - np.mean(daily_pnl) + target_mean
         store.save_pnl(alpha.id, dates, daily_pnl)
         created_alphas.append(alpha)
 

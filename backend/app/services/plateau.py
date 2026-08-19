@@ -1,30 +1,16 @@
 """Stage 4 — the honest filter (STRATEGY.md Rule 5).
 
-Mass simulation makes overfitting the *default* outcome, not a risk. A
-400-member family will hand you a Sharpe 1.5 by luck alone. Without this module
-the rest of the system is a machine for producing confident garbage faster, so
-this is the piece not to cut.
+Mass simulation makes overfitting the *default* outcome, not a risk.
+Five sequential gates, cheapest first:
 
-Five tests, cheapest first:
-
-1. **Plateau, not peak.** Judge a candidate by the median score of its
-   neighbours on the (window, decay) surface. A lone spike surrounded by dead
-   neighbours is a coincidence; a broad ridge is a mechanism.
-
-2. **Pre-declared bar.** BRAIN's own ``checks[]``, which the alpha already
-   carries. Never re-tuned to fit a result we like.
-
-3. **Deflated Sharpe Ratio (DSR) & Multiple-testing haircut.**
-   For family size >= 30, calculates Bailey & Lopez de Prado DSR (>= 0.95) with
-   Euler-Mascheroni expected maximum. For cold start (< 30), applies a conservative
-   annualized Sharpe hurdle (>= 1.50).
-
-4. **Sub-period stability & decay.**
-   Validates split-half consistency, monthly-stepped rolling windows, and recent 252d decay.
-
-5. **Empirical Correlation Gate (< 0.55).**
-   Computes exact Pearson correlation over aligned daily PnL vectors against active and submitted
-   portfolio alphas, with fallback to structural hashing.
+1. **Plateau, not peak.** Judge a candidate by the median score of its neighbours
+   on the (window, decay) surface. A lone spike is a coincidence; a broad ridge is a mechanism.
+2. **Pre-declared bar.** BRAIN's own ``checks[]``, which the alpha already carries.
+3. **Hard PnL Reconciliation Precondition.** Loaded daily PnL must reconcile with reported Sharpe.
+4. **Sub-period stability & Lo (2002) SE Z-tests.** Statistical significance against sampling error.
+5. **Deflated Sharpe Ratio (DSR) & EVT Multiple-testing haircut.**
+6. **Intra-family clustering & Ridge Center Representative Election.**
+7. **Empirical Correlation Gate (< 0.55).** Evaluated on elected representatives against submitted portfolio.
 """
 
 from __future__ import annotations
@@ -34,6 +20,7 @@ from collections import defaultdict
 from dataclasses import dataclass
 from dataclasses import field as dc_field
 from statistics import median
+from typing import TYPE_CHECKING, Any, Sequence
 
 import structlog
 from sqlalchemy import func, select
@@ -42,24 +29,36 @@ from sqlalchemy.orm import Session
 from app.models.alphas import Alpha
 from app.models.enums import AlphaStatus
 from app.models.results import AlphaMetric
+from app.services.constructor import (
+    STANDARD_DECAYS,
+    STANDARD_WINDOWS,
+    WIDE_DECAYS,
+    WIDE_WINDOWS,
+)
+from app.services.correlation import (
+    check_portfolio_empirical_correlation,
+    compute_pairwise_correlation,
+    submitted_portfolio,
+)
+from app.services.filter_config import (
+    DEFAULT_FILTER_CONFIG,
+    TRADING_DAYS_PER_YEAR,
+    FilterConfig,
+)
+from app.services.pnl_storage import PnLStore, get_pnl_store
+from app.services.trials import TrialLedger, build_ledger, expected_max_normal
 
 log = structlog.get_logger("plateau")
 
-# Neighbour steps along each swept axis. Ordered so "adjacent" means one step.
-WINDOW_LADDER: tuple[int, ...] = (5, 10, 22, 63, 126, 252)
-DECAY_LADDER: tuple[int, ...] = (0, 4, 8, 16)
+FALLBACK_WINDOW_LADDER: tuple[int, ...] = (5, 10, 22, 63, 126, 252)
+FALLBACK_DECAY_LADDER: tuple[int, ...] = (0, 4, 8, 16)
 
-# A candidate must hold at least this fraction of its own score across its
-# neighbourhood to count as a plateau rather than a spike.
-PLATEAU_RATIO = 0.6
+# Back-compat aliases — the display no longer uses these. Remove after one release.
+WINDOW_LADDER = FALLBACK_WINDOW_LADDER
+DECAY_LADDER = FALLBACK_DECAY_LADDER
 
-# Baseline sanity floor
-BASE_SHARPE_BAR = 1.25
-HAIRCUT_PER_LOG10 = 0.10
-COLD_START_SHARPE_BAR = 1.50
-MIN_TRIALS_FOR_DSR = 30
-DSR_PROMOTION_THRESHOLD = 0.95
-DSR_RE_PROMOTION_THRESHOLD = 0.97
+BASE_SHARPE_BAR: float = DEFAULT_FILTER_CONFIG.target_sharpe
+PLATEAU_RATIO: float = DEFAULT_FILTER_CONFIG.plateau_ratio
 
 
 @dataclass
@@ -82,8 +81,9 @@ class Verdict:
     sharpe: float | None
     fitness: float | None
     neighbour_median_sharpe: float | None
-    plateau_ratio: float | None
-    is_plateau: bool
+    ridge_score: float | None = None
+    plateau_ratio: float | None = None
+    is_plateau: bool = False
     neighbours_simulated: int = 0
     neighbours_possible: int = 0
     clears_bar: bool = False
@@ -94,9 +94,11 @@ class Verdict:
     family_size: int = 0
     dsr: float | None = None
     dsr_passed: bool | None = None
-    gate_mode: str = "COLD_START_FALLBACK"
+    gate_mode: str = "DSR"
     subperiod_passed: bool | None = None
+    redundant_with: int | None = None
     reasons: list[str] = dc_field(default_factory=list)
+    config_fingerprint: str = ""
 
 
 def check_portfolio_correlation(
@@ -108,16 +110,9 @@ def check_portfolio_correlation(
         return False, None
 
     if portfolio is None:
-        portfolio = list(
-            db.execute(
-                select(Alpha).where(
-                    Alpha.status.in_([AlphaStatus.SUBMITTED.value, AlphaStatus.PASSED.value]),
-                    Alpha.id != alpha_id,
-                )
-            )
-            .scalars()
-            .all()
-        )
+        from app.services.correlation import submitted_portfolio
+
+        portfolio = submitted_portfolio(db, exclude_alpha_id=alpha_id)
 
     cand_features = candidate.feature_json or {}
     cand_struct = cand_features.get("structural_hash")
@@ -126,13 +121,32 @@ def check_portfolio_correlation(
     for port_alpha in portfolio:
         if port_alpha.id == candidate.id:
             continue
+
+        # A family is a grid sweep of one mechanism, so its members share a
+        # skeleton by construction. Applying "same skeleton => correlated" inside
+        # a family fires on every pair and says nothing. A sibling that was really
+        # submitted is a real position and still blocks; see D3 for how the family
+        # picks its own representative.
+        same_family = bool(
+            candidate.family_key
+            and port_alpha.family_key
+            and candidate.family_key == port_alpha.family_key
+        )
+        if same_family and port_alpha.status != AlphaStatus.SUBMITTED.value:
+            continue
+
         port_features = port_alpha.feature_json or {}
         port_struct = port_features.get("structural_hash")
         port_field = family_field_code(port_alpha.family_key or "") if port_alpha.family_key else None
 
         # Structural hash match on the same base field => near-certain self-correlation
         if cand_struct and port_struct and cand_struct == port_struct and cand_field == port_field:
-            return True, f"structural correlation collision with submitted alpha #{port_alpha.id}"
+            kind = (
+                "submitted"
+                if port_alpha.status == AlphaStatus.SUBMITTED.value
+                else "portfolio"
+            )
+            return True, f"structural correlation collision with {kind} alpha #{port_alpha.id}"
 
         # Same family as an already submitted alpha
         if candidate.family_key and port_alpha.family_key and candidate.family_key == port_alpha.family_key:
@@ -143,37 +157,44 @@ def check_portfolio_correlation(
 
 
 def _structure_of(grid: dict) -> tuple:
-    """Everything that is NOT a swept plateau axis. Points sharing a structure
-    lie on the same surface and are therefore comparable."""
+    """Everything that is NOT a swept plateau axis."""
     return (
         grid.get("ts"),
         grid.get("cs"),
         grid.get("group"),
         grid.get("neutralization"),
         grid.get("truncation"),
+        grid.get("universe"),
+        grid.get("hump"),
     )
 
 
 def family_field_code(family_key: str) -> str:
     """The data field a family was built on."""
-    return family_key.split("@", 1)[0].split("/", 1)[0]
+    prefix = family_key.split("@", 1)[0]
+    prefix = prefix.split("+", 1)[0]
+    prefix = prefix.split(":", 1)[0]
+    prefix = prefix.split("/", 1)[0]
+    return prefix
 
 
 def load_surface(
     db: Session, family_key: str, *, include_unsimulated: bool = False
 ) -> list[SurfacePoint]:
-    """Points on a family's grid."""
+    """Points on a family's grid, selecting the latest metric by max(id)."""
     join = db.execute(
         select(Alpha, AlphaMetric)
         .outerjoin(AlphaMetric, AlphaMetric.alpha_id == Alpha.id)
         .where(Alpha.family_key == family_key)
-        .order_by(AlphaMetric.id)
+        .order_by(Alpha.id, AlphaMetric.id.desc().nulls_last())
     ).all()
-    rows = [(a, m) for a, m in join if m is not None or include_unsimulated]
 
-    latest: dict[int, tuple] = {}
-    for alpha, metric in rows:
-        latest[alpha.id] = (alpha, metric)
+    # Explicitly pick latest AlphaMetric per Alpha by highest ID
+    latest: dict[int, tuple[Alpha, AlphaMetric | None]] = {}
+    for alpha, metric in join:
+        if alpha.id not in latest:
+            if metric is not None or include_unsimulated:
+                latest[alpha.id] = (alpha, metric)
 
     points: list[SurfacePoint] = []
     for alpha, metric in latest.values():
@@ -200,18 +221,28 @@ def load_surface(
     return points
 
 
-MIN_NEIGHBOURS_TO_JUDGE = 2
+def surface_axes(points: list[SurfacePoint]) -> tuple[list[int], list[int]]:
+    """The coordinates a family actually occupies.
+
+    Derived from the points rather than a constant because the constructor's grid
+    is configurable (constructor.STANDARD_* vs WIDE_*) and any fixed ladder will
+    disagree with some of them — silently, by dropping cells from the render.
+    Callers pass points loaded with include_unsimulated=True so that genuine holes
+    keep their coordinates and stay fillable.
+    """
+    windows = sorted({p.window for p in points if p.window is not None})
+    decays = sorted({p.decay for p in points if p.decay is not None})
+    return (windows or list(FALLBACK_WINDOW_LADDER), decays or list(FALLBACK_DECAY_LADDER))
 
 
 def _neighbours(point: SurfacePoint, surface: list[SurfacePoint]) -> tuple[list[SurfacePoint], int]:
-    """Simulated neighbours one step away, and how many COULD exist."""
-    # Dynamically resolve coordinate ladders from the surface points
+    """Simulated neighbours one step away on the surface coordinate grid."""
     windows = sorted({p.window for p in surface if p.window is not None})
     decays = sorted({p.decay for p in surface if p.decay is not None})
     if not windows:
-        windows = list(WINDOW_LADDER)
+        windows = list(FALLBACK_WINDOW_LADDER)
     if not decays:
-        decays = list(DECAY_LADDER)
+        decays = list(FALLBACK_DECAY_LADDER)
 
     try:
         wi = windows.index(point.window)
@@ -232,11 +263,64 @@ def _neighbours(point: SurfacePoint, surface: list[SurfacePoint]) -> tuple[list[
     return found, len(wanted)
 
 
-def haircut_bar(family_size: int) -> float:
-    """Required Sharpe floor."""
-    if family_size <= 1:
-        return BASE_SHARPE_BAR
-    return BASE_SHARPE_BAR + HAIRCUT_PER_LOG10 * math.log10(family_size)
+def _select_representatives(
+    db: Session, verdicts: list[Verdict], surface: list[SurfacePoint]
+) -> None:
+    """Keep one promoted point per distinct structural skeleton.
+
+    A family sweeps one mechanism across settings, so a promoted ridge usually
+    arrives as a dozen adjacent points that would all be the same submission. The
+    correlation gate used to absorb this implicitly by rejecting all of them; doing
+    it here instead keeps the shortlist short AND says out loud what happened.
+    Mutates verdicts in place.
+    """
+    structure_of = {p.alpha_id: p.structure for p in surface}
+    groups: dict[object, list[Verdict]] = defaultdict(list)
+    for v in verdicts:
+        if not v.promoted:
+            continue
+        groups[structure_of.get(v.alpha_id)].append(v)
+
+    for members in groups.values():
+        if len(members) < 2:
+            continue
+        members.sort(
+            key=lambda v: (
+                -(v.ridge_score if v.ridge_score is not None else -99.0),
+                -(v.neighbour_median_sharpe if v.neighbour_median_sharpe is not None else -99.0),
+                -(v.plateau_ratio or 0.0),
+                -v.neighbours_simulated,
+                -(v.sharpe or 0.0),
+                v.alpha_id,
+            )
+        )
+        keeper = members[0]
+        for other in members[1:]:
+            other.promoted = False
+            other.redundant_with = keeper.alpha_id
+            other.reasons.append(
+                f"redundant with #{keeper.alpha_id} — same structural skeleton, "
+                f"kept the stronger point (Sharpe {keeper.sharpe:.2f} vs {other.sharpe:.2f})"
+            )
+
+
+
+def haircut_bar(
+    n_trials_or_ledger: int | TrialLedger,
+    *,
+    cfg: FilterConfig = DEFAULT_FILTER_CONFIG,
+) -> float:
+    """Required Sharpe floor based on EVT asymptotic expected maximum."""
+    if isinstance(n_trials_or_ledger, TrialLedger):
+        n_eff = n_trials_or_ledger.n_eff
+        window_days = n_trials_or_ledger.window_days
+    else:
+        n_eff = float(max(1, n_trials_or_ledger))
+        window_days = cfg.backtest_days
+
+    se = math.sqrt(TRADING_DAYS_PER_YEAR / max(252, window_days))
+    evt_max = expected_max_normal(n_eff)
+    return float(cfg.target_sharpe + se * evt_max)
 
 
 def evaluate(
@@ -244,39 +328,45 @@ def evaluate(
     family_key: str,
     portfolio: list[Alpha] | None = None,
     pnl_store: PnLStore | None = None,
-    require_pnl: bool = True,
+    *,
+    cfg: FilterConfig = DEFAULT_FILTER_CONFIG,
+    ledger: TrialLedger | None = None,
 ) -> list[Verdict]:
-    """Score every simulated point in a family. Promoted ones survived all statistical tests."""
-    from app.services.correlation import check_portfolio_empirical_correlation
+    """Score every simulated point in a family using the honest statistical gate stack."""
+    from app.services.clustering import cluster_family
+    from app.services.correlation import (
+        check_portfolio_empirical_correlation,
+        submitted_portfolio,
+    )
     from app.services.pnl_storage import get_pnl_store
-    from app.services.subperiod import compute_dsr, evaluate_subperiod_stability
+    from app.services.subperiod import (
+        compute_dsr,
+        evaluate_subperiod_stability,
+        verify_pnl_reconciliation,
+    )
 
     surface = load_surface(db, family_key)
     family_sharpes = [p.sharpe for p in surface if p.sharpe is not None]
     simulated_count = len(family_sharpes)
-    bar = haircut_bar(max(simulated_count, 1))
+
+    store = pnl_store or get_pnl_store()
+    trial_ledger = ledger or build_ledger(db, store, cfg=cfg)
+
+    from app.services.family_matrix import build_family_matrix
+    from app.services.correlation import compute_correlation_matrix
+    from app.services.subperiod import compute_effective_trials
+
+    fam_matrix = build_family_matrix(db, family_key, pnl_store=store)
+    fam_n_eff = None
+    if fam_matrix is not None and fam_matrix.matrix.shape[0] >= 2:
+        corr_mat = compute_correlation_matrix(fam_matrix.matrix)
+        fam_n_eff = compute_effective_trials(corr_mat)
+
+    n_trials = fam_n_eff if fam_n_eff is not None else (trial_ledger.n_eff if ledger is not None else max(1, simulated_count))
+    bar = haircut_bar(n_trials, cfg=cfg)
 
     if portfolio is None:
-        portfolio = list(
-            db.execute(
-                select(Alpha).where(
-                    Alpha.status.in_([AlphaStatus.SUBMITTED.value, AlphaStatus.PASSED.value])
-                )
-            )
-            .scalars()
-            .all()
-        )
-
-    pnl_store = pnl_store or get_pnl_store()
-
-    # Scope DSR activation to slice-level trial count (neighbourhood & multiple testing alignment)
-    by_slice: dict[tuple, list[PlateauPoint]] = defaultdict(list)
-    for p in surface:
-        if p.sharpe is not None:
-            by_slice[p.structure].append(p)
-    max_slice_trials = max((len(pts) for pts in by_slice.values()), default=0)
-    use_dsr = max_slice_trials >= MIN_TRIALS_FOR_DSR
-    gate_mode = "DSR" if use_dsr else "COLD_START_FALLBACK"
+        portfolio = submitted_portfolio(db)
 
     verdicts: list[Verdict] = []
 
@@ -284,15 +374,21 @@ def evaluate(
         reasons: list[str] = []
         neigh, possible = _neighbours(point, surface)
         values = [p.sharpe for p in neigh if p.sharpe is not None]
-        neigh_median = median(values) if values else None
+        neigh_median = float(median(values)) if values else None
 
         ratio = None
         if neigh_median is not None and point.sharpe:
             ratio = neigh_median / point.sharpe
 
-        judgeable = len(values) >= MIN_NEIGHBOURS_TO_JUDGE
+        judgeable = len(values) >= cfg.min_neighbours_to_judge
         positive = bool(point.sharpe is not None and point.sharpe > 0)
-        is_plateau = bool(judgeable and positive and ratio is not None and ratio >= PLATEAU_RATIO)
+        is_plateau = bool(
+            judgeable and positive and ratio is not None and ratio >= cfg.plateau_ratio
+        )
+
+        # Ridge score: median of own Sharpe and simulated neighbours
+        all_local_sharpes = [point.sharpe] + values if point.sharpe is not None else values
+        ridge_score = float(median(all_local_sharpes)) if all_local_sharpes else None
 
         if not values:
             reasons.append("no simulated neighbours — surface incomplete")
@@ -309,97 +405,161 @@ def evaluate(
 
         above_bar = bool(point.sharpe is not None and point.sharpe >= bar)
         if not above_bar:
-            reasons.append(f"below baseline bar {bar:.2f}")
+            reasons.append(f"below EVT haircut bar {bar:.2f}")
 
-        # Sub-period stability & DSR check: requires daily PnL series
-        pnl_data = pnl_store.load_pnl(point.alpha_id)
+        # 3. Hard PnL Reconciliation Precondition
+        pnl_data = store.load_pnl(point.alpha_id)
         dsr_val: float | None = None
         dsr_passed = False
         subperiod_passed = False
+        reconciled = False
 
         if pnl_data is not None:
             _, daily_pnl = pnl_data
-            sub_res = evaluate_subperiod_stability(daily_pnl)
+
+            # Check Sharpe reconciliation against reported metric
+            if point.sharpe is not None:
+                rec = verify_pnl_reconciliation(
+                    point.alpha_id,
+                    point.sharpe,
+                    store,
+                    sharpe_tolerance=cfg.sharpe_reconciliation_tolerance,
+                )
+                reconciled = rec.is_valid
+                if not reconciled:
+                    reasons.append(
+                        f"PnL failed Sharpe reconciliation (recomputed {rec.recomputed_sharpe:.2f} vs reported {rec.reported_sharpe:.2f})"
+                    )
+
+            # 4. Sub-Period Stability
+            sub_res = evaluate_subperiod_stability(daily_pnl, cfg=cfg)
             subperiod_passed = sub_res.passed
             if not subperiod_passed:
                 reasons.extend(sub_res.reasons)
 
-            # Daily DSR calculation
-            daily_sharpes = [s / math.sqrt(252) for s in family_sharpes]
-            dsr_val = compute_dsr(daily_pnl, daily_sharpes)
-            if use_dsr:
-                alpha_obj = db.get(Alpha, point.alpha_id)
-                is_re_promoting = bool(alpha_obj and "watchlist" in (alpha_obj.comments or "").lower())
-                target_dsr_hurdle = DSR_RE_PROMOTION_THRESHOLD if is_re_promoting else DSR_PROMOTION_THRESHOLD
-                dsr_passed = dsr_val >= target_dsr_hurdle
-                if not dsr_passed:
-                    reasons.append(f"DSR {dsr_val:.3f} below {target_dsr_hurdle:.2f} threshold")
-            else:
-                # Cold start mode: conservative hurdle (Sharpe >= 1.50, Fitness >= 1.0)
-                dsr_passed = bool(
-                    point.sharpe is not None
-                    and point.sharpe >= COLD_START_SHARPE_BAR
-                    and point.fitness is not None
-                    and point.fitness >= 1.0
-                )
-                if not dsr_passed:
-                    reasons.append(f"cold-start Sharpe/Fitness below {COLD_START_SHARPE_BAR:.2f}/1.0")
-        else:
-            if require_pnl:
-                # Hard precondition: daily PnL series is required for statistical gating
-                reasons.append("no daily PnL series — subperiod stability and DSR pending")
-                subperiod_passed = False
-                dsr_passed = False
-            else:
-                subperiod_passed = True
-                dsr_passed = bool(
-                    point.sharpe is not None
-                    and point.sharpe >= (DSR_PROMOTION_THRESHOLD if use_dsr else COLD_START_SHARPE_BAR)
-                    and (point.fitness is None or point.fitness >= 1.0)
-                )
+            # 5. Deflated Sharpe Ratio (DSR) using program ledger and family N_eff
+            daily_sharpes = [s / math.sqrt(TRADING_DAYS_PER_YEAR) for s in family_sharpes]
+            dsr_val = compute_dsr(
+                daily_pnl,
+                daily_sharpes,
+                n_eff=fam_n_eff if fam_n_eff is not None else trial_ledger.n_eff,
+                sigma_sr_override=trial_ledger.sigma_sr_daily,
+            )
 
-        # Correlation gate (empirical with structural fallback)
+            alpha_obj = db.get(Alpha, point.alpha_id)
+            is_re_promoting = bool(alpha_obj and getattr(alpha_obj, "is_rewatched", False))
+            target_dsr_hurdle = (
+                cfg.dsr_re_promotion_threshold if is_re_promoting else cfg.dsr_threshold
+            )
+            dsr_passed = dsr_val >= target_dsr_hurdle
+            if not dsr_passed:
+                reasons.append(f"DSR {dsr_val:.3f} below {target_dsr_hurdle:.2f} threshold")
+        else:
+            reasons.append("no daily PnL series — statistical gating pending")
+            subperiod_passed = False
+            dsr_passed = False
+            reconciled = False
+
+        survives_statistical_gates = (
+            clears
+            and is_plateau
+            and above_bar
+            and reconciled
+            and dsr_passed
+            and subperiod_passed
+        )
+
         is_corr, corr_collision, max_corr = check_portfolio_empirical_correlation(
-            db, point.alpha_id, pnl_store=pnl_store, portfolio=portfolio
+            db, point.alpha_id, pnl_store=store, portfolio=portfolio, cfg=cfg
         )
         if is_corr and corr_collision:
             reasons.append(corr_collision)
 
-        promoted = clears and is_plateau and above_bar and dsr_passed and subperiod_passed and not is_corr
+        promoted = bool(survives_statistical_gates and not is_corr)
 
-        verdicts.append(
-            Verdict(
-                alpha_id=point.alpha_id,
-                expression=point.expression,
-                sharpe=point.sharpe,
-                fitness=point.fitness,
-                neighbour_median_sharpe=neigh_median,
-                plateau_ratio=ratio,
-                is_plateau=is_plateau,
-                neighbours_simulated=len(values),
-                neighbours_possible=possible,
-                clears_bar=clears,
-                haircut_bar=bar,
-                is_correlated=is_corr,
-                correlation_collision=corr_collision,
-                promoted=promoted,
-                family_size=simulated_count,
-                dsr=dsr_val,
-                dsr_passed=dsr_passed,
-                gate_mode=gate_mode,
-                subperiod_passed=subperiod_passed,
-                reasons=reasons,
-            )
+        v = Verdict(
+            alpha_id=point.alpha_id,
+            expression=point.expression,
+            sharpe=point.sharpe,
+            fitness=point.fitness,
+            neighbour_median_sharpe=neigh_median,
+            ridge_score=ridge_score,
+            plateau_ratio=ratio,
+            is_plateau=is_plateau,
+            neighbours_simulated=len(values),
+            neighbours_possible=possible,
+            clears_bar=clears,
+            haircut_bar=bar,
+            is_correlated=is_corr,
+            correlation_collision=corr_collision,
+            promoted=promoted,
+            family_size=simulated_count,
+            dsr=dsr_val,
+            dsr_passed=dsr_passed,
+            gate_mode="DSR",
+            subperiod_passed=subperiod_passed,
+            redundant_with=None,
+            reasons=reasons,
+            config_fingerprint=cfg.fingerprint(),
         )
+        verdicts.append(v)
+
+    _select_representatives(db, verdicts, surface)
 
     verdicts.sort(
-        key=lambda v: (v.promoted, v.sharpe if v.sharpe is not None else -99), reverse=True
+        key=lambda v: (
+            v.promoted,
+            v.ridge_score if v.ridge_score is not None else -99.0,
+            v.neighbour_median_sharpe if v.neighbour_median_sharpe is not None else -99.0,
+            v.sharpe if v.sharpe is not None else -99.0,
+        ),
+        reverse=True,
     )
     log.info(
         "family_evaluated",
         family=family_key,
         points=len(surface),
         promoted=sum(1 for v in verdicts if v.promoted),
-        gate_mode=gate_mode,
+        redundant=sum(1 for v in verdicts if v.redundant_with is not None),
+        gate_mode="DSR",
     )
     return verdicts
+
+
+# Request-scoped evaluation cache for Decision D3
+_EVAL_CACHE: dict[tuple[str, str], list[Verdict]] = {}
+
+
+def evaluate_families(
+    db: Session,
+    family_keys: Sequence[str],
+    *,
+    cfg: FilterConfig = DEFAULT_FILTER_CONFIG,
+    pnl_store: PnLStore | None = None,
+    portfolio: list[Alpha] | None = None,
+    use_cache: bool = True,
+) -> dict[str, list[Verdict]]:
+    """Batch evaluation of multiple families with request-scoped caching."""
+    store = pnl_store or get_pnl_store()
+    port = portfolio if portfolio is not None else submitted_portfolio(db)
+    ledger = build_ledger(db, store, cfg=cfg)
+
+    fp = cfg.fingerprint()
+    results: dict[str, list[Verdict]] = {}
+
+    for fkey in family_keys:
+        cache_key = (fkey, fp)
+        if use_cache and cache_key in _EVAL_CACHE:
+            results[fkey] = _EVAL_CACHE[cache_key]
+        else:
+            v_list = evaluate(db, fkey, portfolio=port, pnl_store=store, cfg=cfg, ledger=ledger)
+            if use_cache:
+                _EVAL_CACHE[cache_key] = v_list
+            results[fkey] = v_list
+
+    return results
+
+
+def clear_eval_cache() -> None:
+    """Clear request-scoped evaluation cache."""
+    _EVAL_CACHE.clear()

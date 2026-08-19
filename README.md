@@ -13,9 +13,9 @@ pick an under-mined dataset
           → YOU review, correlation-check, and submit manually
 ```
 
-**Simulation is automated. Submission is not, and there is no submission code path in this repository.** See [docs/DECISIONS.md](file:///Users/sanya/Projects/alpha/docs/DECISIONS.md) for why that line sits where it does.
+**Simulation is automated. Submission is not, and there is no submission code path in this repository.** See [docs/DECISIONS.md](docs/DECISIONS.md) for why that line sits where it does.
 
-Read **[STRATEGY.md](file:///Users/sanya/Projects/alpha/STRATEGY.md)** first — it contains the diagnosis of why naive trial-and-error alphas fail and the foundational rules that govern this tool.
+Read **[STRATEGY.md](STRATEGY.md)** first — it contains the diagnosis of why naive trial-and-error alphas fail and the foundational rules that govern this tool.
 
 ---
 
@@ -87,20 +87,26 @@ backend/
 │   │   ├── plateau.py               2D surface plateau filter & DSR multiple testing
 │   │   ├── subperiod.py             In-sample / out-of-sample stability validation
 │   │   ├── correlation.py           Empirical PnL Pearson correlation & proxy fallback
-│   │   ├── allocator_bandit.py      Multi-armed bandit dataset allocation (20% cap)
+│   │   ├── allocator.py             Multi-armed bandit allocation, 3-arm campaigns & diversity caps
+│   │   ├── campaign_runner.py       Resumable DB-checkpointed overnight campaign executor
 │   │   ├── field_triage.py          LLM semantic dataset triage & slot filling
 │   │   └── simulation_runner.py     Async batch runner with concurrency caps
-│   ├── models/           SQLAlchemy ORM (16 tables: alphas, metrics, fields, pnl, logs)
+│   ├── models/           SQLAlchemy ORM (21 tables: alphas, metrics, fields, pnl, logs)
 │   ├── routers/          FastAPI endpoints (UI summary, surfaces, library, telemetry)
 │   ├── static/           Zero-dependency single-page HTML console (dark/light themes)
 │   ├── desktop.py        Desktop launcher with auto port selection & browser launch
 │   └── seeds/            Operator knowledge base seeds (102 operators + signatures)
 ├── scripts/              CLI workflows (run_family, report, fetch_catalog, build_desktop)
 ├── migrations/           Alembic database migrations
-└── tests/                120+ unit and integration tests (fast, isolated SQLite)
+└── tests/                220+ unit and integration tests (fast, isolated SQLite)
 fields/                   Field catalog samples and fixtures
 operators/                Operator definitions, signatures, and type constraints
-docs/                     BRAIN API reference, architectural decision records, packaging
+docs/                     Architecture, study validation, operating guides, decision records
+    ├── strategy/         Validation protocol, product strategy, roadmap, business model
+    ├── briefs/           Phase briefs (inventory, phase 0, phase 1)
+    ├── DECISIONS.md      Architectural decision records (D1–D5)
+    ├── PHASE1_OPERATING_GUIDE.md Step-by-step operating runbook
+    └── BRAIN_API.md      Empirical API reference and verified behaviors
 ```
 
 ---
@@ -148,13 +154,17 @@ Key environment variables:
 
 ### 3. Database Initialization
 
-Run database migrations, seed operator signatures, and fetch the real BRAIN catalog:
+Run database migrations and load the offline seed data (operators, lookups, and sample 122-field catalog):
 
 ```bash
 .venv/bin/python -m alembic upgrade head
-.venv/bin/python -m app.seeds.load_operators
+.venv/bin/python -m app.seeds.seed_all          # offline: operators, lookups, sample catalog
+
+# Optional — replaces the sample catalog with your account's live one:
 .venv/bin/python -m scripts.fetch_brain_catalog
 ```
+
+> Everything except remote simulation runs fully offline on the seeded sample catalog, allowing full evaluation without credentials.
 
 ---
 
@@ -179,7 +189,7 @@ The single-page console is zero-dependency, works fully offline, and is optimize
 
 ---
 
-### Command-Line Workflows
+## Command-Line Workflows
 
 #### 1. Expand and Simulate an Alpha Family
 Expands a `(field, denominator)` mechanism across the complete window × decay grid, stores candidates, and batch-simulates a capped subset on BRAIN:
@@ -231,7 +241,7 @@ The compiled binary will be placed in `backend/dist/`:
 - **macOS / Linux**: `backend/dist/alpha-research-desktop`
 - **Windows**: `backend/dist/alpha-research-desktop.exe`
 
-When launched, it automatically selects an open port, initializes local user data at `~/.alpha_research/`, runs migrations, and opens your default browser. See [docs/PACKAGING.md](file:///Users/sanya/Projects/alpha/docs/PACKAGING.md) for full details.
+When launched, it automatically selects an open port, initializes local user data at `~/.alpha_research/`, runs migrations, and opens your default browser. See [docs/PACKAGING.md](docs/PACKAGING.md) for full details.
 
 ---
 

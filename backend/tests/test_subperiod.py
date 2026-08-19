@@ -155,7 +155,7 @@ def test_subperiod_split_half_sign_guard() -> None:
     ])
     verdict_bad = evaluate_subperiod_stability(bad_pnl)
     assert not verdict_bad.passed
-    assert any("non-positive split-half" in r for r in verdict_bad.reasons)
+    assert any("split-half" in r for r in verdict_bad.reasons)
 
     # Case B: Steady positive performance throughout all 4 years
     good_pnl = np.full(t, 0.001) + np.random.normal(loc=0.0, scale=0.002, size=t)

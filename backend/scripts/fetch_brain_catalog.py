@@ -263,6 +263,10 @@ def _refresh_operators(payloads: list[dict]) -> int:
     return added
 
 
+from scripts._cli import cli_main
+
+
+@cli_main
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--region", default="USA")
@@ -283,3 +287,4 @@ def main() -> int:
 
 if __name__ == "__main__":
     sys.exit(main())
+
