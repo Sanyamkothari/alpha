@@ -94,10 +94,21 @@ No longer guesswork. Each entry is `{name, result, limit, value}`:
 | `LOW_FITNESS` | **1.0** | Fitness must exceed |
 | `LOW_TURNOVER` | **0.01** | floor |
 | `HIGH_TURNOVER` | **0.7** | ceiling |
-| `LOW_SUB_UNIVERSE_SHARPE` | **0.01** | must exceed |
+| `LOW_SUB_UNIVERSE_SHARPE` | **CONTESTED — see below** | must exceed |
 | `CONCENTRATED_WEIGHT` | — | pass/fail, no numeric limit |
 | `MATCHES_COMPETITION` | — | pass/fail |
 | `SELF_CORRELATION` | — | **returns `PENDING`** |
+
+> **`LOW_SUB_UNIVERSE_SHARPE` limit is contested — do not rely on 0.01.**
+> This table originally recorded **0.01**, captured from one alpha on a TUTORIAL account.
+> A later audit of stored `checks` payloads found the limit reported as **0.80**, with
+> alphas failing at value 0.76 — and that check turned out to be the systematic reason an
+> entire family (`single_sector_pureplay_company_count/cap`, 16 simulations) failed
+> BRAIN's gate while appearing to pass every metric we reconstruct locally.
+>
+> Until one authenticated run settles it, treat the limit as **unknown and probably near
+> 0.80**, and never infer pass/fail for this check from `subuniverse_sharpe` alone.
+> `alpha_metrics.subuniverse_sharpe` is stored but read by nothing in the filter.
 
 `is` metrics: `pnl, bookSize, longCount, shortCount, turnover, returns, drawdown,
 margin, sharpe, fitness, startDate`. Backtest starts **2019-01-01**.

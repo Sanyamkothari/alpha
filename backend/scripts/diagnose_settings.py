@@ -32,6 +32,14 @@ from app.db.session import session_scope
 from app.models.alphas import Alpha
 from app.models.results import AlphaMetric
 
+# BRAIN applies eight checks. Only these three can be rebuilt from stored scalars.
+# The other five - CONCENTRATED_WEIGHT, LOW_SUB_UNIVERSE_SHARPE, MATCHES_COMPETITION,
+# LOW_TURNOVER's own edge cases, SELF_CORRELATION - are invisible to any reconstruction.
+# That gap is not academic: an independent audit found a family this tool reported as
+# 9/16 clearing was 0/16 on BRAIN's own verdict, every point failing
+# LOW_SUB_UNIVERSE_SHARPE. Reconstruction OVERSTATES. Always prefer passed_all_checks.
+RECONSTRUCTABLE_CHECKS = ("LOW_SHARPE", "LOW_FITNESS", "HIGH_TURNOVER", "LOW_TURNOVER")
+
 TURNOVER_FLOOR = 0.125  # the max() floor inside the fitness formula
 FITNESS_BAR = 1.0
 TURNOVER_CEILING = 0.70   # HIGH_TURNOVER
@@ -39,6 +47,20 @@ TURNOVER_MIN = 0.01       # LOW_TURNOVER
 SHARPE_BAR = 1.25         # LOW_SHARPE
 
 TRUNCATION_LEVELS = (0.08, 0.04, 0.01)
+
+
+def _failed_check_names(metric) -> list[str]:
+    """Names of the BRAIN checks this alpha actually failed, from the stored payload."""
+    out = []
+    for entry in metric.checks or []:
+        if isinstance(entry, dict) and str(entry.get("result", "")).upper() == "FAIL":
+            name = entry.get("name")
+            if name:
+                limit, value = entry.get("limit"), entry.get("value")
+                out.append(
+                    f"{name}({value}<{limit})" if limit is not None and value is not None else str(name)
+                )
+    return out
 
 
 def fitness_of(sharpe: float, returns: float, turnover: float) -> float:
@@ -110,7 +132,10 @@ def report_family(family_key: str) -> None:
 
     # ---- 2. what would clear the bars? ----
     print("\nfitness = Sharpe * sqrt(|returns| / max(turnover, 0.125))")
-    print("bars: Sharpe >= 1.25, fitness >= 1.00, 0.01 <= turnover <= 0.70")
+    print("bars shown: Sharpe >= 1.25, fitness >= 1.00, 0.01 <= turnover <= 0.70")
+    print("WARNING: those are 4 of BRAIN's 8 checks. Where passed_all_checks is stored it")
+    print("         overrides them — reconstruction cannot see LOW_SUB_UNIVERSE_SHARPE or")
+    print("         CONCENTRATED_WEIGHT and systematically overstates how many alphas pass.")
     print("note: the max(.,0.125) floor means turnover below 0.125 buys no fitness at all\n")
     print(f"  {'decay':>6} {'Sharpe':>7} {'return':>7} {'turnov':>7} {'fitness':>8}  what it needs")
     for alpha, m in sorted(rows, key=lambda r: (r[0].decay or 0)):
@@ -129,8 +154,19 @@ def report_family(family_key: str) -> None:
         if m.turnover < TURNOVER_MIN:
             blockers.append(f"turnover {m.turnover:.2f}<{TURNOVER_MIN}")
 
-        if not blockers:
-            verdict = "PASSES"
+        # BRAIN's own verdict wins whenever we have it. The reconstruction below sees
+        # four of eight checks and will happily call an alpha passing that BRAIN failed.
+        if m.passed_all_checks is False:
+            failed = _failed_check_names(m)
+            extra = [c for c in failed if c not in RECONSTRUCTABLE_CHECKS]
+            if extra:
+                verdict = "BRAIN says FAIL: " + ", ".join(extra)
+            else:
+                verdict = "BRAIN says FAIL: " + (", ".join(failed) or "; ".join(blockers))
+        elif m.passed_all_checks is True:
+            verdict = "PASSES (BRAIN verdict)"
+        elif not blockers:
+            verdict = "passes the 4 reconstructable checks — BRAIN verdict NOT stored"
         elif blockers == [f"fitness {m.fitness or 0:.2f}<{FITNESS_BAR}"] and need is not None:
             verdict = f"cut turnover to <={min(need, TURNOVER_CEILING):.2f} (now {m.turnover:.2f})"
         elif need is None and (m.fitness or 0) < FITNESS_BAR and m.turnover <= TURNOVER_FLOOR:

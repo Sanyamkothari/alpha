@@ -170,6 +170,48 @@ def backup(verdicts: list[FamilyVerdict], db) -> Path:
     return path
 
 
+def dead_fields(db) -> list[tuple[str, int, int]]:
+    """Fields that have been simulated and never once produced a book.
+
+    An independent audit found 686 alphas referencing two such fields
+    (fnd6_newqv1300_spcep12, fnd6_newqv1300_xoptdq) — far more than the 44 that were
+    actually simulated. Both fields *exist* in data_fields with 50% coverage, and the
+    simulator ran for 85-112s on each, so this is not a missing field or a crash: the
+    expression genuinely evaluates to nothing in this universe.
+
+    The 44 wasted simulations are the visible cost. The 642 unsimulated alphas queued
+    behind them are the larger one, because the campaign will keep drawing from them.
+
+    Returns (field_code, alphas_referencing, alphas_simulated) for each dead field.
+    """
+    from app.models.alphas import Alpha as A
+
+    rows = db.execute(
+        select(A.id, A.feature_json, A.expression, AlphaMetric.long_count, AlphaMetric.short_count)
+        .outerjoin(AlphaMetric, AlphaMetric.alpha_id == A.id)
+    ).all()
+
+    referenced: dict[str, int] = {}
+    simulated: dict[str, int] = {}
+    with_book: set[str] = set()
+
+    for _aid, feat, _expr, longs, shorts in rows:
+        fields = ((feat or {}).get("distinct_fields")) or []
+        for f in fields:
+            referenced[f] = referenced.get(f, 0) + 1
+            if longs is not None or shorts is not None:
+                simulated[f] = simulated.get(f, 0) + 1
+                if (longs or 0) + (shorts or 0) > 0:
+                    with_book.add(f)
+
+    out = []
+    for f, n_ref in sorted(referenced.items(), key=lambda kv: -kv[1]):
+        n_sim = simulated.get(f, 0)
+        if n_sim > 0 and f not in with_book:
+            out.append((f, n_ref, n_sim))
+    return out
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--apply", action="store_true", help="actually delete (default: report only)")
@@ -192,6 +234,14 @@ def main() -> int:
         if not flagged:
             print("nothing to purge.")
             return 0
+
+        dead = dead_fields(db)
+        if dead:
+            print("Fields simulated repeatedly that never produced a book:")
+            for code, n_ref, n_sim in dead:
+                print(f"  {code:44s} {n_sim:>4} simulated, {n_ref:>5} alphas reference it")
+            print("  (these are not purged here — retire the field so the campaign stops")
+            print("   drawing from it, otherwise the queued alphas keep spending slots)\n")
 
         total = 0
         for v in flagged:
