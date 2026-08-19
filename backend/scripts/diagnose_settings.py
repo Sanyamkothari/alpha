@@ -34,8 +34,9 @@ from app.models.results import AlphaMetric
 
 TURNOVER_FLOOR = 0.125  # the max() floor inside the fitness formula
 FITNESS_BAR = 1.0
-TURNOVER_CEILING = 0.70
-SHARPE_BAR = 1.25
+TURNOVER_CEILING = 0.70   # HIGH_TURNOVER
+TURNOVER_MIN = 0.01       # LOW_TURNOVER
+SHARPE_BAR = 1.25         # LOW_SHARPE
 
 TRUNCATION_LEVELS = (0.08, 0.04, 0.01)
 
@@ -45,10 +46,22 @@ def fitness_of(sharpe: float, returns: float, turnover: float) -> float:
 
 
 def required_turnover(sharpe: float, returns: float, bar: float = FITNESS_BAR) -> float | None:
-    """The turnover at which fitness would reach `bar`, holding Sharpe and returns."""
+    """The turnover at which fitness would reach `bar`, holding Sharpe and returns.
+
+    Returns None when the bar is unreachable by cutting turnover alone. That happens
+    because of the ``max(turnover, 0.125)`` floor: once turnover is at or below
+    0.125 the denominator stops shrinking, so further reductions do nothing for
+    fitness — and in practice they also drag returns down, which makes it worse.
+    Without this guard the advice reads "cut turnover to 0.11" for an alpha already
+    at 0.07, which is not achievable and not useful.
+    """
     if sharpe <= 0:
         return None
-    return abs(returns) / ((bar / sharpe) ** 2)
+    needed = abs(returns) / ((bar / sharpe) ** 2)
+    if needed < TURNOVER_FLOOR:
+        # Even at the floor the bar is not met; turnover is not the lever here.
+        return None
+    return needed
 
 
 def report_family(family_key: str) -> None:
@@ -73,8 +86,14 @@ def report_family(family_key: str) -> None:
     ]
     if not counts:
         print("long_count/short_count not stored for this family — cannot judge truncation.")
+    elif max(counts) == 0:
+        print(
+            "every point held ZERO positions — these simulations produced no book at all.\n"
+            "  The field is almost certainly empty for this region/delay/universe.\n"
+            "  Truncation is meaningless here; the family should be retired, not tuned."
+        )
     else:
-        smallest = min(counts)
+        smallest = min(c for c in counts if c > 0)
         typical = sorted(counts)[len(counts) // 2]
         print(f"positions held: median {typical}, smallest {smallest}")
         max_weight = 2.0 / smallest if smallest else float("inf")
@@ -90,20 +109,34 @@ def report_family(family_key: str) -> None:
             )
 
     # ---- 2. what would clear the bars? ----
-    print("\nfitness = Sharpe * sqrt(|returns| / max(turnover, 0.125))\n")
+    print("\nfitness = Sharpe * sqrt(|returns| / max(turnover, 0.125))")
+    print("bars: Sharpe >= 1.25, fitness >= 1.00, 0.01 <= turnover <= 0.70")
+    print("note: the max(.,0.125) floor means turnover below 0.125 buys no fitness at all\n")
     print(f"  {'decay':>6} {'Sharpe':>7} {'return':>7} {'turnov':>7} {'fitness':>8}  what it needs")
     for alpha, m in sorted(rows, key=lambda r: (r[0].decay or 0)):
         if m.sharpe is None or m.returns is None or m.turnover is None:
             continue
         need = required_turnover(m.sharpe, m.returns)
-        if m.fitness is not None and m.fitness >= FITNESS_BAR and m.turnover <= TURNOVER_CEILING:
+        # All three bars, not just fitness. An earlier version reported PASSES for
+        # points with Sharpe below the 1.25 LOW_SHARPE floor.
+        blockers = []
+        if m.sharpe < SHARPE_BAR:
+            blockers.append(f"Sharpe {m.sharpe:.2f}<{SHARPE_BAR}")
+        if (m.fitness or 0) < FITNESS_BAR:
+            blockers.append(f"fitness {m.fitness or 0:.2f}<{FITNESS_BAR}")
+        if m.turnover > TURNOVER_CEILING:
+            blockers.append(f"turnover {m.turnover:.2f}>{TURNOVER_CEILING}")
+        if m.turnover < TURNOVER_MIN:
+            blockers.append(f"turnover {m.turnover:.2f}<{TURNOVER_MIN}")
+
+        if not blockers:
             verdict = "PASSES"
-        elif m.turnover > TURNOVER_CEILING and need is not None and need >= TURNOVER_CEILING:
-            verdict = f"cut turnover to <={TURNOVER_CEILING:.2f} and fitness follows"
-        elif need is not None:
-            verdict = f"needs turnover <={need:.2f} (now {m.turnover:.2f})"
+        elif blockers == [f"fitness {m.fitness or 0:.2f}<{FITNESS_BAR}"] and need is not None:
+            verdict = f"cut turnover to <={min(need, TURNOVER_CEILING):.2f} (now {m.turnover:.2f})"
+        elif need is None and (m.fitness or 0) < FITNESS_BAR and m.turnover <= TURNOVER_FLOOR:
+            verdict = "already at the 0.125 floor — needs Sharpe or returns, not less turnover"
         else:
-            verdict = "—"
+            verdict = "; ".join(blockers)
         print(
             f"  {alpha.decay or 0:>6} {m.sharpe:>7.2f} {m.returns:>7.1%} "
             f"{m.turnover:>7.2f} {m.fitness or 0:>8.2f}  {verdict}"
