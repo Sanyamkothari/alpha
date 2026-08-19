@@ -179,17 +179,26 @@ def q2_turnover_vs_subuniverse(db) -> None:
         ms, mf = st.median(slow_r), st.median(fast_r)
         print(f"    turnover <= 0.125 : median sub/own Sharpe {ms:.3f}  (n={len(slow_r)})")
         print(f"    turnover >  0.125 : median sub/own Sharpe {mf:.3f}  (n={len(fast_r)})")
-        diff = ms - mf
-        if diff < -0.03:
-            print("\n  ANSWER: YES — slow alphas hold a WORSE sub-to-own Sharpe ratio, which is")
-            print("  exactly what this check tests. Lowering turnover really does trade one bar")
-            print("  for another. Do not pursue the turnover floor as stated.")
-        elif diff > 0.03:
-            print("\n  ANSWER: NO — slow alphas hold a BETTER ratio. The level gap was an")
-            print("  artefact of their lower headline Sharpe. The floor idea survives.")
+        bar = 0.433  # measured in Q1: limit = 0.433 x own Sharpe
+        for label, group in (("turnover <= 0.125", slow_r), ("turnover >  0.125", fast_r)):
+            fail_rate = sum(1 for r in group if r < bar) / len(group)
+            print(f"    {label} : {fail_rate:.0%} fall below the {bar} bar  (n={len(group)})")
+
+        # A median above the bar is not a pass rate. Both medians here clear it, so the
+        # question is how much of each distribution falls below — and that is what the
+        # failure rates above measure.
+        slow_fail = sum(1 for r in slow_r if r < bar) / len(slow_r)
+        fast_fail = sum(1 for r in fast_r if r < bar) / len(fast_r)
+        gap = slow_fail - fast_fail
+        if gap > 0.10:
+            print(f"\n  On this check alone: slow alphas fail it {gap:.0%} more often.")
+        elif gap < -0.10:
+            print(f"\n  On this check alone: slow alphas fail it {abs(gap):.0%} LESS often.")
         else:
-            print("\n  ANSWER: the ratio is flat across turnover. Whatever the levels do, this")
-            print("  check does not discriminate by turnover, so it does not block the floor idea.")
+            print("\n  On this check alone: the failure rates are close — the median gap is")
+            print("  margin, not failures.")
+
+        _net_effect_of_turnover(db)
     else:
         print("\n  CANNOT DETERMINE from ratios — one side has too few positive-Sharpe rows.")
         print("  The level comparison above is NOT a substitute: a lower sub-universe Sharpe")
@@ -266,3 +275,48 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+
+
+def _net_effect_of_turnover(db) -> None:
+    """The statistic that actually decides: BRAIN's own verdict, by turnover bucket.
+
+    Low turnover pulls in two directions at once. It makes LOW_FITNESS easier, because
+    the ``max(turnover, 0.125)`` floor stops the denominator shrinking, and it makes
+    LOW_SUB_UNIVERSE_SHARPE harder, because the ratio margin narrows. Neither effect on
+    its own answers "should we aim for low turnover" — only the net does, and
+    ``passed_all_checks`` is the net across all eight checks with nothing reconstructed.
+    """
+    rows = db.execute(
+        select(AlphaMetric).where(
+            AlphaMetric.turnover.is_not(None),
+            AlphaMetric.passed_all_checks.is_not(None),
+        )
+    ).scalars().all()
+
+    print("\n  NET effect — BRAIN's own verdict across all 8 checks, by turnover:")
+    if len(rows) < 20:
+        print(f"    CANNOT DETERMINE — only {len(rows)} rows carry a stored verdict.")
+        return
+
+    buckets = (
+        ("<= 0.125 (at the fitness floor)", lambda t: t <= 0.125),
+        ("0.125 - 0.35", lambda t: 0.125 < t <= 0.35),
+        ("0.35 - 0.70", lambda t: 0.35 < t <= 0.70),
+        ("> 0.70 (over the turnover ceiling)", lambda t: t > 0.70),
+    )
+    best = (None, -1.0)
+    for label, pred in buckets:
+        group = [m for m in rows if pred(m.turnover)]
+        if not group:
+            print(f"    {label:36s} no rows")
+            continue
+        rate = sum(1 for m in group if m.passed_all_checks) / len(group)
+        print(f"    {label:36s} {rate:>5.0%} pass  (n={len(group)})")
+        if len(group) >= 20 and rate > best[1]:
+            best = (label, rate)
+
+    if best[0]:
+        print(f"\n  ANSWER: the best turnover band on BRAIN's own verdict is {best[0]}")
+        print(f"  at {best[1]:.0%}. That is the net of the fitness floor helping and the")
+        print("  sub-universe ratio hurting, so it settles the question without modelling")
+        print("  either effect. Aim here, and treat any single-check argument as advisory.")
