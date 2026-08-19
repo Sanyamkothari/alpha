@@ -7,6 +7,9 @@ privileged backend/app/services/brain directory guarded by test_brain_no_post.py
 from __future__ import annotations
 
 import uuid
+import math
+import random
+from datetime import date, timedelta
 from typing import Any
 
 
@@ -74,5 +77,36 @@ class FakeBrainClient:
     def get_json(self, path: str, *args: Any, **kwargs: Any) -> Any:
         """Mock GET JSON for recordsets and endpoints."""
         if "daily-pnl" in path:
-            return {"records": [[f"2026-01-{i+1:02d}", 100.0 * (1 if i % 2 == 0 else -0.5)] for i in range(30)]}
+            return {"records": self._daily_pnl_records(self._id_from_path(path))}
         return {}
+
+    @staticmethod
+    def _id_from_path(path: str) -> str:
+        """Pull the alpha id out of ``/alphas/{id}/recordsets/daily-pnl``."""
+        parts = [p for p in path.split("/") if p]
+        return parts[1] if len(parts) > 1 else ""
+
+    def _daily_pnl_records(self, brain_id: str, n_days: int = 504) -> list[list[Any]]:
+        """A PnL series whose annualized Sharpe matches what ``alpha()`` reports.
+
+        The previous fixture served an alternating +/- series for every alpha while
+        reporting Sharpe 1.65, so the series and the metric described different
+        objects. Nothing caught it until ``ensure_alpha_pnl`` began reconciling, and
+        an integration test whose data contradicts itself cannot validate the
+        pipeline it is standing in for.
+        """
+        target_sharpe = self.alpha(brain_id)["is"]["sharpe"]
+
+        # Deterministic pseudo-random walk, then rescaled to hit the target exactly.
+        rng = random.Random(sum(ord(c) for c in brain_id) or 1)
+        raw = [rng.gauss(0.0, 1.0) for _ in range(n_days)]
+        mean = sum(raw) / n_days
+        var = sum((x - mean) ** 2 for x in raw) / (n_days - 1)
+        std = math.sqrt(var) or 1.0
+        centred = [(x - mean) / std for x in raw]  # mean 0, sample std 1
+
+        daily_mean = target_sharpe / math.sqrt(252.0)
+        series = [(x + daily_mean) * 1000.0 for x in centred]
+
+        start = date(2024, 1, 1)
+        return [[(start + timedelta(days=i)).isoformat(), round(v, 6)] for i, v in enumerate(series)]

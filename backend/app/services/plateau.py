@@ -156,17 +156,35 @@ def check_portfolio_correlation(
     return False, None
 
 
+# Field order of the tuple returned by ``_structure_of``. Consumers that need one
+# component must index through this rather than hard-coding a position — the tuple
+# has grown twice already (universe, hump) and a stale magic index reads a
+# neighbouring axis without failing.
+STRUCTURE_FIELDS: tuple[str, ...] = (
+    "ts", "cs", "group", "neutralization", "truncation", "universe", "hump",
+)
+_STRUCTURE_INDEX: dict[str, int] = {name: i for i, name in enumerate(STRUCTURE_FIELDS)}
+
+
 def _structure_of(grid: dict) -> tuple:
     """Everything that is NOT a swept plateau axis."""
-    return (
-        grid.get("ts"),
-        grid.get("cs"),
-        grid.get("group"),
-        grid.get("neutralization"),
-        grid.get("truncation"),
-        grid.get("universe"),
-        grid.get("hump"),
-    )
+    return tuple(grid.get(name) for name in STRUCTURE_FIELDS)
+
+
+def structure_component(structure: tuple, name: str) -> Any:
+    """Read one named axis out of a structure tuple."""
+    idx = _STRUCTURE_INDEX[name]
+    return structure[idx] if idx < len(structure) else None
+
+
+def structure_replacing(structure: tuple, name: str, value: Any) -> tuple:
+    """A structure tuple identical to ``structure`` except for one named axis."""
+    idx = _STRUCTURE_INDEX[name]
+    parts = list(structure)
+    while len(parts) <= idx:
+        parts.append(None)
+    parts[idx] = value
+    return tuple(parts)
 
 
 def family_field_code(family_key: str) -> str:

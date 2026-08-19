@@ -197,7 +197,7 @@ def run_filter_backtest(
                 aid = res.alpha.id
                 created_ids.append(aid)
                 pnl_vec = pnl_matrix[i]
-                store.save_pnl(aid, dates, pnl_vec)
+                store.save_pnl(aid, dates, pnl_vec, series_kind="daily", source="synthetic")
 
                 std = float(np.std(pnl_vec, ddof=1))
                 sr = (float(np.mean(pnl_vec)) / std * math.sqrt(TRADING_DAYS_PER_YEAR)) if std > 1e-12 else 0.0
@@ -246,7 +246,7 @@ def run_filter_backtest(
                 aid = res.alpha.id
                 created_ids.append(aid)
                 pnl_vec = pnl_matrix[i]
-                store.save_pnl(aid, dates, pnl_vec)
+                store.save_pnl(aid, dates, pnl_vec, series_kind="daily", source="synthetic")
 
                 std = float(np.std(pnl_vec, ddof=1))
                 sr = (float(np.mean(pnl_vec)) / std * math.sqrt(TRADING_DAYS_PER_YEAR)) if std > 1e-12 else 0.0
