@@ -44,6 +44,7 @@ from sqlalchemy.orm import Session
 
 from app.models.alphas import Alpha, SubmissionAttempt
 from app.models.fields import DataField, Dataset
+from app.services.field_health import dead_field_codes
 from app.models.results import AlphaMetric
 from app.services.constructor import (
     DEFAULT_CROSS_SECTION,
@@ -594,6 +595,20 @@ def plan_budget_allocation(
         denominator=default_denom,
         rng=rng,
     )
+    # The exploit arm is hunting, not measuring, so skipping fields that have never
+    # produced a book costs nothing scientifically and saves slots that would re-learn a
+    # known answer. Two such fields had 686 alphas queued behind them.
+    dead = dead_field_codes(db)
+    if dead:
+        kept = [s for s in suggestions if s.field_code not in dead]
+        if len(kept) != len(suggestions):
+            log.info(
+                "exploit_arm_skipped_dead_fields",
+                skipped=len(suggestions) - len(kept),
+                fields=sorted(dead),
+            )
+        suggestions = kept
+
     for s in suggestions:
         tkey = canonical_territory_key(
             s.field_code, s.operator_family, s.horizon_band, region, universe, delay
@@ -627,6 +642,21 @@ def plan_budget_allocation(
             DataField.field_type == "MATRIX",
         )
     ).all()
+
+    # DELIBERATELY NOT filtered for dead fields. An earlier version excluded them here
+    # and that was wrong, for a reason worth recording so it is not re-introduced.
+    #
+    # Every dead field we have found sits in the LOWEST crowding quartile (user counts
+    # 1, 5, 7, 8). Dropping them would preferentially thin the uncrowded end of the
+    # sample — a bias in precisely the dimension the Phase 2 validation study measures,
+    # in the one arm CLAUDE.md says must stay unbiased.
+    #
+    # It would also hide a possible real result: uncrowded fields may be uncrowded
+    # *because* their data is unusable. "Low-crowding territory yields nothing" is a
+    # finding about crowding, not noise to filter away.
+    #
+    # The waste is real but belongs elsewhere: the exploit arm skips dead fields, since
+    # that arm is hunting rather than measuring and loses no scientific value by doing so.
 
     quartile_boundaries: list[float] | None = None
     if all_fields and total_simulations >= (2 * sims_per_territory):
