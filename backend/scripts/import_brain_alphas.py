@@ -126,6 +126,10 @@ def run(limit: int | None = None, dry_run: bool = False) -> dict[str, int]:
     return counts
 
 
+from scripts._cli import cli_main
+
+
+@cli_main
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--limit", type=int, default=None)
@@ -137,3 +141,4 @@ def main() -> int:
 
 if __name__ == "__main__":
     sys.exit(main())
+

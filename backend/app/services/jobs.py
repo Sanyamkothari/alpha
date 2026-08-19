@@ -20,6 +20,7 @@ from __future__ import annotations
 import json
 import math
 from pathlib import Path
+import queue
 import threading
 import time
 import traceback
@@ -125,7 +126,26 @@ class JobRegistry:
         )
         self._jobs: dict[str, Job] = {}
         self._lock = threading.Lock()
+        self._sim_queue: queue.Queue[Callable[[], None]] = queue.Queue()
+        self._sim_worker_started = False
         self._load_and_recover()
+
+    def _ensure_sim_worker(self) -> None:
+        with self._lock:
+            if not self._sim_worker_started:
+                def worker_loop() -> None:
+                    while True:
+                        task = self._sim_queue.get()
+                        try:
+                            task()
+                        except Exception as e:
+                            log.error("sim_worker_error", error=str(e))
+                        finally:
+                            self._sim_queue.task_done()
+
+                t = threading.Thread(target=worker_loop, name="sim-job-worker", daemon=True)
+                t.start()
+                self._sim_worker_started = True
 
     def _load_and_recover(self) -> None:
         with self._lock:
@@ -208,7 +228,7 @@ class JobRegistry:
         total: int = 0,
         **kwargs: Any,
     ) -> Job:
-        """Start ``fn`` on a background thread. ``fn`` receives ``job_id``."""
+        """Start ``fn`` on a background thread or queue if simulation-bearing. ``fn`` receives ``job_id``."""
         job = Job(
             id=uuid.uuid4().hex[:12],
             kind=kind,
@@ -242,7 +262,11 @@ class JobRegistry:
                 log.warning("job_failed", job=job.id, kind=kind, error=str(exc))
                 log.debug("job_traceback", tb=traceback.format_exc())
 
-        threading.Thread(target=runner, name=f"job-{job.id}", daemon=True).start()
+        if kind in ("run_family", "fill"):
+            self._ensure_sim_worker()
+            self._sim_queue.put(runner)
+        else:
+            threading.Thread(target=runner, name=f"job-{job.id}", daemon=True).start()
         return job
 
     def get(self, job_id: str) -> Job | None:
@@ -368,6 +392,19 @@ def run_family_job(*, job_id: str, params: RunFamilyParams) -> dict[str, Any]:
             "failed": batch.failed,
             "passed_all_checks": batch.passed_all_checks,
         }
+        # Post-batch PnL fetch for passing alphas
+        from app.models.results import AlphaMetric
+        from app.services.correlation import ensure_alpha_pnl
+        from sqlalchemy import select
+
+        with session_scope() as db:
+            for aid in ids:
+                m = db.execute(select(AlphaMetric).where(AlphaMetric.alpha_id == aid)).scalars().first()
+                if m and m.passed_all_checks:
+                    try:
+                        ensure_alpha_pnl(db, aid, allow_remote_fetch=True)
+                    except Exception as exc:
+                        log.warning("pnl_fetch_failed", alpha_id=aid, error=str(exc))
 
     return {
         "family_key": family_key,

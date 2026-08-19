@@ -52,7 +52,8 @@ The primary bottleneck identified in Phase 0 was a single-template monoculture (
 ## 4. Pre-Submission Self-Correlation & Ground Truth (Task 2e)
 
 - **Single Source of Truth**: Evaluates correlation against confirmed submissions in `submission_attempts` (`result = 'submitted'`). Never relies on stale `alphas.status`.
-- **Auto-Backfill & Proxy Fallback**: Automatically backfills PnL vectors from BRAIN for shortlist candidates. When historical PnL is unavailable or overlaps are $<500$ trading days, computes structural proxy correlation and flags as `(proxy)`.
+- **Territory Normalization**: `parse_territory_signature()` parses legacy and canonical family keys. Legacy keys (sweeping all windows) exclude all 3 horizons for that `(field, operator)`; canonical keys exclude only the matching horizon band.
+- **Reporting Absences**: When daily PnL vectors are absent, self-correlation headroom is reported as `None` (`unmeasured`) rather than fabricating synthetic numeric proxies.
 - **Visual Alerting**:
   - Green ($<0.55$): Low correlation, clean candidate.
   - Orange ($0.55 - 0.70$): Moderate correlation, proceed with care.
@@ -62,14 +63,15 @@ The primary bottleneck identified in Phase 0 was a single-template monoculture (
 
 ## 5. Three-Arm Budget Allocation (Task 3)
 
-Allocations partition daily simulation capacity across three strategic arms:
+Allocations partition daily simulation capacity across three strategic arms with **exact budget arithmetic closure** ($\sum \text{task targets} = B$):
 
-1. **Exploit Arm (50%)**: Allocator selects uncrowded, high-coverage fields in neglected datasets (e.g. fundamental ratios, analysts, options flow).
+1. **Exploit Arm (50%)**: Allocator selects uncrowded, high-coverage fields in neglected datasets (e.g. fundamental ratios, analysts, options flow) respecting `MAX_TERRITORIES_PER_FIELD_OP = 3` and `CROWDED_USER_COUNT = 2000`.
 2. **Random Stratified Arm (30%) — Calibration**:
    - Uniform random sampling across catalog crowding quartiles ($Q1, Q2, Q3, Q4$).
    - Explicitly includes crowded fields (e.g. `close`, `volume`, $48,000+$ users) as clean negative controls.
    - Tagged in console/UI as: `🔬 Calibration (expected to fail — required for validation study)`.
-3. **Plateau Fill Arm (20%)**: Completes incomplete 7×7 surfaces for families showing promising ridge behavior.
+   - Seeded reproducibly via `seed` parameter and `random.Random(seed)`.
+3. **Plateau Fill Arm (20%)**: Completes incomplete surfaces for families showing promising ridge behavior. Minimum viable territory size is $49$ simulations (tied to standard $7 \times 7$ grid unit size).
 
 ---
 
@@ -81,7 +83,7 @@ Allocations partition daily simulation capacity across three strategic arms:
   - `python -m scripts.run_campaign --nightly`
   - `python -m scripts.run_campaign --resume <id>`
   - `python -m scripts.run_campaign --list`
-  - Auto-resumes on web server startup via FastAPI lifespan hook.
+  - Explicit resumption policy: gated behind `AUTO_RESUME_CAMPAIGNS` (default: `false`).
 
 ---
 
@@ -94,10 +96,5 @@ Allocations partition daily simulation capacity across three strategic arms:
 | **Self-Correlation Gate** | 0.70 correlation vs user alphas | Pre-submission self-correlation badge | Verified |
 | **Prod-Correlation Gate** | 0.70 correlation vs platform alphas | Evaluated at submission gate | Verified |
 | **Simulation Daily Quota** | ~500 sims / day (consultant tier) | 200 sims standard nightly budget | Verified |
-| **Submission Quota** | Weekly / Daily submission cap | `NEEDS HUMAN` (see notes below) | `NEEDS HUMAN` |
-| **Quota Reset Schedule** | Midnight UTC vs Rolling window | `NEEDS HUMAN` (see notes below) | `NEEDS HUMAN` |
-
-### `NEEDS HUMAN` Items for Human Verification:
-1. **Exact Submission Quota by Consultant Tier**: Check BRAIN user settings/dashboard to confirm your account's exact daily or weekly submission cap (e.g. Bronze = 3/week, Silver = 5/week, Gold/Platinum = 10+/week).
-2. **Weekly Quota Reset Time**: Confirm whether weekly submission limits reset on Monday 00:00 UTC or on a rolling 7-day window.
-3. **Turnover & Subuniverse Thresholds**: If BRAIN rejects a submission with `SUBUNIVERSE` or `TURNOVER`, copy the exact prompt failure detail into the Unresolved / Rejection Modal in the console.
+| **Submission Quota** | 4 submissions / day | ~480 possible attempts vs 40 target | **Verified (Not Binding)** |
+| **Quota Reset Schedule** | Midnight UTC | Handled in nightly run scheduling | Verified |

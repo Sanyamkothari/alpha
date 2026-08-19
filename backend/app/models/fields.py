@@ -57,6 +57,8 @@ class DataField(IdMixin, TimestampMixin, Base):
     unit: Mapped[str | None] = mapped_column(String(32))
 
     # Confidence of the auto-classification (Haiku bulk pass); 1.0 for seeded.
+    # Conflation note: in practice triage writes 1.0 (usable) or 0.0 (unusable),
+    # acting as a binary usable filter rather than a continuous probability.
     classification_confidence: Mapped[float | None] = mapped_column(Float)
 
     dataset: Mapped[Dataset | None] = relationship(back_populates="fields")

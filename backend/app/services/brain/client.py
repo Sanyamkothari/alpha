@@ -102,25 +102,22 @@ class SimulationSettings:
 
 
 def normalize_is_block(is_block: dict[str, Any]) -> dict[str, Any]:
-    """Convert an ``is`` block into the units the importer expects.
-
-    Only ``margin`` needs touching: BRAIN reports it as a fraction of notional
-    while ``alpha_metrics.margin_bps`` stores basis points. Left unconverted a
-    3.35 bps margin lands in the database as 0.000335 — wrong by 10,000x, and
-    wrong quietly, which is worse.
-    """
-    # Margin conversion now lives in result_import._margin_to_bps, so BOTH the
-    # API path and the paste/CSV path apply exactly one rule. Converting here as
-    # well would double it to 100,000,000x.
+    """Pass-through copy of raw BRAIN is simulation metrics payload."""
     return dict(is_block)
+
+
+_ACCOUNT_SLOTS = threading.BoundedSemaphore(MAX_CONCURRENT_SIMULATIONS)
 
 
 @dataclass
 class BrainClient:
-    """Authenticated BRAIN session.
+    """Read/simulate client for WorldQuant BRAIN's REST API.
 
-    Use as a context manager. Thread-safe for concurrent simulations up to
-    :data:`MAX_CONCURRENT_SIMULATIONS`.
+    Thread-safe. A single instance can be shared across workers, or workers can
+    construct their own — both share the account-wide simulation slot cap
+    ``_ACCOUNT_SLOTS`` (3 in flight) and refresh auth transparently on expiry.
+
+    Context-manager support closes the underlying HTTP client cleanly.
     """
 
     email: str = ""
@@ -270,13 +267,14 @@ class BrainClient:
             "settings": sim_settings.to_payload(),
         }
 
-        with self._slots:
-            started = time.monotonic()
-            location = self._submit_simulation(payload)
-            alpha_id = self._await_alpha(location, poll_seconds, max_wait_seconds)
-            if timing is not None:
-                timing["seconds"] = round(time.monotonic() - started, 1)
-            return alpha_id
+        with _ACCOUNT_SLOTS:
+            with self._slots:
+                started = time.monotonic()
+                location = self._submit_simulation(payload)
+                alpha_id = self._await_alpha(location, poll_seconds, max_wait_seconds)
+                if timing is not None:
+                    timing["seconds"] = round(time.monotonic() - started, 1)
+                return alpha_id
 
     def _submit_simulation(self, payload: dict[str, Any], *, attempts: int = 6) -> str:
         """POST the simulation, retrying while the account's 3 slots are full.
@@ -350,16 +348,18 @@ class BrainClient:
             "regular": "close",
             "settings": sim_settings.to_payload(),
         }
-        resp = self._client.post("/simulations", json=payload)
-        if resp.status_code == 401:
-            self.authenticate()
-            resp = self._client.post("/simulations", json=payload)
-        if resp.status_code == 201:
-            return True, "ok"
-        if resp.status_code == 429:
-            # Slots busy says nothing about availability — assume usable.
-            return True, "concurrency limit hit during preflight; assuming available"
-        return False, f"{resp.status_code} {resp.text[:200]}"
+        with _ACCOUNT_SLOTS:
+            with self._slots:
+                resp = self._client.post("/simulations", json=payload)
+                if resp.status_code == 401:
+                    self.authenticate()
+                    resp = self._client.post("/simulations", json=payload)
+                if resp.status_code == 201:
+                    return True, "ok"
+                if resp.status_code == 429:
+                    # Slots busy says nothing about availability — assume usable.
+                    return True, "concurrency limit hit during preflight; assuming available"
+                return False, f"{resp.status_code} {resp.text[:200]}"
 
     def alpha(self, alpha_id: str) -> dict[str, Any]:
         return self.get_json(f"/alphas/{alpha_id}")
@@ -391,3 +391,11 @@ class BrainClient:
 
     def operators(self) -> list[dict]:
         return self.get_json("/operators")
+
+    def self_correlation(self, alpha_id: str) -> dict[str, Any]:
+        """Fetch authoritative platform self-correlation (GET /alphas/{id}/correlations/self)."""
+        return self.get_json(f"/alphas/{alpha_id}/correlations/self")
+
+    def prod_correlation(self, alpha_id: str) -> dict[str, Any]:
+        """Fetch authoritative production correlation (GET /alphas/{id}/correlations/prod)."""
+        return self.get_json(f"/alphas/{alpha_id}/correlations/prod")
