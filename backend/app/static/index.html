@@ -234,7 +234,7 @@ details.acc[open] summary::before{content:"▾ "}
 .mini{border:1px solid var(--border);border-radius:var(--r-ctl);padding:5px;cursor:pointer;
   background:var(--sunken)}
 .mini.on{border-color:var(--fg);box-shadow:0 0 0 1px var(--fg)}
-.mini .g{display:grid;grid-template-columns:repeat(6,7px);gap:1px}
+.mini .g{display:grid;gap:1px}
 .mini .g i{height:7px;border-radius:1px;display:block}
 .mini .lab{font-size:9px;color:var(--fg-faint);font-family:var(--font-mono);margin-top:3px}
 
@@ -303,7 +303,7 @@ table.data td.t{font-family:var(--font-ui)}
           <h3>Next up — allocator</h3>
           <div id="sugs"></div>
           <p class="faint" style="font-size:11px;margin-top:8px">
-            Capped at 20% per dataset — concentrating produces correlated alphas,
+            Capped at max 20% per dataset (at least 1 per dataset) — concentrating produces correlated alphas,
             and BRAIN pays only for uncorrelated ones.</p>
         </div>
       </aside>
@@ -626,7 +626,7 @@ function renderVerdict(){
     // The zero-survivor morning is statistically the normal one, so it gets a
     // real layout and auto-expands the near-misses rather than showing a void.
     $("#verdict").innerHTML=`<div class="big">Nothing survived the filter.</div>
-      <p>${c.simulated} simulated · ${c.passing} cleared BRAIN's checks · 0 sat on a plateau${
+      <p>${c.simulated} simulated · ${c.passing} cleared BRAIN's checks · ${c.plateau ?? 0} sat on a plateau${
         bar?` · bar was ${fx(bar)}`:""}.<br>That is the normal outcome for most batches.</p>`;
     $("#missAcc").open=true;
   }else{
@@ -935,7 +935,11 @@ function renderSpend(){
 }
 function renderSugs(){
   $("#sugs").innerHTML=S.sugs.map((s,i)=>`<button class="sug" onclick="launch(${i})">
-    <span class="f">${s.field_code}</span>${s.denominator?`<span class="faint"> / ${s.denominator}</span>`:""}
+    <div style="display:flex;justify-content:space-between;align-items:baseline">
+      <span class="f">${s.field_code}</span>
+      <span class="chip faint" style="font-size:10px">${s.operator_family||'ts_zscore'}:${s.horizon_band||'med'}${s.wrapper_shape?` (${s.wrapper_shape})`:''}</span>
+    </div>
+    ${s.denominator?`<div class="faint" style="font-size:11px">denom: ${s.denominator}</div>`:""}
     <span class="r">${s.reason}</span></button>`).join("")
     ||`<p class="faint" style="font-size:12px">no suggestions</p>`;
 }
@@ -1359,6 +1363,7 @@ function openSurface(){
   p.surfaces.forEach((s,i)=>{
     const m=document.createElement("div"); m.className="mini"+(i===S.si?" on":"");
     const g=document.createElement("div"); g.className="g";
+    g.style.gridTemplateColumns = `repeat(${p.windows.length},7px)`;
     p.decays.forEach(d=>p.windows.forEach(w=>{
       const c=s.cells[`${w}:${d}`],el=document.createElement("i");
       if(!c||!c.simulated) el.style.border="1px dashed var(--border-strong)";
@@ -1373,6 +1378,12 @@ function openSurface(){
   grid.appendChild(heatmap(p,p.surfaces[S.si],r,true));
   $("#surfaceOverlay").classList.add("on");
 }
+[["surfaceOverlay",closeSurface],["outcomeOverlay",closeOutcome],
+ ["unresolvedOverlay",closeUnresolvedModal],["rejectionModal",closeRejectionModal],
+ ["helpOverlay",closeHelp]].forEach(([id,close])=>{
+  const el=$("#"+id);
+  if(el) el.addEventListener("mousedown",e=>{ if(e.target.id===id) close(); });
+});
 addEventListener("keydown",e=>{
   if(e.metaKey||e.ctrlKey||e.altKey) return;
   if(/^(INPUT|TEXTAREA|SELECT)$/.test(e.target.tagName)) return;

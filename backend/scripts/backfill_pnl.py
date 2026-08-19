@@ -22,14 +22,21 @@ from app.services.pnl_storage import get_pnl_store
 log = structlog.get_logger("backfill_pnl")
 
 
-def backfill_all(limit: int | None = None) -> dict[str, int]:
+def backfill_all(
+    limit: int | None = None,
+    family_key: str | None = None,
+    strict: bool = False,
+) -> dict[str, int]:
     store = get_pnl_store()
     stats = {"remote_fetched": 0, "matched": 0, "saved": 0, "reconciled": 0, "failed": 0, "skipped": 0}
 
     from app.services.subperiod import verify_pnl_reconciliation
 
     with session_scope() as db:
-        db_alphas = db.query(Alpha).all()
+        query = db.query(Alpha)
+        if family_key:
+            query = query.filter(Alpha.family_key == family_key)
+        db_alphas = query.all()
         expr_to_alpha = {}
         for a in db_alphas:
             expr_to_alpha[(a.expression.strip(), a.neutralization, a.decay)] = a
@@ -63,6 +70,8 @@ def backfill_all(limit: int | None = None) -> dict[str, int]:
                 r_id = ra.get("id")
                 if not r_id:
                     stats["failed"] += 1
+                    if strict:
+                        raise ValueError(f"Alpha #{local_alpha.id} missing remote ID on BRAIN response")
                     continue
 
                 try:
@@ -71,34 +80,63 @@ def backfill_all(limit: int | None = None) -> dict[str, int]:
                     if records:
                         dates = [str(r[0]) for r in records]
                         pnl = np.array([float(r[1]) for r in records], dtype=float)
-                        store.save_pnl(local_alpha.id, dates, pnl)
-                        stats["saved"] += 1
-
                         rep_sr = float((ra.get("is") or {}).get("sharpe", 0.0))
-                        rec = verify_pnl_reconciliation(local_alpha.id, rep_sr, store, sharpe_tolerance=0.10)
-                        if rec.is_valid:
-                            stats["reconciled"] += 1
+                        save_res = store.save_pnl(
+                            local_alpha.id,
+                            dates,
+                            pnl,
+                            reported_sharpe=rep_sr,
+                            series_kind="auto",
+                        )
+                        if save_res.saved:
+                            stats["saved"] += 1
+                            if save_res.reconciled:
+                                stats["reconciled"] += 1
+                            elif strict:
+                                raise ValueError(
+                                    f"PnL reconciliation failed for alpha #{local_alpha.id}: {save_res.rejection_reason}"
+                                )
+                        else:
+                            log.warning("pnl_backfill_rejected", alpha_id=local_alpha.id, reason=save_res.rejection_reason)
+                            stats["failed"] += 1
+                            if strict:
+                                raise ValueError(
+                                    f"PnL save failed for alpha #{local_alpha.id}: {save_res.rejection_reason}"
+                                )
                     else:
                         stats["failed"] += 1
+                        if strict:
+                            raise ValueError(f"No daily PnL records returned for alpha #{local_alpha.id} (remote {r_id})")
                 except Exception as exc:
                     log.warning("pnl_fetch_failed", alpha_id=local_alpha.id, remote_id=r_id, error=str(exc))
                     stats["failed"] += 1
+                    if strict:
+                        raise
     except Exception as exc:
         print(f"BRAIN client unavailable: {exc}. No synthetic PnL will be written.")
+        if strict:
+            raise
         return stats
 
     print(f"Backfill complete: {stats}")
     return stats
 
 
+from scripts._cli import cli_main
+
+
+@cli_main
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("--limit", type=int, default=None)
+    ap.add_argument("--limit", type=int, default=None, help="Limit number of remote alphas to inspect")
+    ap.add_argument("--family", type=str, default=None, help="Only backfill for alphas matching this family_key")
+    ap.add_argument("--strict", action="store_true", help="Fail with exception if any PnL fails reconciliation")
     args = ap.parse_args()
 
-    backfill_all(limit=args.limit)
+    backfill_all(limit=args.limit, family_key=args.family, strict=args.strict)
     return 0
 
 
 if __name__ == "__main__":
     sys.exit(main())
+

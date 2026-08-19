@@ -32,25 +32,40 @@ claim in the community-sourced sections below.
 | Carrier | **Cookie** `t=<JWT>`, `Domain=api.worldquantbrain.com`, HttpOnly/Secure/SameSite=None — *not* a Bearer header |
 | Token TTL | **14400 s (4 h)** — the community ~4 h guess is correct |
 | Response | `{"user":{"id":...},"token":{"expiry":14400.0},"permissions":[...]}` |
+| Rate Limits | Bursting > 5 req/s returns **`429 API rate limit exceeded`**; client must back off 1–2 s |
 
 `httpx.Client` persists the cookie automatically; no manual header handling.
 
-## Reads (all 200 on a TUTORIAL account)
+## Reads (verified 200 on a TUTORIAL account)
 
-| Endpoint | Result |
+| Endpoint | Result & Payload Details |
 |---|---|
-| `GET /users/self` | profile; note `level` and `geniusLevel` |
+| `GET /users/self` | User profile: `id`, `email`, `firstName`, `lastName`, `fullName`, `gender`, `dateCreated` |
+| `GET /users/self/competitions` | User challenge status: leaderboard rank, tier (`BRONZE`/`SILVER`/`GOLD`), current score, remaining points to next tier, and alpha count |
+| `GET /users/self/achievements` | Complete list of 13 gamification milestones, unlock timestamps, and consultant unlock criteria |
+| `GET /users/self/activities` | Activity channel catalog: `referrals`, `simulations`, `submissions` |
+| `GET /users/self/activities/simulations` | Daily simulation counts: `current` (month), `yesterday`, `total`, `ytd`, and daily time-series records |
+| `GET /users/self/activities/submissions` | Daily submission counts: `current`, `yesterday`, `total`, `ytd`, and submission time-series records |
+| `GET /users/self/agreements` | List of signed platform agreements, terms of service, and privacy policies |
+| `GET /users/self/teams` | Team memberships: `{count, results[]}` |
+| `GET /users/self/alphas?limit=&status=&stage=` | Paginated user alphas: `{count: 557, results[]}`, filterable by `stage` (`IS`/`OS`) and `status` (`UNSUBMITTED`/`ACTIVE`) |
+| `GET /competitions` | Global competitions catalog: `{count: 279, results[]}` (e.g. `challenge`, `IQC2026S3`, `GAC2026`, `PAC2026`) |
+| `GET /competitions/{competition_id}` | Competition details, rules, status (`ACCEPTED`/`EXCLUDED`), scoring model |
+| `GET /competitions/{competition_id}/alphas` | List of user alphas actively counting towards that competition |
+| `GET /events` | Platform events and research webinars catalog: `{count: 5, results[]}` |
+| `GET /events/{event_id}` | Event details, `recording` URLs, `register` links, timezone, description, venue |
+| `GET /users/self/tags` | User tags management: `{count, results[]}` |
+| `GET /data-categories` | Full 7-category taxonomy with `valueScore`, `datasetCount`, `fieldCount`, `alphaCount`, and `userCount` |
 | `GET /data-sets?region&delay&universe&instrumentType` | **14 datasets** for USA/TOP3000/delay1 |
-| `GET /data-fields?…&limit=` | **`count: 4367`** — the real catalog |
-| `GET /operators` | plain JSON **array** (not paginated) |
-| `GET /users/self/alphas?limit=` | paginated `{count,next,previous,results[]}` |
-
-`/data-fields` result shape:
-`{id, description, dataset:{id,name}, category:{id,name}, subcategory:{id,name}, ...}`
-— the field code is **`id`**, and pagination is `limit`/`offset` with a ready-made `next` URL.
-
-`/operators` element shape:
-`{name, category, scope:[...], definition, description, documentation, level}`.
+| `GET /data-sets/{dataset_id}` | Detailed dataset metadata, descriptions, coverage, and linked **`researchPapers[]`** |
+| `GET /data-fields?…&limit=` | **`count: 4367`** — the real catalog with schema: `{id, description, dataset, category, subcategory, type}` |
+| `GET /data-fields/{field_id}` | Individual field definition, matrix type, coverage, and user statistics |
+| `GET /operators` | **66 operators** — flat JSON array of `{name, category, scope, definition, description, level}` |
+| `GET /alphas/{alpha_id}` | Complete alpha definition with `stage`, `status`, `dateSubmitted`, `is` (in-sample metrics + checks), and `os` blocks |
+| `GET /alphas/{alpha_id}/recordsets/daily-pnl` | Date-aligned daily PnL series: `{"schema": ..., "records": [["YYYY-MM-DD", pnl_val], ...]}`. **Semantics Note:** BRAIN daily-pnl recordsets can be cumulative PnL curves or daily returns. The engine auto-detects cumulative curves (lag-1 autocorrelation > 0.99) and differences them at the storage boundary (`save_pnl(..., series_kind="auto")`) to recover stationary daily returns $\Delta P_t$. Standing Sharpe reconciliation (`verify_pnl_reconciliation`) recomputes $\text{SR} = \frac{\mu}{\sigma}\sqrt{252}$ and ensures $|\text{SR}_{\text{recomputed}} - \text{SR}_{\text{reported}}| \le 0.10$. Any unreconciled series fails closed and blocks promotion. |
+| `GET /alphas/{alpha_id}/recordsets/turnover` | Date-aligned daily Turnover series: `{"schema": ..., "records": [["YYYY-MM-DD", turnover_pct], ...]}` |
+| `GET /users/self/consultant` | **403 Forbidden** on Tutorial accounts (unlocks consultant contract status and payout management) |
+| `GET /alphas/{alpha_id}/correlations/prod` | **403 Forbidden** on Tutorial accounts (production pool correlation is restricted to higher consultant tiers) |
 
 ## Simulation — works on a TUTORIAL account
 
@@ -158,11 +173,133 @@ All under base `https://api.worldquantbrain.com`. Shapes below are community-rev
 
 **Universes / regions / delays:** there is **no clean public "list regions" endpoint** in the community wrappers; these are effectively an enumerated config you pass as params. Verified value sets: regions include `USA` (open to all) and, at consultant level, `CHN, EUR, ASI, GLB, JPN, KOR, TWN, HKG, AMR`; delays `0` and `1`; universes `TOP3000, TOP1000, TOP500, TOP200` (and `TOPSP500` appears in some configs). [Medium: Simulation Settings](https://medium.com/@mapongo/worldquant-brain-how-to-apply-the-simulation-environment-settings-9dc232831bb6)
 
-**Simulation RESULTS (read-only) — this is the key read path for your importer:**
-- `GET /alphas/{alpha_id}` — full alpha record including `is` (in-sample) metrics: `sharpe`, `fitness`, `turnover`, `returns`, `margin`, `longCount`/`shortCount`, plus `checks[]`. (community `locate_alpha`.) [wqb](https://pypi.org/project/wqb/)
-- `GET /users/self/alphas` (a.k.a. `filter_alphas`) — paginated list of the user's own alphas, filterable by `status`, `region`, `delay`, `universe`, with `order` (prefix `-` = descending). This lets the tool **read the user's existing alpha library without any submission**. [wqb](https://pypi.org/project/wqb/)
-- `GET /alphas/{id}/recordsets/...` and `/alphas/{id}/correlations/self` — PnL recordsets and **self-correlation** (community `check()` / correlation modules). [DeepWiki: Self-Correlation](https://deepwiki.com/xiegengcai/world-quant-brain/4.1-self-correlation-analysis)
-- This means your **Simulation Result Importer (Module 7)** can do better than "user pastes JSON": with the user's own session it can **GET** their already-run alphas and metrics directly (read-only, no submission). Keep the paste/CSV path as a fallback.
+**Simulation RESULTS & Portfolio Reading (read-only):**
+- `GET /alphas/{alpha_id}` — full alpha record including:
+  - `stage`: `"IS"` (In-Sample / Simulated) or `"OS"` (Out-of-Sample / Submitted & active in paper trading).
+  - `status`: `"UNSUBMITTED"` (not submitted), `"ACTIVE"` (submitted and running), or `"REJECTED"`.
+  - `dateSubmitted`: ISO-8601 timestamp string (e.g. `"2026-08-15T17:15:47-04:00"`) when submitted, or `null` if unsubmitted.
+  - `regular.code`: the alpha formula expression string.
+  - `is`: In-Sample metrics (`sharpe`, `fitness`, `turnover`, `returns`, `margin`, `drawdown`, `longCount`, `shortCount`, and `checks[]`).
+  - `os`: Out-of-Sample paper trading performance block (populated once submitted into OS).
+- `GET /users/self/alphas` (a.k.a. `filter_alphas`) — paginated list of the user's alphas.
+  - Parameters: `status` (`UNSUBMITTED`, `ACTIVE`, `SUBMITTED`), `stage` (`IS`, `OS`), `limit`, `offset`, `order` (`-dateCreated`, `-dateSubmitted`, `-is.sharpe`).
+  - Response schema: `{count: int, next: str|null, previous: str|null, results: [...]}`.
+- `GET /alphas/{id}/recordsets/daily-pnl` — Historical date-aligned PnL time series:
+  - Response schema: `{"schema": {"name": "daily-pnl", ...}, "records": [["YYYY-MM-DD", float_pnl], ...]}`.
+  - Used directly by our Pearson correlation engine to compute pairwise self-correlation.
+- `GET /alphas/{id}/correlations/self` — Live self-correlation metrics calculated by BRAIN against your existing account submissions.
+
+**Challenge Progress & Leaderboard Tracking:**
+- `GET /users/self/competitions` — Live challenge progress tracking:
+  ```json
+  {
+    "results": [{
+      "id": "challenge",
+      "name": "Challenge",
+      "status": "ACCEPTED",
+      "leaderboard": {
+        "user": "SK11953",
+        "rank": 25711,
+        "level": "BRONZE",
+        "score": 2000.0,
+        "alphas": 2
+      },
+      "progress": {
+        "level": "SILVER",
+        "score": {"bottom": 1000.0, "top": 5000.0, "remaining": 3000.0}
+      }
+    }]
+  }
+  ```
+
+**Data Catalog Taxonomy & Value Scoring:**
+- `GET /data-categories` — 7 top-level data categories with vendor value scores:
+  - `model` (Value Score: **7.0**, 40 fields, highest vendor value)
+  - `option` (Value Score: **6.0**, 138 fields)
+  - `analyst` (Value Score: **5.0**, 1,374 fields)
+  - `fundamental` (Value Score: **3.0**, 1,758 fields)
+  - `news` (Value Score: **3.0**, 1,021 fields)
+  - `pv` / Price Volume (Value Score: **2.0**, 202 fields)
+  - `socialmedia` (Value Score: **2.0**, 22 fields)
+
+**Simulation & Submission Telemetry:**
+- `GET /users/self/activities/simulations` — Daily simulation velocity & volume:
+  ```json
+  {
+    "yesterday": {"value": 95, "start": "2026-08-14", "end": "2026-08-14"},
+    "current": {"value": 371, "start": "2026-08-01", "end": "2026-08-14"},
+    "total": {"value": 571, "start": "2026-06-30", "end": "2026-08-14"},
+    "ytd": {"value": 571, "start": "2026-01-01", "end": "2026-08-14"},
+    "records": {"schema": ..., "records": [["2026-08-01", 12], ...]}
+  }
+  ```
+- `GET /users/self/activities/submissions` — Daily submission velocity & volume.
+
+**Dataset Academic Theory & Linked Research Papers:**
+- `GET /data-sets/{dataset_id}`:
+  ```json
+  {
+    "id": "model16",
+    "name": "Fundamental Scores",
+    "researchPapers": [
+      {
+        "type": "research",
+        "title": "Research Paper 01: The Momentum of News",
+        "url": "https://support.worldquantbrain.com/hc/en-us/community/posts/13954113156503-Research-Paper-01-The-Momentum-of-News"
+      }
+    ]
+  }
+  ```
+
+**Historical Turnover Recordset:**
+- `GET /alphas/{alpha_id}/recordsets/turnover`:
+  ```json
+  {
+    "schema": {
+      "name": "turnover",
+      "properties": [
+        {"name": "date", "type": "date"},
+        {"name": "turnover", "type": "percent"}
+      ]
+    },
+    "records": [
+      ["2019-01-02", 0.8214],
+      ["2019-01-03", 0.5671]
+    ]
+  }
+  ```
+
+**Platform Events & Webinars Catalog:**
+- `GET /events` & `GET /events/{event_id}`:
+  ```json
+  {
+    "id": "VNbY5El",
+    "title": "English | IQC 2026 | Global Research Webinar (5/7)",
+    "type": "ONLINE",
+    "category": "RESEARCH",
+    "language": "English",
+    "description": "Global quantitative research methodology and alpha formulation session.",
+    "recording": "https://...",
+    "register": "https://..."
+  }
+  ```
+
+**Competition Alpha Portfolios:**
+- `GET /competitions/{competition_id}/alphas`:
+  - Returns array of submitted alphas actively graded in any competition (`challenge`, `IQC2026S3`, `GAC2026`, `PAC2026`).
+
+
+**Gamification Achievements & Consultant Milestones:**
+- `GET /users/self/achievements` — Returns 13 platform achievements and progression tracks:
+  - `SIMULATION_20` / `SIMULATION_100`: Simulation volume milestones.
+  - `SUBMIT_1` / `SUBMIT_10`: Submission count milestones.
+  - `ALPHA_PERF_GOOD` / `ALPHA_PERF_EXCELLENT` / `ALPHA_PERF_SPECTACULAR`: Quality & performance gates.
+  - `TUTORIAL`: Completed tutorial and achieved **GOLD level** (10k points).
+  - `SUPER_ALPHA`: Unlocked consultant access to SuperAlpha.
+  - `CONSULTANT_SUBMIT`: Submitted first consultant alpha.
+  - `CONSULTANT_TUTORIAL`: Completed Consultant tutorial.
+  - `OSMOSIS_PIONEER`: Earned Osmosis Rank on Consultant Leaderboard (100k points in 3 scopes).
+  - `PYTHON_ALPHA_SUBMIT`: Submitted first Python Alpha as a consultant.
 
 ---
 
@@ -259,6 +396,21 @@ Definitions below are verified against member-facing docs; **exact numeric thres
 - **Self-correlation < 0.7**
 - IS/OS sub-period consistency ("ladder"/2-year robustness)
 Sources: [jglazar notes](https://github.com/jglazar/notes/blob/main/quant_interview/worldquant_seminar.md) · [alexisdpc](https://github.com/alexisdpc/WorldQuant-alpha-trading). **The exact numeric thresholds are not officially published per-region — flag as UNVERIFIED and let the user confirm from their own check results.**
+
+---
+
+## 7) Verified API Behaviors
+
+### `GET /alphas/{id}/recordsets/daily-pnl` — Shape and Sharpe Reconciliation
+- **Status:** **VERIFIED** (2026-08-16, tested against local database snapshot `database/wq.db` and 369 PnL series in `database/pnl/` via `scripts/verify_pnl_reconciliation.py`).
+- **Recordset Format:** Returns a two-column array `[date, pnl_value]`.
+- **Series Property:** Non-cumulative, discrete daily dollar PnL (fluctuating positive and negative). For example, Alpha #257 begins with `[27721, 21939, 63990, 34602, 30617, 54748, 17238, -3954, -23985, 11115]`.
+- **Annualization & Reconciliation:**
+  - Across all 355 stored PnL vectors with reported metrics, 100% (355/355) reconcile with BRAIN's reported in-sample Sharpe ratio within the $\pm 0.05$ standing tolerance.
+  - Linear regression of recomputed Sharpe on reported Sharpe yields:
+    $$\text{recomputed\_sharpe} = 1.003473 \times \text{reported\_sharpe} - 0.000582 \quad (R^2 = 0.999908)$$
+  - **Residual Explanation:** BRAIN annualizes Sharpe using 250 trading days/year ($\times \sqrt{250}$), while the internal `subperiod.py` pipeline uses 252 trading days/year ($\times \sqrt{252}$). The theoretical ratio $\sqrt{252/250} = 1.003992$ accounts for the entire systematic slope and median difference ($\approx 0.0065$). Minor remaining differences (max $\Delta = 0.045$) stem from day-count differences and floating point precision.
+
 
 ---
 

@@ -14,7 +14,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from app.models.alphas import Alpha
+from app.models.alphas import Alpha, SubmissionAttempt
 from app.models.enums import AlphaStatus
 from app.services.correlation import (
     compute_correlation_matrix,
@@ -78,7 +78,9 @@ def test_sub_500_day_overlap_rejection(tmp_path, db_session) -> None:
         is_valid=True,
     )
     db_session.add_all([a1, a2])
-    db_session.commit()
+    db_session.flush()
+    db_session.add(SubmissionAttempt(alpha_id=a1.id, result="submitted"))
+    db_session.flush()
 
     # Only 200 common dates (< 500 minimum overlap)
     dates = [f"day_{i:04d}" for i in range(200)]
@@ -86,7 +88,7 @@ def test_sub_500_day_overlap_rejection(tmp_path, db_session) -> None:
     store.save_pnl(a1.id, dates, pnl)
     store.save_pnl(a2.id, dates, pnl)
 
-    # Should NOT trigger empirical correlation due to insufficient overlap
+    # Should NOT trigger empirical correlation due to insufficient overlap (< 500 common days)
     is_corr, reason, max_corr = check_portfolio_empirical_correlation(
         db_session, a2.id, pnl_store=store, min_overlap=500
     )
@@ -118,7 +120,9 @@ def test_portfolio_correlation_gate_threshold(tmp_path, db_session) -> None:
         is_valid=True,
     )
     db_session.add_all([port_alpha, cand_high, cand_low])
-    db_session.commit()
+    db_session.flush()
+    db_session.add(SubmissionAttempt(alpha_id=port_alpha.id, result="submitted"))
+    db_session.flush()
 
     dates = [f"d_{i:04d}" for i in range(600)]
     np.random.seed(42)
@@ -146,12 +150,13 @@ def test_portfolio_correlation_gate_threshold(tmp_path, db_session) -> None:
     assert reason_l is None
 
 
-def test_structural_fallback_when_pnl_missing(db_session) -> None:
+def test_structural_fallback_when_pnl_missing(db_session, tmp_path) -> None:
+    store = PnLStore(tmp_path / "pnl")
     # Portfolio alpha with structural hash
     port_alpha = Alpha(
         expression="rank(ts_delta(close, 5))",
         expression_hash="struct_fall_port",
-        family_key="close@USA/TOP3000/d1",
+        family_key="close_struct_fall@USA/TOP3000/d1",
         feature_json={"structural_hash": "struct_abc123"},
         status=AlphaStatus.SUBMITTED.value,
         is_valid=True,
@@ -160,16 +165,18 @@ def test_structural_fallback_when_pnl_missing(db_session) -> None:
     cand_alpha = Alpha(
         expression="zscore(ts_delta(close, 5))",
         expression_hash="struct_fall_cand",
-        family_key="close@USA/TOP3000/d1",
+        family_key="close_struct_fall@USA/TOP3000/d1",
         feature_json={"structural_hash": "struct_abc123"},
         status=AlphaStatus.TESTING.value,
         is_valid=True,
     )
     db_session.add_all([port_alpha, cand_alpha])
-    db_session.commit()
+    db_session.flush()
+    db_session.add(SubmissionAttempt(alpha_id=port_alpha.id, result="submitted"))
+    db_session.flush()
 
     # Empirical PnL missing -> must fallback to structural check
-    is_corr, reason, _ = check_portfolio_empirical_correlation(db_session, cand_alpha.id)
+    is_corr, reason, _ = check_portfolio_empirical_correlation(db_session, cand_alpha.id, pnl_store=store)
     assert is_corr
     assert "structural correlation collision" in (reason or "")
 

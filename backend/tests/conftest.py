@@ -111,6 +111,16 @@ def _seed(test_session_factory: sessionmaker[Session]) -> None:
                 _op("group_neutralize", "group", _matrix("x", 0), _group("group", 1)),
                 _op("group_rank", "group", _matrix("x", 0), _group("group", 1)),
                 _op("group_zscore", "group", _matrix("x", 0), _group("group", 1)),
+                _op("group_normalize", "group", _matrix("x", 0), _group("group", 1)),
+                _op("hump", "transformational", _matrix("x", 0), OperatorArgument(name="hump", position=1, arg_type="float", required=False, is_window=False, min_value=0.0, max_value=1.0)),
+                _op("regression_neut", "cross_section", _matrix("y", 0), _matrix("x", 1)),
+                _op("days_from_last_change", "time_series", _matrix("x", 0)),
+                _op("vec_avg", "vector", OperatorArgument(name="x", position=0, arg_type="vector", required=True)),
+                _op("vec_sum", "vector", OperatorArgument(name="x", position=0, arg_type="vector", required=True)),
+                _op("vec_count", "vector", OperatorArgument(name="x", position=0, arg_type="vector", required=True)),
+                _op("vec_max", "vector", OperatorArgument(name="x", position=0, arg_type="vector", required=True)),
+                _op("ts_delay", "time_series", _matrix("x", 0), _window("d", 1)),
+                _op("vec_min", "vector", OperatorArgument(name="x", position=0, arg_type="vector", required=True)),
             ]
         )
         ds = Dataset(dataset_code="pv1", name="Price/Volume", region="USA", universe="TOP3000", delay=1)
@@ -132,6 +142,14 @@ def _seed(test_session_factory: sessionmaker[Session]) -> None:
                 ),
                 DataField(
                     field_code="vwap", dataset_id=ds.id, category="price", field_type="MATRIX",
+                    region="USA", universe="TOP3000", delay=1, coverage=1.0, user_count=50,
+                ),
+                DataField(
+                    field_code="adv20", dataset_id=ds.id, category="price", field_type="MATRIX",
+                    region="USA", universe="TOP3000", delay=1, coverage=1.0, user_count=50,
+                ),
+                DataField(
+                    field_code="cap", dataset_id=ds.id, category="fundamentals", field_type="MATRIX",
                     region="USA", universe="TOP3000", delay=1, coverage=1.0, user_count=50,
                 ),
                 DataField(
@@ -180,3 +198,14 @@ def db_session(test_session_factory: sessionmaker[Session]) -> Iterator[Session]
     finally:
         s.rollback()
         s.close()
+
+
+@pytest.fixture(autouse=True)
+def _isolate_pnl_store(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Isolate PnL storage to a temporary directory per test."""
+    from pathlib import Path
+    from app.services import pnl_storage
+
+    store = pnl_storage.PnLStore(tmp_path / "test_pnl")
+    monkeypatch.setattr(pnl_storage, "_default_store", store)
+    monkeypatch.setattr(pnl_storage, "get_pnl_store", lambda: store)

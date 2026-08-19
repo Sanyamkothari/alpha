@@ -8,6 +8,14 @@ from __future__ import annotations
 from app.seeds import load_fields, load_lookups, load_operators
 
 
+def seed_all(db) -> dict[str, dict]:
+    return {
+        "lookups": load_lookups.load(db),
+        "operators": load_operators.load(db),
+        "fields": load_fields.load(db),
+    }
+
+
 def run() -> dict[str, dict]:
     summary = {
         "lookups": load_lookups.run(),

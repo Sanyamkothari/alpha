@@ -160,7 +160,7 @@ def test_leaderboard_sorted_by_sharpe(client: TestClient) -> None:
     client.post(f"/api/alphas/{a}/results", json={"raw": {"sharpe": 0.9, "turnover": 0.2}})
     client.post(f"/api/alphas/{b}/results", json={"raw": {"sharpe": 2.7, "turnover": 0.1}})
 
-    rows = client.get("/api/alphas/leaderboard?sort=sharpe&order=desc&limit=100").json()
+    rows = client.get("/api/alphas/leaderboard?sort=sharpe&order=desc&limit=500").json()
     sharpes = [r["sharpe"] for r in rows]
     assert sharpes == sorted(sharpes, reverse=True)  # monotonic non-increasing
     ids = {r["alpha_id"] for r in rows}

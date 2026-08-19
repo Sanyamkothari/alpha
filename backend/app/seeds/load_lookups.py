@@ -15,17 +15,20 @@ from app.models.fields import Category
 log = structlog.get_logger("seeds.lookups")
 
 
-def run() -> dict[str, int]:
-    with session_scope() as db:
-        existing_cats = {c.name for c in db.query(Category).all()}
-        for cat in FieldCategory:
-            if cat.value not in existing_cats:
-                db.add(Category(name=cat.value))
-
-    with session_scope() as db:
-        counts = {"categories": db.query(Category).count()}
+def load(db: Session) -> dict[str, int]:
+    existing_cats = {c.name for c in db.query(Category).all()}
+    for cat in FieldCategory:
+        if cat.value not in existing_cats:
+            db.add(Category(name=cat.value))
+    db.flush()
+    counts = {"categories": db.query(Category).count()}
     log.info("lookups_seeded", **counts)
     return counts
+
+
+def run() -> dict[str, int]:
+    with session_scope() as db:
+        return load(db)
 
 
 if __name__ == "__main__":

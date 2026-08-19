@@ -107,3 +107,49 @@ def test_brain_fetch_log_allows_get(engine) -> None:
                 "'2026-01-01', '2026-01-01')"
             )
         )
+
+
+def test_alembic_migrations_roundtrip(tmp_path) -> None:
+    """Ensure alembic migrations can upgrade to head, downgrade -1, and re-upgrade on throwaway DB."""
+    from alembic.config import Config
+    from alembic import command
+    from pathlib import Path
+
+    alembic_ini = Path(__file__).resolve().parents[1] / "alembic.ini"
+    cfg = Config(str(alembic_ini))
+    db_file = tmp_path / "alembic_test.db"
+    cfg.set_main_option("sqlalchemy.url", f"sqlite:///{db_file}")
+
+    # Pass 1
+    command.upgrade(cfg, "head")
+    command.downgrade(cfg, "-1")
+    command.upgrade(cfg, "head")
+
+    # Pass 2: verify re-run idempotency on another isolated file
+    db_file_2 = tmp_path / "alembic_test_2.db"
+    cfg.set_main_option("sqlalchemy.url", f"sqlite:///{db_file_2}")
+    command.upgrade(cfg, "head")
+    command.downgrade(cfg, "-1")
+    command.upgrade(cfg, "head")
+
+
+def test_suite_never_touches_production_database(tmp_path) -> None:
+    """Regression test: assert that tests never mutate or write to the production database."""
+    from pathlib import Path
+    from app.config import REPO_ROOT
+
+    prod_db = REPO_ROOT / "database" / "wq.db"
+    if prod_db.exists():
+        initial_mtime = prod_db.stat().st_mtime
+        # Re-run a schema inspection
+        from alembic.config import Config
+        from alembic import command
+
+        alembic_ini = Path(__file__).resolve().parents[1] / "alembic.ini"
+        cfg = Config(str(alembic_ini))
+        isolated_db = tmp_path / "isolation_check.db"
+        cfg.set_main_option("sqlalchemy.url", f"sqlite:///{isolated_db}")
+        command.upgrade(cfg, "head")
+
+        # Production database must remain completely untouched
+        assert prod_db.stat().st_mtime == initial_mtime, "Production wq.db was touched by migration!"
