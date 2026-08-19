@@ -45,6 +45,7 @@ from sqlalchemy.orm import Session
 
 from app.models.alphas import Alpha, SubmissionAttempt
 from app.models.fields import DataField, Dataset
+from app.services.field_health import dead_field_codes
 from app.models.results import AlphaMetric
 from app.services.constructor import (
     DEFAULT_CROSS_SECTION,
@@ -628,6 +629,25 @@ def plan_budget_allocation(
             DataField.field_type == "MATRIX",
         )
     ).all()
+
+    # Fields that have been simulated repeatedly and never once produced a book are not
+    # unpromising territory, they are absent data. Sampling them is not exploration; it
+    # spends a slot to re-learn an answer we already have. Two such fields had 686 alphas
+    # queued against them before anything checked.
+    #
+    # The random stratified arm's scientific value comes from being unbiased about
+    # *crowding*, and this exclusion does not touch that: a dead field cannot be
+    # evidence about crowded-versus-uncrowded either way, because it produces no
+    # observation at all.
+    dead = dead_field_codes(db)
+    if dead:
+        before = len(all_fields)
+        all_fields = [row for row in all_fields if row[0] not in dead]
+        log.info(
+            "stratified_arm_excluded_dead_fields",
+            excluded=before - len(all_fields),
+            fields=sorted(dead),
+        )
 
     quartile_boundaries: list[float] | None = None
     if all_fields and total_simulations >= (2 * sims_per_territory):

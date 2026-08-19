@@ -213,3 +213,58 @@ def test_varied_real_metrics_stay_clean(db_session: Session) -> None:
 
     verdict = next(v for v in classify(db_session) if v.family_key == "varied/real")
     assert verdict.kind == "clean", verdict.evidence
+
+
+# ---------------------------------------------------------------------------
+# Dead-field detection (derived, never stored)
+# ---------------------------------------------------------------------------
+
+
+def test_field_with_no_book_is_dead(db_session: Session) -> None:
+    from app.services.field_health import dead_field_codes, field_health
+
+    code = _seed_field(db_session, "f_dead_health")
+    rows = [
+        {"sharpe": 0.0, "fitness": 0.0, "turnover": 0.0, "returns": 0.0,
+         "longCount": 0, "shortCount": 0}
+    ] * 5
+    _add_family(db_session, "health/dead", rows, code)
+    db_session.flush()
+
+    health = field_health(db_session)[code]
+    assert health.is_dead
+    assert code in dead_field_codes(db_session)
+
+
+def test_field_that_ever_traded_is_not_dead(db_session: Session) -> None:
+    """One empty result among real ones is an expression problem, not a dead field."""
+    from app.services.field_health import field_health
+
+    code = _seed_field(db_session, "f_live_health")
+    rows = [
+        {"sharpe": 0.0, "fitness": 0.0, "turnover": 0.0, "returns": 0.0,
+         "longCount": 0, "shortCount": 0},
+        {"sharpe": 1.4, "fitness": 1.1, "turnover": 0.3, "returns": 0.12,
+         "longCount": 800, "shortCount": 800},
+        {"sharpe": 1.2, "fitness": 1.0, "turnover": 0.25, "returns": 0.10,
+         "longCount": 790, "shortCount": 780},
+    ]
+    _add_family(db_session, "health/live", rows, code)
+    db_session.flush()
+
+    assert not field_health(db_session)[code].is_dead
+
+
+def test_too_few_attempts_is_not_enough_to_retire(db_session: Session) -> None:
+    """Retiring a field on one or two empty results would discard real territory."""
+    from app.services.field_health import MIN_EMPTY_SIMS_TO_RETIRE, field_health
+
+    code = _seed_field(db_session, "f_thin_health")
+    rows = [
+        {"sharpe": 0.0, "fitness": 0.0, "turnover": 0.0, "returns": 0.0,
+         "longCount": 0, "shortCount": 0}
+    ] * (MIN_EMPTY_SIMS_TO_RETIRE - 1)
+    _add_family(db_session, "health/thin", rows, code)
+    db_session.flush()
+
+    assert not field_health(db_session)[code].is_dead
