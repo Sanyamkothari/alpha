@@ -2,6 +2,17 @@
 
 Survey date: 2026-08-21. Reviewed against the repository at `683fe54`.
 
+> [!NOTE]
+> **Superseded in two places by `OPEN_SOURCE_LANDSCAPE_R2.md`.**
+> 1. §2's "CANNOT DETERMINE the binding constraint on 13/day" is answered in our own docs:
+>    `docs/PHASE1_OPERATING_GUIDE.md:11-15` states the 4/day submission quota is not binding,
+>    prescribes a 50→100→200/day ramp, and names diversity as the real constraint.
+> 2. §G5's implication that we lack expression dedup is wrong: `backend/app/models/alphas.py:57`
+>    declares `expression_hash` with a unique index. What is missing is *semantic* equivalence.
+>
+> Round 2 also answers two of the three open questions in `CLAUDE.md` (submission quota and
+> PROD_CORRELATION semantics) and finds four more dead-code modules beyond `calibrate_proxy_rankings`.
+
 ## 0. How to read this
 
 This compares our engine against the open-source and published alpha-mining
