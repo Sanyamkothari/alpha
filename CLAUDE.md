@@ -100,6 +100,7 @@ docs/
 │   ├── BUSINESS_MODEL.md        the eventual product, gated on evidence
 │   ├── PRODUCT_STRATEGY.md      earlier positioning work
 │   ├── ROADMAP.md               phase sequencing and why it was reordered
+│   ├── TERRAIN.md               what ground is reachable, who is on it, what is unknown
 │   └── VALIDATION_PROTOCOL.md   pre-registered study — READ BEFORE ANY ANALYSIS
 └── briefs/                      the task briefs each phase was built from
 ```
