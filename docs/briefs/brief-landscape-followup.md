@@ -429,3 +429,109 @@ started.
 5. **Two facts this plan acts on are not first-hand** — the quota limit and PROD_CORRELATION semantics
    come from community captures on other people's accounts. W2 is designed so our own account settles
    the first. The second remains unverified at Tutorial tier, and no workstream here depends on it.
+
+---
+
+## 10. Review addendum — 2026-08-21, post-audit
+
+Every citation and substantive claim in the two landscape reviews was re-checked against the working
+tree after they were written. Results and the resulting changes to this plan.
+
+### 10.1 Audit outcome
+
+21 substantive claims re-verified mechanically: **19 passed, 2 were wrong, both now corrected.**
+
+| Claim | Status |
+|---|---|
+| `compute_effective_trials`, `compute_evolutionary_fitness`, `calibrate_proxy_rankings`, `DiscountedThompsonSampler`, `SimulationBudgetOrchestrator` — no production callers | PASS (all five) |
+| `plateau.py:326` calls `compute_dsr` without `n_eff`; `subperiod.py:90` falls back to the raw count | PASS |
+| `evolution.py:208` selects parents by `random.choice` | PASS |
+| `alphas.py:57` `expression_hash` unique-indexed | PASS |
+| No `/check` call anywhere in `app/`; no `brain_id` column in any model | PASS |
+| `campaign_runner.py` makes no LLM call; `field_triage._pending` filters on `is None` | PASS |
+| No IC / Rank IC anywhere in `app/`; pandas not a dependency | PASS |
+| `ALLOWED_POST_PATHS` is `{/authentication, /simulations}` | PASS |
+| Alembic head is `c3d4e5f6a1b2` | PASS |
+| ~~`enums.py:61`~~ → **`enums.py:62`** is `SubmissionCheckName` | **corrected** (12 members confirmed) |
+| ~~"our client covers 7 endpoints"~~ → **8** | **corrected**: `/alphas/{id}/recordsets/daily-pnl` is built inline at `correlation.py:164` and `scripts/backfill_pnl.py:69`, so it is not visible in the client's declared paths |
+
+Both errors were citation-level; no finding or recommendation changes.
+
+### 10.2 W-1 — Environment bootstrap (new, blocking)
+
+**This container cannot run any workstream in this plan as it stands.** `numpy` is not importable and
+`pytest` is not installed; `pip install` reaches the network, so this is a setup gap, not a hard
+limit.
+
+Consequences, which reorder the plan:
+
+- **W0 cannot run** — `verify_pnl_reconciliation.py` imports numpy and scipy.
+- **W1, W5a, W5b cannot run** — all three are numpy studies.
+- **No workstream's acceptance criteria can be checked**, because every one of them requires the test
+  suite to be green and the suite cannot execute.
+
+*Work.* `pip install -e "backend[dev]"` (the extra already declares pytest, ruff, black, mypy).
+Verify with `python -m pytest -q` and record the actual test count and wall time — `CLAUDE.md` claims
+194 tests under ~5s and that number has not been confirmed in this environment.
+
+*Recommended follow-on.* There is **no CI** (`.github/` does not exist) and no `.claude/` hook, so
+"keep the suite green and under ~5s" is enforced by convention alone. A `SessionStart` hook that
+installs dev extras, or a minimal GitHub Actions workflow running `pytest` and `ruff`, would make the
+acceptance criteria in §7 mechanically checkable instead of aspirational. Given Phase 1 is
+operational rather than engineering work, the hook is the cheaper of the two and is enough.
+
+**W-1 now precedes W0.** Revised order: **W-1, W0, W3, W2, W1, W4, W5, W6.**
+
+### 10.3 F1 — `report.md` in the repo root is stale by roughly 8× [fix, small]
+
+Not previously reported, and it is the same class of problem as the drift incident.
+
+`/report.md` is a **generated artifact** — `scripts/report.py -o` writes it — committed in the initial
+commit, never regenerated, and not in `.gitignore`. Its headline reads:
+
+```
+625 alphas · 295 simulated · 2 clearing every BRAIN check
+```
+
+against `CLAUDE.md`'s verified 4,857 / 486 / 28. It is the most prominent file in the repository after
+`README.md`, and it states numbers that are wrong by roughly an order of magnitude.
+
+This violates **one source of truth per fact**: the DB is authoritative, `CLAUDE.md` carries the
+verified snapshot, and a stale generated copy sits above both.
+
+*Fix, in preference order:*
+1. Add `report.md` to `.gitignore` and `git rm --cached report.md`. Generated output does not belong
+   in version control, and this removes the fact from the third location entirely.
+2. If a committed snapshot is genuinely wanted, move it to `docs/audits/report-YYYY-MM-DD.md` so the
+   filename carries its own staleness, and regenerate on a stated cadence.
+
+Option 1 is correct here. Option 2 only if the operator wants a committed history of daily reports,
+in which case it becomes an append-only series like the snapshot tables.
+
+*Test.* Add to `tests/test_config_paths.py` (or the schema test) an assertion that no generated report
+path is tracked by git — cheap, and it stops the file coming back.
+
+### 10.4 F2 — `backend/repro.py` is a one-off harness outside `scripts/` [judgement call, not a fix]
+
+`backend/repro.py` (148 lines, "Reproduction harness for the integration-review findings") sits at the
+backend root rather than in `scripts/`, where every other runnable lives. It was committed as part of
+the Round 3 verification work.
+
+**I am not recommending deletion.** It is plausibly deliberate — evidence attached to a review that
+someone may want to re-run. But it is undiscoverable where it is, and it is the only module at that
+level. Either move it to `scripts/repro_integration_review.py` and reference it from the audit doc it
+supports, or add a one-line note in `docs/INVENTORY.md` recording what it is and whether it is
+expected to keep working. Ask before deleting.
+
+### 10.5 What did not change
+
+The seven workstreams, their sequencing rationale, their acceptance criteria and §8's exclusions all
+stand. The audit found no finding that was wrong on substance, and nothing in §9's risk list has
+become more or less likely.
+
+The one thing worth restating after the audit: **five dead-code paths, all with passing tests, is now
+a pattern rather than an incident.** `test_e2e_pipeline.py` in particular exercises a bandit and a
+budget orchestrator that production never calls, which means the suite's green status currently
+overstates how much of the live path is covered. That is not in scope for this plan — Phase 1 is
+operational — but it is the strongest candidate for the first Phase 2 engineering task, and it should
+be recorded in `docs/INVENTORY.md` now while the evidence is fresh.

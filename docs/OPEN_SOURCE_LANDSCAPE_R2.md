@@ -49,9 +49,9 @@ being relied on — but both are far better than the current blank.
 [Cgodking/Alpha-agent](https://github.com/Cgodking/Alpha-agent), and independently visible in two ACE
 bootcamp notebooks showing the same check at limit 4.00.
 
-*Verified about us:* `backend/app/models/enums.py:61` enumerates 12 check names and does **not**
+*Verified about us:* `backend/app/models/enums.py:62` enumerates 12 check names and does **not**
 include `REGULAR_SUBMISSION`. A grep of `backend/app` for `/check` returns nothing — we never call
-that endpoint. Our client covers 7 endpoints; the community inventory documents ~60.
+that endpoint. Our client covers 8 endpoints (7 declared plus `/alphas/{id}/recordsets/daily-pnl` built inline at `correlation.py:164` and `scripts/backfill_pnl.py:69`); the community inventory documents ~60.
 
 This corroborates the "4/day confirmed" already in our operating guide, and upgrades it from a
 human's note to a value the machine can read before every attempt. Caveat, stated by the verifier:
@@ -75,7 +75,7 @@ alpha shows `SELF_CORRELATION` PASS 0.1465 alongside `PROD_CORRELATION` PASS 0.6
 **So research ground is shared between users, which is the premise the entire product plan rests on.**
 
 *Verified about us:* `docs/BRAIN_API.md` already records this endpoint returning 403 on our Tutorial
-account. `enums.py:66` has the enum member; nothing populates it.
+account. `enums.py` has the enum member; nothing populates it.
 
 The honest limit: this is inferred from a client library's DataFrame construction, not from a response
 body we have seen, and it 403s at our tier — so we still cannot pre-screen against the production pool.
