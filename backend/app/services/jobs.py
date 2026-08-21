@@ -19,7 +19,6 @@ from __future__ import annotations
 
 import json
 import math
-from pathlib import Path
 import queue
 import threading
 import time
@@ -28,6 +27,7 @@ import uuid
 from collections.abc import Callable
 from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any
 
 import structlog
@@ -393,9 +393,10 @@ def run_family_job(*, job_id: str, params: RunFamilyParams) -> dict[str, Any]:
             "passed_all_checks": batch.passed_all_checks,
         }
         # Post-batch PnL fetch for passing alphas
+        from sqlalchemy import select
+
         from app.models.results import AlphaMetric
         from app.services.correlation import ensure_alpha_pnl
-        from sqlalchemy import select
 
         with session_scope() as db:
             for aid in ids:

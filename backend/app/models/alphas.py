@@ -220,6 +220,18 @@ class AlphaProductionSnapshot(IdMixin, TimestampMixin, Base):
     )
 
 
+def submitted_alpha_filter():
+    """The ONE predicate for 'this alpha was submitted to BRAIN'.
+
+    Reads ``platform_outcome``, which ``sync_alpha_platform_outcome`` derives
+    from ``submission_attempts``. Never read ``Alpha.status`` for this: status
+    is a mirror maintained as a side effect, and a mirror that disagrees with
+    its source is how the 2026-07 drift incident stayed invisible for two
+    weeks. ``platform_outcome`` is indexed; the old join was not.
+    """
+    return Alpha.platform_outcome == PlatformOutcome.SUBMITTED.value
+
+
 def sync_alpha_platform_outcome(db, alpha_id: int) -> str | None:
     """Derive and refresh the alpha's platform_outcome column from its submission_attempts."""
     from sqlalchemy import select

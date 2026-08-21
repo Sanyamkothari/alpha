@@ -2,10 +2,6 @@
 
 from __future__ import annotations
 
-from datetime import date
-
-from app.models.alphas import Alpha, AlphaProductionSnapshot
-from app.models.enums import ProductionStatus
 from app.services.alpha_library import AlphaSettings, create_alpha
 
 

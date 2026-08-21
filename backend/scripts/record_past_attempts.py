@@ -12,12 +12,17 @@ from __future__ import annotations
 
 import argparse
 import sys
-from datetime import date, datetime
+from datetime import datetime
 
 from sqlalchemy import select
 
 from app.db import session_scope
-from app.models.alphas import Alpha, AlphaStatusHistory, SubmissionAttempt, sync_alpha_platform_outcome
+from app.models.alphas import (
+    Alpha,
+    AlphaStatusHistory,
+    SubmissionAttempt,
+    sync_alpha_platform_outcome,
+)
 from app.models.enums import SubmissionCheckName, SubmissionResult
 
 CHECKS = [c.value for c in SubmissionCheckName]

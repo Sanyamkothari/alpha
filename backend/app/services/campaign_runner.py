@@ -10,8 +10,8 @@ Executes unattended overnight multi-territory simulation campaigns with:
 from __future__ import annotations
 
 import math
+from collections.abc import Callable
 from datetime import datetime
-from typing import Callable
 
 import structlog
 from sqlalchemy import distinct, func, select
@@ -23,7 +23,7 @@ from app.models.campaigns import Campaign, CampaignTask
 from app.models.results import AlphaMetric
 from app.services.allocator import plan_budget_allocation
 from app.services.alpha_library import AlphaSettings, create_alpha
-from app.services.constructor import Candidate, FamilySpec, expand
+from app.services.constructor import FamilySpec, expand
 from app.services.correlation import ensure_alpha_pnl
 from app.services.simulation_runner import pending_alpha_ids, run_batch
 

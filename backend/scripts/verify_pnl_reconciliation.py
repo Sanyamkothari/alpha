@@ -12,7 +12,6 @@ from __future__ import annotations
 
 import argparse
 import sys
-from pathlib import Path
 
 import numpy as np
 from scipy import stats
@@ -63,7 +62,7 @@ def run() -> dict[str, float | int]:
     print(f"Reconciled with AlphaMetric: {len(reported)}")
     print(f"Passing tolerance (diff <= 0.05): {valid_count}/{len(reported)} ({valid_count/len(reported)*100:.1f}%)")
     print(f"Sharpe diff distribution: min={np.min(diff_arr):.4f}, median={np.median(diff_arr):.4f}, mean={np.mean(diff_arr):.4f}, max={np.max(diff_arr):.4f}")
-    print(f"Regression of recomputed Sharpe on reported Sharpe:")
+    print("Regression of recomputed Sharpe on reported Sharpe:")
     print(f"  Slope: {slope:.6f} (theoretical sqrt(252/250) = {np.sqrt(252/250):.6f})")
     print(f"  Intercept: {intercept:.6f}")
     print(f"  R^2: {r_val**2:.6f}")

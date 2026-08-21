@@ -15,9 +15,9 @@ from sqlalchemy import select
 
 from app.models.alphas import Alpha
 from app.services.constructor import (
+    FamilySpec,
     canonical_territory_key,
     derive_horizon_band,
-    FamilySpec,
     expand,
 )
 from app.services.plateau import family_field_code

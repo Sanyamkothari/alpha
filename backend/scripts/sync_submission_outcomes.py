@@ -12,14 +12,18 @@ from __future__ import annotations
 import argparse
 import re
 import sys
-from datetime import date, datetime
 
 import structlog
 from sqlalchemy import select
 
 from app.db import session_scope
-from app.models.alphas import Alpha, AlphaStatusHistory, SubmissionAttempt, sync_alpha_platform_outcome
-from app.models.enums import AlphaStatus, OutcomeSource, PlatformOutcome
+from app.models.alphas import (
+    Alpha,
+    AlphaStatusHistory,
+    SubmissionAttempt,
+    sync_alpha_platform_outcome,
+)
+from app.models.enums import AlphaStatus, PlatformOutcome
 from app.models.results import SimulationImport
 from app.services.brain import BrainClient
 

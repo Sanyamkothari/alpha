@@ -35,8 +35,8 @@ from __future__ import annotations
 
 import math
 import random
-from dataclasses import dataclass, field as dc_field
-from typing import Any, Sequence
+from collections.abc import Sequence
+from dataclasses import dataclass
 
 import numpy as np
 import structlog
@@ -51,7 +51,6 @@ from app.services.constructor import (
     DEFAULT_TS_TRANSFORMS,
     TerritorySignature,
     canonical_territory_key,
-    derive_horizon_band,
     parse_territory_signature,
 )
 from app.services.plateau import family_field_code

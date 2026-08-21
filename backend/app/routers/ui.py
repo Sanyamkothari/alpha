@@ -21,12 +21,11 @@ from sqlalchemy.orm import Session
 from app.db import get_db
 from app.models.alphas import (
     Alpha,
-    AlphaProductionSnapshot,
     AlphaStatusHistory,
     SubmissionAttempt,
     sync_alpha_platform_outcome,
 )
-from app.models.enums import AlphaStatus, SubmissionResult
+from app.models.enums import AlphaStatus
 from app.models.results import AlphaMetric
 from app.services.allocator import dataset_stats, suggest
 from app.services.alpha_library import transition_status
@@ -722,6 +721,7 @@ def funnel_telemetry(db: Session = Depends(get_db)) -> dict:
 def throughput(db: Session = Depends(get_db)) -> dict:
     """Throughput & Evidence Dashboard data (Phase 1 Task 5)."""
     from datetime import datetime, timedelta
+
     from app.models.alphas import SubmissionAttempt
     from app.models.campaigns import Campaign
 

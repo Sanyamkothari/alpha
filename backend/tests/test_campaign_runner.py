@@ -51,6 +51,7 @@ def test_execute_campaign_dry_run(db_session, monkeypatch):
 def test_execute_campaign_with_fake_brain_client(db_session, monkeypatch):
     """Test full multi-arm campaign execution with simulated batch via FakeBrainClient."""
     from contextlib import contextmanager
+
     from tests.fakes.fake_brain_client import FakeBrainClient
 
     # Seed test dataset and fields

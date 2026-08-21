@@ -7,15 +7,13 @@ Usage:
 from __future__ import annotations
 
 import argparse
-import math
 import sys
+
 import numpy as np
 import structlog
-from sqlalchemy import select
 
 from app.db import session_scope
 from app.models.alphas import Alpha
-from app.models.results import AlphaMetric, SimulationImport
 from app.services.brain import BrainClient
 from app.services.pnl_storage import get_pnl_store
 
@@ -35,7 +33,7 @@ def backfill_all(limit: int | None = None) -> dict[str, int]:
             expr_to_alpha[(a.expression.strip(), a.neutralization, a.decay)] = a
             expr_to_alpha[a.expression.strip()] = a
 
-    print(f"Connecting to BRAIN to fetch remote alphas and daily PnL series...")
+    print("Connecting to BRAIN to fetch remote alphas and daily PnL series...")
     try:
         with BrainClient() as brain:
             remote_alphas = list(brain.iter_paginated("/users/self/alphas", page_size=50))

@@ -1,7 +1,8 @@
-from datetime import date, timedelta
+from datetime import date
+
 from sqlalchemy import select
 
-from app.models.alphas import Alpha, AlphaFieldSnapshot
+from app.models.alphas import AlphaFieldSnapshot
 from app.models.fields import DataField, DataFieldSnapshot
 from app.services.alpha_library import AlphaSettings, create_alpha
 from app.services.field_crowding import get_field_crowding

@@ -73,11 +73,11 @@ def main() -> int:
     args = ap.parse_args()
 
     from app.services.constructor import (
-        GridAxes,
         STANDARD_DECAYS,
         STANDARD_WINDOWS,
         WIDE_DECAYS,
         WIDE_WINDOWS,
+        GridAxes,
     )
 
     windows = tuple(args.windows) if args.windows else (WIDE_WINDOWS if args.grid == "wide" else STANDARD_WINDOWS)

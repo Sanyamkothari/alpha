@@ -5,19 +5,20 @@ Implements:
    daily frequency units with Euler-Mascheroni expected maximum SR*.
 2. Effective independent trials (N_eff) estimation via correlation matrix eigenvalues.
 3. Split-half sign guards and consistency ratios.
-4. Monthly-stepped 6-month rolling window positivity checks (>= 75%).
+4. Monthly-stepped 6-month rolling window positivity checks (>= 70%).
 5. Recent regime decay checks (last 252d vs full backtest).
 """
 
 from __future__ import annotations
 
 import math
+from collections.abc import Sequence
 from dataclasses import dataclass, field
-from typing import Sequence
+from typing import Any
 
 import numpy as np
-from scipy import stats
 import structlog
+from scipy import stats
 
 log = structlog.get_logger("subperiod")
 
@@ -40,21 +41,23 @@ class SubPeriodVerdict:
 def compute_effective_trials(correlation_matrix: np.ndarray) -> float:
     """Estimate the effective number of independent trials (N_eff) from eigenvalues.
 
-    N_eff = (sum(lambda_i))^2 / sum(lambda_i^2) = M^2 / sum(lambda_i^2)
+    N_eff = (sum(lambda_i))^2 / sum(lambda_i^2)
     """
-    if correlation_matrix.ndim != 2 or correlation_matrix.shape[0] != correlation_matrix.shape[1]:
-        return float(max(1, len(correlation_matrix)))
+    matrix = np.asarray(correlation_matrix, dtype=np.float64)
+    if matrix.ndim != 2 or matrix.shape[0] != matrix.shape[1]:
+        return float(max(1, matrix.shape[0] if matrix.ndim >= 1 else 1))
 
-    m = correlation_matrix.shape[0]
+    m = matrix.shape[0]
     if m <= 1:
         return 1.0
 
     try:
-        eigenvals = np.linalg.eigvalsh(correlation_matrix)
+        eigenvals = np.linalg.eigvalsh(matrix)
         eigenvals = np.clip(eigenvals, a_min=0.0, a_max=None)
+        total = float(np.sum(eigenvals))
         sum_sq = float(np.sum(eigenvals**2))
-        if sum_sq > 0:
-            n_eff = float((m**2) / sum_sq)
+        if sum_sq > 0 and total > 0:
+            n_eff = float((total**2) / sum_sq)
             return max(1.0, min(float(m), n_eff))
     except Exception as exc:
         log.warning("neff_eigenval_failed", error=str(exc))

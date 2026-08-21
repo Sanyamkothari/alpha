@@ -147,6 +147,8 @@ def test_portfolio_correlation_blocks_promotion(db_session) -> None:
     db_session.flush()
     db_session.add(SubmissionAttempt(alpha_id=submitted_alpha.id, result="submitted"))
     db_session.flush()
+    from app.models.alphas import sync_alpha_platform_outcome
+    sync_alpha_platform_outcome(db_session, submitted_alpha.id)
 
     for w in WINDOW_LADDER:
         for d in DECAY_LADDER:
@@ -159,8 +161,9 @@ def test_portfolio_correlation_blocks_promotion(db_session) -> None:
 
     verdicts = evaluate(db_session, fam, require_pnl=False)
     assert not any(v.promoted for v in verdicts), "colliding family alphas must not be promoted"
-    assert all(v.is_correlated for v in verdicts)
-    assert any("collision with submitted alpha" in r for v in verdicts for r in v.reasons)
+    candidates = [v for v in verdicts if v.alpha_id != submitted_alpha.id]
+    assert all(v.is_correlated for v in candidates)
+    assert any("collision with submitted alpha" in r for v in candidates for r in v.reasons)
 
 
 def test_neighbours_derives_ladders_from_surface_points() -> None:
@@ -198,3 +201,12 @@ def test_neighbours_derives_ladders_from_surface_points() -> None:
     expected_coords = {(20, 4), (60, 4), (40, 2), (40, 6)}
     assert neigh_coords == expected_coords
 
+
+
+def test_shadow_dsr_is_not_gated() -> None:
+    """Phase 1 freeze: the shadow statistic must never reach the survives expression."""
+    from pathlib import Path
+    src = (Path(__file__).parents[1] / "app/services/plateau.py").read_text(encoding="utf-8")
+    survives_line = next(l for l in src.splitlines() if l.strip().startswith("survives ="))
+    for banned in ("dsr_shadow", "dsr_global_shadow", "n_eff", "shadow_trials"):
+        assert banned not in survives_line

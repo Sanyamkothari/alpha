@@ -415,6 +415,42 @@ def _emit_surface(
     return [], rejected
 
 
+def expected_surface_size(horizon_band: str | None = None) -> int:
+    """Expected surface size (windows * decays) for a single structural config."""
+    if horizon_band == "short":
+        return 14  # (5, 10) x 7 decays
+    if horizon_band == "medium":
+        return 21  # (20, 40, 60) x 7 decays
+    if horizon_band == "long":
+        return 14  # (120, 250) x 7 decays
+    return 49      # 7 windows x 7 decays
+
+
+def _stratified_configs(
+    primary_items: Sequence[Any],
+    cross_sections: Sequence[str | None],
+    groups: Sequence[str | None],
+    neutralizations: Sequence[str],
+    truncations: Sequence[float],
+    universes: Sequence[str],
+) -> list[tuple]:
+    """Interleave configs across neutralization and transform axes so truncation
+    samples every neutralization fairly rather than exhausting the first Cartesian sweep."""
+    pools_by_neut: dict[str, list[tuple]] = {n: [] for n in neutralizations}
+    for prim, cs_op, group, neut, trunc, univ in itertools.product(
+        primary_items, cross_sections, groups, neutralizations, truncations, universes
+    ):
+        pools_by_neut[neut].append((prim, cs_op, group, neut, trunc, univ))
+
+    out: list[tuple] = []
+    max_len = max((len(p) for p in pools_by_neut.values()), default=0)
+    for i in range(max_len):
+        for neut in neutralizations:
+            if i < len(pools_by_neut[neut]):
+                out.append(pools_by_neut[neut][i])
+    return out
+
+
 def expand(
     db: Session,
     spec: FamilySpec,
@@ -432,6 +468,9 @@ def expand(
     3. **Multi-field** — ``ts_corr(primary, secondary, window)`` when a
        secondary field is specified
     """
+    from sqlalchemy import select
+    from app.models.alphas import submitted_alpha_filter
+
     base_settings = base_settings or AlphaSettings()
     kb = ValidatorKB.from_session(
         db,
@@ -502,7 +541,7 @@ def expand(
 
     submitted_slices = set(
         (a.family_key, a.neutralization, a.truncation)
-        for a in db.query(Alpha).filter_by(status=AlphaStatus.SUBMITTED.value).all()
+        for a in db.execute(select(Alpha).where(submitted_alpha_filter())).scalars().all()
         if a.family_key
     )
 
@@ -511,7 +550,7 @@ def expand(
     # ------------------------------------------------------------------
     # Layer 1: Depth-1 templates (the original grid)
     # ------------------------------------------------------------------
-    configs = itertools.product(
+    configs = _stratified_configs(
         ts_transforms, cross_sections, groups,
         axes.neutralizations, axes.truncations, axes.universes,
     )
@@ -543,10 +582,11 @@ def expand(
     # Layer 2: Depth-2 templates (nested operator pairs)
     # ------------------------------------------------------------------
     if not spec.operator_family:  # Only explore depth-2 if operator family is unconstrained
-        for (outer_op, inner_op), cs_op, group, neutralization, truncation, universe in itertools.product(
+        configs_d2 = _stratified_configs(
             axes.depth2_pairs, cross_sections, groups,
             axes.neutralizations, axes.truncations, axes.universes,
-        ):
+        )
+        for (outer_op, inner_op), cs_op, group, neutralization, truncation, universe in configs_d2:
             if (family_key, neutralization, truncation) in submitted_slices:
                 continue
             if len(out) + surface_size > max_candidates:
@@ -589,9 +629,11 @@ def expand(
     # Layer 3: Multi-field signal templates (ts_corr)
     # ------------------------------------------------------------------
     if spec.secondary_field and not spec.operator_family:
-        for cs_op, group, neutralization, truncation, universe in itertools.product(
-            cross_sections, groups, axes.neutralizations, axes.truncations, axes.universes,
-        ):
+        configs_d3 = _stratified_configs(
+            ["ts_corr"], cross_sections, groups,
+            axes.neutralizations, axes.truncations, axes.universes,
+        )
+        for _corr_tag, cs_op, group, neutralization, truncation, universe in configs_d3:
             if (family_key, neutralization, truncation) in submitted_slices:
                 continue
             if len(out) + surface_size > max_candidates:

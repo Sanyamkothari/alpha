@@ -31,7 +31,6 @@ from app.validator.ast_nodes import (
     OperatorCall,
     children,
 )
-from app.validator.validator import normalize
 
 log = structlog.get_logger("proxy_calibration")
 

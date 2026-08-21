@@ -10,6 +10,7 @@ dependency so the app reads exclusively from the isolated DB.
 from __future__ import annotations
 
 from collections.abc import Iterator
+from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
@@ -189,7 +190,6 @@ def db_session(test_session_factory: sessionmaker[Session]) -> Iterator[Session]
 @pytest.fixture(autouse=True)
 def _isolate_pnl_store(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Isolate PnL storage to a temporary directory per test."""
-    from pathlib import Path
     from app.services import pnl_storage
 
     store = pnl_storage.PnLStore(tmp_path / "test_pnl")

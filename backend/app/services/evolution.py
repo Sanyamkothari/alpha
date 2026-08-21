@@ -15,8 +15,8 @@ from __future__ import annotations
 import copy
 import math
 import random
+from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Sequence
 
 import structlog
 from sqlalchemy.orm import Session
@@ -28,7 +28,6 @@ from app.services.constructor import Candidate
 from app.services.proxy_calibration import is_degenerate_signal
 from app.validator import ValidatorKB, validate
 from app.validator.ast_nodes import (
-    Field,
     Node,
     Number,
     OperatorCall,

@@ -28,10 +28,9 @@ Usage:
     python -m scripts.fetch_brain_catalog --skip-operators
 """
 
-from datetime import date
-
 import argparse
 import sys
+from datetime import date
 
 import structlog
 from sqlalchemy import delete, select
