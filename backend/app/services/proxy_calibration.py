@@ -136,22 +136,22 @@ def _walk_degenerate_checks(node: Node) -> DegenerateCheckResult:
             if inner_op in ("ts_rank", "ts_mean", "ts_zscore") and len(args) >= 2:
                 if len(args[0].args) >= 2:
                     try:
-                        w_outer = int(args[1].value) if isinstance(args[1], Number) else None
-                        w_inner = (
+                        w_outer_val = int(args[1].value) if isinstance(args[1], Number) else None
+                        w_inner_val = (
                             int(args[0].args[1].value)
                             if isinstance(args[0].args[1], Number)
                             else None
                         )
                         if (
-                            w_inner is not None
-                            and w_outer is not None
-                            and w_inner >= w_outer
+                            w_inner_val is not None
+                            and w_outer_val is not None
+                            and w_inner_val >= w_outer_val
                             and op == "ts_delta"
                             and inner_op == "ts_rank"
                         ):
                             return DegenerateCheckResult(
                                 True,
-                                f"inner window ({w_inner}) >= outer window ({w_outer}) in acceleration pair",
+                                f"inner window ({w_inner_val}) >= outer window ({w_outer_val}) in acceleration pair",
                             )
                     except (ValueError, TypeError, AttributeError):
                         pass

@@ -43,16 +43,16 @@ if IS_FROZEN:
         USER_DATA_DIR / ".env" if (USER_DATA_DIR / ".env").exists() else REPO_ROOT / ".env"
     )
 else:
-    BACKEND_DIR: Path = Path(__file__).resolve().parents[1]  # .../alpha/backend
-    REPO_ROOT: Path = BACKEND_DIR.parent  # .../alpha
-    USER_DATA_DIR: Path = (
+    BACKEND_DIR = Path(__file__).resolve().parents[1]  # .../alpha/backend
+    REPO_ROOT = BACKEND_DIR.parent  # .../alpha
+    USER_DATA_DIR = (
         Path(os.environ["ALPHA_DATA_DIR"]) if "ALPHA_DATA_DIR" in os.environ else REPO_ROOT
     )
-    DATABASE_DIR: Path = USER_DATA_DIR / "database"
-    OPERATORS_DIR: Path = REPO_ROOT / "operators"
-    FIELDS_DIR: Path = REPO_ROOT / "fields"
-    TEMPLATES_DIR: Path = REPO_ROOT / "templates"
-    ENV_FILE_PATH: Path = REPO_ROOT / ".env"
+    DATABASE_DIR = USER_DATA_DIR / "database"
+    OPERATORS_DIR = REPO_ROOT / "operators"
+    FIELDS_DIR = REPO_ROOT / "fields"
+    TEMPLATES_DIR = REPO_ROOT / "templates"
+    ENV_FILE_PATH = REPO_ROOT / ".env"
 
 
 class Settings(BaseSettings):

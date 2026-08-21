@@ -154,7 +154,7 @@ def summary(db: Session = Depends(get_db)) -> dict:
         "near_misses_total": len(near),
         "shortlist": promoted[:25],
         "near_misses": near[:15],
-        "jobs": [j.as_dict() for j in registry().list()[:8]],
+        "jobs": [j.as_dict() for j in registry().all_jobs()[:8]],
     }
 
 
@@ -192,7 +192,7 @@ def surfaces(
     simulate exactly the missing neighbours of a candidate the filter could not
     judge.
     """
-    points = load_surface(db, family, include_unsimulated=True)
+    points = load_surface(db, family)
     if not points:
         return {
             "family_key": family,
@@ -238,7 +238,12 @@ def surfaces(
                 "cells": cells,
             }
         )
-    out.sort(key=lambda s: s["best_sharpe"], reverse=True)
+
+    def _best_sharpe_key(s: dict[str, Any]) -> float:
+        val = s.get("best_sharpe")
+        return float(val) if isinstance(val, (int, float)) else 0.0
+
+    out.sort(key=_best_sharpe_key, reverse=True)
     return {
         "family_key": family,
         "windows": list(WINDOW_LADDER),
@@ -473,7 +478,7 @@ def launch_run(payload: dict = Body(...)) -> dict:
 
 @router.get("/runs")
 def list_runs() -> dict:
-    return {"jobs": [j.as_dict() for j in registry().list()]}
+    return {"jobs": [j.as_dict() for j in registry().all_jobs()]}
 
 
 @router.get("/runs/{job_id}")

@@ -274,12 +274,12 @@ class JobRegistry:
         with self._lock:
             return self._jobs.get(job_id)
 
-    def list(self) -> list[Job]:
+    def all_jobs(self) -> list[Job]:
         with self._lock:
             return sorted(self._jobs.values(), key=lambda j: j.created_at, reverse=True)
 
     def active(self) -> list[Job]:
-        return [j for j in self.list() if j.status in ("queued", "running")]
+        return [j for j in self.all_jobs() if j.status in ("queued", "running")]
 
     def _evict_locked(self) -> None:
         """Drop the oldest finished jobs once past the retention cap."""

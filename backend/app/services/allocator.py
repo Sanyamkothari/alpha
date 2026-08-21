@@ -294,17 +294,16 @@ def dataset_stats(
         .group_by(Dataset.dataset_code, Dataset.name)
     ).all()
 
-    field_to_dataset = dict(
-        db.execute(
-            select(DataField.field_code, Dataset.dataset_code)
-            .join(Dataset, DataField.dataset_id == Dataset.id)
-            .where(
-                DataField.region == region,
-                DataField.delay == delay,
-                DataField.universe == universe,
-            )
-        ).all()
-    )
+    f_rows = db.execute(
+        select(DataField.field_code, Dataset.dataset_code)
+        .join(Dataset, DataField.dataset_id == Dataset.id)
+        .where(
+            DataField.region == region,
+            DataField.delay == delay,
+            DataField.universe == universe,
+        )
+    ).all()
+    field_to_dataset: dict[str, str] = {r[0]: r[1] for r in f_rows}
 
     tried: dict[str, int] = {}
     passed: dict[str, int] = {}
@@ -654,19 +653,18 @@ def plan_budget_allocation(
     default_denom = "cap" if has_cap else None
 
     # Query existing simulated counts by family to find incomplete surfaces (joined to AlphaMetric)
-    sim_counts = dict(
-        db.execute(
-            select(Alpha.family_key, func.count(distinct(AlphaMetric.alpha_id)))
-            .join(AlphaMetric, AlphaMetric.alpha_id == Alpha.id)
-            .where(
-                Alpha.family_key.is_not(None),
-                Alpha.region == region,
-                Alpha.delay == delay,
-                Alpha.universe == universe,
-            )
-            .group_by(Alpha.family_key)
-        ).all()
-    )
+    s_rows = db.execute(
+        select(Alpha.family_key, func.count(distinct(AlphaMetric.alpha_id)))
+        .join(AlphaMetric, AlphaMetric.alpha_id == Alpha.id)
+        .where(
+            Alpha.family_key.is_not(None),
+            Alpha.region == region,
+            Alpha.delay == delay,
+            Alpha.universe == universe,
+        )
+        .group_by(Alpha.family_key)
+    ).all()
+    sim_counts: dict[str, int] = {str(r[0]): int(r[1]) for r in s_rows if r[0] is not None}
     valid_matrix_fields = set(
         db.execute(
             select(DataField.field_code).where(
@@ -824,13 +822,12 @@ def plan_budget_allocation(
     # 3. Plateau Fill Arm (requests full surface; create_alpha dedupes)
     # ------------------------------------------------------------------
     if plateau_budget > 0 and incomplete_families:
-        field_to_dataset = dict(
-            db.execute(
-                select(DataField.field_code, Dataset.dataset_code)
-                .join(Dataset, DataField.dataset_id == Dataset.id)
-                .where(DataField.region == region, DataField.delay == delay)
-            ).all()
-        )
+        f_rows2 = db.execute(
+            select(DataField.field_code, Dataset.dataset_code)
+            .join(Dataset, DataField.dataset_id == Dataset.id)
+            .where(DataField.region == region, DataField.delay == delay)
+        ).all()
+        field_to_dataset: dict[str, str] = {r[0]: r[1] for r in f_rows2}
 
         for fkey in incomplete_families:
             count = sim_counts.get(fkey, 0)

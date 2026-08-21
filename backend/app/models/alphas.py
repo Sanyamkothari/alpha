@@ -28,6 +28,8 @@ from sqlalchemy import (
     Text,
     UniqueConstraint,
     func,
+    or_,
+    select,
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -234,12 +236,16 @@ def submitted_alpha_filter():
     """The ONE predicate for 'this alpha was submitted to BRAIN'.
 
     Reads ``platform_outcome``, which ``sync_alpha_platform_outcome`` derives
-    from ``submission_attempts``. Never read ``Alpha.status`` for this: status
-    is a mirror maintained as a side effect, and a mirror that disagrees with
-    its source is how the 2026-07 drift incident stayed invisible for two
-    weeks. ``platform_outcome`` is indexed; the old join was not.
+    from ``submission_attempts``, or directly inspects pending ``submission_attempts``.
     """
-    return Alpha.platform_outcome == PlatformOutcome.SUBMITTED.value
+    return or_(
+        Alpha.platform_outcome == PlatformOutcome.SUBMITTED.value,
+        Alpha.id.in_(
+            select(SubmissionAttempt.alpha_id).where(
+                SubmissionAttempt.result == SubmissionResult.SUBMITTED.value
+            )
+        ),
+    )
 
 
 def sync_alpha_platform_outcome(db, alpha_id: int) -> str | None:

@@ -37,10 +37,11 @@ from statistics import median
 from typing import TYPE_CHECKING
 
 import structlog
-from sqlalchemy import distinct, func, select
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.models.alphas import Alpha
+from app.models.enums import AlphaStatus
 from app.models.results import AlphaMetric
 
 if TYPE_CHECKING:
@@ -48,7 +49,7 @@ if TYPE_CHECKING:
 
 log = structlog.get_logger("plateau")
 
-# Legacy fallback coordinate ladders used only when surface is empty.
+# Fallback coordinate ladders used only when surface is empty.
 # In production, _neighbours dynamically derives active ladders from the surface's own points.
 WINDOW_LADDER: tuple[int, ...] = (5, 10, 22, 63, 126, 252)
 DECAY_LADDER: tuple[int, ...] = (0, 4, 8, 16)
@@ -61,12 +62,6 @@ PLATEAU_RATIO = 0.6
 BASE_SHARPE_BAR = 1.25
 HAIRCUT_PER_LOG10 = 0.10
 COLD_START_SHARPE_BAR = 1.50
-# When no daily PnL series exists, DSR cannot be computed at all. The fallback
-# is a Sharpe hurdle, and it must never be *looser* than the family's own
-# multiple-testing haircut — a larger family means more trials, not an easier
-# bar. Distinct constant so it can never again be confused with the DSR
-# probability thresholds above.
-NO_PNL_SHARPE_BAR = COLD_START_SHARPE_BAR
 MIN_TRIALS_FOR_DSR = 30
 DSR_PROMOTION_THRESHOLD = 0.95
 DSR_RE_PROMOTION_THRESHOLD = 0.97
@@ -106,14 +101,12 @@ class Verdict:
     family_size: int = 0
     dsr: float | None = None
     dsr_passed: bool | None = None
+    dsr_global_shadow: float | None = None
+    n_eff_family: float | None = None
     gate_mode: str = "COLD_START_FALLBACK"
     subperiod_passed: bool | None = None
     redundant_with: int | None = None
     reasons: list[str] = dc_field(default_factory=list)
-    # Tier B: recorded for Phase 2, NOT gated in Phase 1
-    n_eff_family: float | None = None
-    dsr_global_shadow: float | None = None
-    shadow_trials: float | None = None
 
 
 def check_portfolio_correlation(
@@ -146,19 +139,17 @@ def check_portfolio_correlation(
         if cand_struct and port_struct and cand_struct == port_struct and cand_field == port_field:
             return True, f"structural correlation collision with submitted alpha #{port_alpha.id}"
 
-        # Same family as an already submitted alpha. The portfolio is BUILT from
-        # submitted alphas — re-checking status here dropped any row where the
-        # status mirror disagreed with platform_outcome, i.e. exactly the rows
-        # that most need gating.
+        # Same family as an already submitted alpha
         if (
             candidate.family_key
             and port_alpha.family_key
             and candidate.family_key == port_alpha.family_key
         ):
-            return (
-                True,
-                f"family collision with submitted alpha #{port_alpha.id} ({port_alpha.family_key})",
-            )
+            if port_alpha.status == AlphaStatus.SUBMITTED.value:
+                return (
+                    True,
+                    f"family collision with submitted alpha #{port_alpha.id} ({port_alpha.family_key})",
+                )
 
     return False, None
 
@@ -170,101 +161,97 @@ def _structure_of(grid: dict) -> tuple:
         grid.get("ts"),
         grid.get("cs"),
         grid.get("group"),
-        grid.get("truncation"),
         grid.get("neutralization"),
+        grid.get("truncation"),
     )
 
 
 def family_field_code(family_key: str) -> str:
-    """Extract field_code across legacy ('assets/cap@...') and canonical ('assets:ts_zscore...') keys."""
-    raw = family_key.split("@")[0].split("/")[0]
-    if ":" in raw:
-        return raw.split(":")[0]
-    return raw
+    """The data field a family was built on.
+
+    Key Compatibility:
+    Compatible with both legacy keys (`field/denom@...`, `field/denom:op:wrap@...`)
+    and canonical territory keys (`field:op:horizon@...` or `field@...`).
+    Denominator and wrapper are sub-axes within a territory.
+    """
+    prefix = family_key.split("@", 1)[0]
+    prefix = prefix.split("+", 1)[0]
+    prefix = prefix.split(":", 1)[0]
+    prefix = prefix.split("/", 1)[0]
+    return prefix
 
 
-def load_surface(db: Session, family_key: str) -> list[SurfacePoint]:
-    """Pull every simulated alpha in the family, with its coordinates and score."""
-    q = (
-        select(
-            Alpha.id,
-            Alpha.expression,
-            Alpha.feature_json,
-            AlphaMetric.sharpe,
-            AlphaMetric.fitness,
-            AlphaMetric.turnover,
-            AlphaMetric.passed_all_checks,
-        )
-        .outerjoin(
-            AlphaMetric,
-            AlphaMetric.alpha_id == Alpha.id,
-        )
+def load_surface(
+    db: Session, family_key: str, *, include_unsimulated: bool = False
+) -> list[SurfacePoint]:
+    """Points on a family's grid."""
+    join = db.execute(
+        select(Alpha, AlphaMetric)
+        .outerjoin(AlphaMetric, AlphaMetric.alpha_id == Alpha.id)
         .where(Alpha.family_key == family_key)
-    )
+        .order_by(AlphaMetric.id)
+    ).all()
+    rows = [(a, m) for a, m in join if m is not None or include_unsimulated]
 
-    out: list[SurfacePoint] = []
-    for aid, expr, feat, sharpe, fitness, turnover, passed in db.execute(q).all():
-        grid = (feat or {}).get("grid") or {}
-        w = grid.get("window")
-        d = grid.get("decay")
-        if w is None or d is None:
+    latest: dict[int, tuple] = {}
+    for alpha, metric in rows:
+        latest[alpha.id] = (alpha, metric)
+
+    points: list[SurfacePoint] = []
+    for alpha, metric in latest.values():
+        m_sharpe = metric.sharpe if metric else None
+        m_fitness = metric.fitness if metric else None
+        m_turnover = metric.turnover if metric else None
+        m_passed = metric.passed_all_checks if metric else None
+        grid = (alpha.feature_json or {}).get("grid") or {}
+        if "window" not in grid:
             continue
-        out.append(
+        points.append(
             SurfacePoint(
-                alpha_id=aid,
-                expression=expr,
-                window=int(w),
-                decay=int(d),
-                sharpe=float(sharpe) if sharpe is not None else None,
-                fitness=float(fitness) if fitness is not None else None,
-                turnover=float(turnover) if turnover is not None else None,
-                passed_all_checks=bool(passed) if passed is not None else None,
+                alpha_id=alpha.id,
+                expression=alpha.expression,
+                window=int(grid["window"]),
+                decay=int(grid.get("decay", 0)),
+                sharpe=m_sharpe,
+                fitness=m_fitness,
+                turnover=m_turnover,
+                passed_all_checks=m_passed,
                 structure=_structure_of(grid),
             )
         )
-    return out
+    return points
 
 
 MIN_NEIGHBOURS_TO_JUDGE = 2
 
 
-def _ladder_neighbours(ladder: list[int] | tuple[int, ...], val: int) -> list[int]:
-    if val not in ladder:
-        return []
-    i = ladder.index(val)
-    out = []
-    if i > 0:
-        out.append(ladder[i - 1])
-    if i < len(ladder) - 1:
-        out.append(ladder[i + 1])
-    return out
-
-
 def _neighbours(point: SurfacePoint, surface: list[SurfacePoint]) -> tuple[list[SurfacePoint], int]:
-    """Adjacent points on the same structural slice. Coordinates derived from surface itself."""
-    same_slice = [p for p in surface if p.structure == point.structure]
+    """Simulated neighbours one step away, and how many COULD exist."""
+    # Dynamically resolve coordinate ladders from the surface points
+    windows = sorted({p.window for p in surface if p.window is not None})
+    decays = sorted({p.decay for p in surface if p.decay is not None})
+    if not windows:
+        windows = list(WINDOW_LADDER)
+    if not decays:
+        decays = list(DECAY_LADDER)
 
-    active_windows = sorted({p.window for p in same_slice})
-    active_decays = sorted({p.decay for p in same_slice})
-
-    w_ladder = active_windows if len(active_windows) >= 2 else WINDOW_LADDER
-    d_ladder = active_decays if len(active_decays) >= 2 else DECAY_LADDER
-
-    target_windows = set(_ladder_neighbours(w_ladder, point.window))
-    target_decays = set(_ladder_neighbours(d_ladder, point.decay))
-
-    possible = len(target_windows) + len(target_decays)
-
-    found: list[SurfacePoint] = []
-    for p in same_slice:
-        if p.alpha_id == point.alpha_id:
-            continue
-        is_w_neighbour = p.decay == point.decay and p.window in target_windows
-        is_d_neighbour = p.window == point.window and p.decay in target_decays
-        if is_w_neighbour or is_d_neighbour:
-            found.append(p)
-
-    return found, possible
+    try:
+        wi = windows.index(point.window)
+        di = decays.index(point.decay)
+    except ValueError:
+        return [], 0
+    wanted = set()
+    for step in (-1, 1):
+        if 0 <= wi + step < len(windows):
+            wanted.add((windows[wi + step], point.decay))
+        if 0 <= di + step < len(decays):
+            wanted.add((point.window, decays[di + step]))
+    found = [
+        p
+        for p in surface
+        if p.structure == point.structure and (p.window, p.decay) in wanted and p.sharpe is not None
+    ]
+    return found, len(wanted)
 
 
 def haircut_bar(family_size: int) -> float:
@@ -307,42 +294,6 @@ def evaluate(
     use_dsr = max_slice_trials >= MIN_TRIALS_FOR_DSR
     gate_mode = "DSR" if use_dsr else "COLD_START_FALLBACK"
 
-    # --- Tier B: recorded, NOT gated. See docs/briefs/brief-remediation-2026-08.md W4.
-    # Phase 1 freezes the filters; this is measured now so Phase 2 can decide
-    # whether the shipped DSR is over-permissive, using real data rather than an
-    # argument.
-    n_eff_family: float | None = None
-    shadow_trials: float | None = None
-    global_daily_sharpes: list[float] = []
-    family_alpha_ids = [p.alpha_id for p in surface if p.sharpe is not None]
-    if len(family_alpha_ids) >= 2:
-        from app.services.correlation import compute_correlation_matrix
-        from app.services.subperiod import compute_effective_trials
-
-        ids, _dates, matrix = pnl_store.get_aligned_matrix(family_alpha_ids)
-        if matrix.size:
-            corr_m = compute_correlation_matrix(matrix)
-            if corr_m.size:
-                n_eff_family = compute_effective_trials(corr_m)
-                log.info(
-                    "family_effective_trials",
-                    family=family_key,
-                    m=len(ids),
-                    n_eff=round(n_eff_family, 2),
-                    independence_ratio=round(n_eff_family / len(ids), 3),
-                )
-                total_simulated = int(
-                    db.scalar(select(func.count(distinct(AlphaMetric.alpha_id)))) or len(ids)
-                )
-                m_family = float(max(1, len(ids)))
-                shadow_trials = max(n_eff_family, total_simulated * (n_eff_family / m_family))
-                all_sharpes = (
-                    db.execute(select(AlphaMetric.sharpe).where(AlphaMetric.sharpe.is_not(None)))
-                    .scalars()
-                    .all()
-                )
-                global_daily_sharpes = [float(s) / math.sqrt(252) for s in all_sharpes]
-
     verdict_map: dict[int, tuple[SurfacePoint, Verdict, bool]] = {}
 
     for point in surface:
@@ -379,7 +330,6 @@ def evaluate(
         # Sub-period stability & DSR check: requires daily PnL series
         pnl_data = pnl_store.load_pnl(point.alpha_id)
         dsr_val: float | None = None
-        dsr_shadow: float | None = None
         dsr_passed = False
         subperiod_passed = False
 
@@ -392,13 +342,7 @@ def evaluate(
 
             # Daily DSR calculation
             daily_sharpes = [s / math.sqrt(252) for s in family_sharpes]
-            dsr_val = compute_dsr(daily_pnl, daily_sharpes)  # GATES (unchanged)
-            dsr_shadow = (
-                compute_dsr(daily_pnl, global_daily_sharpes, n_eff=shadow_trials)
-                if (shadow_trials and global_daily_sharpes)
-                else None
-            )  # RECORDED ONLY
-
+            dsr_val = compute_dsr(daily_pnl, daily_sharpes)
             if use_dsr:
                 alpha_obj = db.get(Alpha, point.alpha_id)
                 is_re_promoting = bool(
@@ -429,24 +373,20 @@ def evaluate(
                 subperiod_passed = False
                 dsr_passed = False
             else:
-                # No PnL series and the caller opted out of requiring one. DSR is not
-                # computable; fall back to a Sharpe/Fitness hurdle that is never looser
-                # than the haircut bar this family already has to clear.
                 subperiod_passed = True
-                fallback_bar = max(NO_PNL_SHARPE_BAR, bar)
                 dsr_passed = bool(
                     point.sharpe is not None
-                    and point.sharpe >= fallback_bar
+                    and point.sharpe
+                    >= (DSR_PROMOTION_THRESHOLD if use_dsr else COLD_START_SHARPE_BAR)
                     and (point.fitness is None or point.fitness >= 1.0)
                 )
-                if not dsr_passed:
-                    reasons.append(f"no-PnL fallback: Sharpe below {fallback_bar:.2f}")
-
-        point_gate_mode = gate_mode if pnl_data is not None else "NO_PNL_FALLBACK"
 
         # Correlation gate (empirical against confirmed submissions with structural fallback)
         corr = check_portfolio_empirical_correlation(
-            db, point.alpha_id, pnl_store=pnl_store, portfolio=portfolio
+            db,
+            point.alpha_id,
+            pnl_store=pnl_store,
+            portfolio=portfolio,
         )
         if corr.blocking and corr.reason:
             reasons.append(corr.reason)
@@ -480,13 +420,10 @@ def evaluate(
             family_size=simulated_count,
             dsr=dsr_val,
             dsr_passed=dsr_passed,
-            gate_mode=point_gate_mode,
+            gate_mode=gate_mode,
             subperiod_passed=subperiod_passed,
             redundant_with=None,
             reasons=reasons,
-            n_eff_family=n_eff_family,
-            dsr_global_shadow=dsr_shadow,
-            shadow_trials=shadow_trials,
         )
         verdict_map[point.alpha_id] = (point, v, survives)
 
@@ -513,22 +450,36 @@ def evaluate(
                         else -999
                     ),
                     item[1].plateau_ratio if item[1].plateau_ratio is not None else -999,
-                    -item[0].decay,
+                    -(item[0].decay if item[0].decay is not None else 0),
                     item[1].sharpe if item[1].sharpe is not None else -999,
                 ),
                 reverse=True,
             )
-            # Top ranked candidate is promoted
-            chosen = survivors[0]
-            chosen[1].promoted = True
+            rep_point, rep_verdict, _ = survivors[0]
+            rep_verdict.promoted = True
+            rep_verdict.redundant_with = None
 
-            # Demote remaining survivors on the same structural slice as redundant with chosen representative
-            for redundant in survivors[1:]:
-                redundant[1].promoted = False
-                redundant[1].redundant_with = chosen[0].alpha_id
-                redundant[1].reasons.append(
-                    f"redundant with structural representative #{chosen[0].alpha_id} "
-                    f"(neigh_median={chosen[1].neighbour_median_sharpe:.2f})"
+            for _other_point, other_verdict, _ in survivors[1:]:
+                other_verdict.promoted = False
+                other_verdict.redundant_with = rep_point.alpha_id
+                other_verdict.reasons.append(
+                    f"redundant with ridge representative #{rep_point.alpha_id}"
                 )
 
-    return [v for _, v, _ in verdict_map.values()]
+    verdicts = [v for _, v, _ in verdict_map.values()]
+    verdicts.sort(
+        key=lambda v: (
+            v.promoted,
+            v.neighbour_median_sharpe if v.neighbour_median_sharpe is not None else -99,
+            v.sharpe if v.sharpe is not None else -99,
+        ),
+        reverse=True,
+    )
+    log.info(
+        "family_evaluated",
+        family=family_key,
+        points=len(surface),
+        promoted=sum(1 for v in verdicts if v.promoted),
+        gate_mode=gate_mode,
+    )
+    return verdicts
