@@ -88,13 +88,12 @@ class PnLStore:
             )
             return [], [], np.empty((0, 0), dtype=np.float64)
 
-        date_indices: dict[str, int] = {d: i for i, d in enumerate(sorted_dates)}
         aligned_rows: list[np.ndarray] = []
         valid_ids: list[int] = []
 
         for aid, dates, arr in loaded:
             # Map values to common dates
-            orig_map = dict(zip(dates, arr))
+            orig_map = dict(zip(dates, arr, strict=True))
             row = np.array([orig_map[d] for d in sorted_dates], dtype=np.float64)
             aligned_rows.append(row)
             valid_ids.append(aid)

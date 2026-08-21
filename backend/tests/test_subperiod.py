@@ -186,7 +186,6 @@ def test_subperiod_split_ratio_floor() -> None:
 
 def test_subperiod_rolling_window_consistency() -> None:
     """Monthly-stepped 6-month (126d) rolling windows must be >= 75% positive."""
-    t = 252 * 5
     np.random.seed(42)
 
     # Signal that decays heavily across 3 out of 5 years -> < 75% positive rolling windows

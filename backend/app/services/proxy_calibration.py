@@ -69,10 +69,10 @@ def _is_same_node(a: Node, b: Node) -> bool:
     if isinstance(a, OperatorCall) and isinstance(b, OperatorCall):
         if a.name != b.name or len(a.args) != len(b.args) or len(a.kwargs) != len(b.kwargs):
             return False
-        for c1, c2 in zip(a.args, b.args):
+        for c1, c2 in zip(a.args, b.args, strict=True):
             if not _is_same_node(c1, c2):
                 return False
-        for k1, k2 in zip(a.kwargs, b.kwargs):
+        for k1, k2 in zip(a.kwargs, b.kwargs, strict=True):
             if k1.name != k2.name or not _is_same_node(k1.value, k2.value):
                 return False
         return True

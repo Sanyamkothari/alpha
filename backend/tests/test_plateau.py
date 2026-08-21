@@ -215,6 +215,6 @@ def test_shadow_dsr_is_not_gated() -> None:
     from pathlib import Path
 
     src = (Path(__file__).parents[1] / "app/services/plateau.py").read_text(encoding="utf-8")
-    survives_line = next(l for l in src.splitlines() if l.strip().startswith("survives ="))
+    survives_line = next(line for line in src.splitlines() if line.strip().startswith("survives ="))
     for banned in ("dsr_shadow", "dsr_global_shadow", "n_eff", "shadow_trials"):
         assert banned not in survives_line

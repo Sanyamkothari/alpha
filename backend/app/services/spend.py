@@ -25,7 +25,6 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.models.alphas import Alpha
-from app.models.enums import AlphaStatus
 from app.models.prompts import LLMRun
 from app.models.results import AlphaMetric
 
@@ -174,14 +173,13 @@ def summary(db: Session) -> dict:
     llm = llm_spend(db)
     sims = simulation_spend(db)
 
+    from app.models.alphas import submitted_alpha_filter
+
     passing = int(
         db.scalar(select(func.count(AlphaMetric.id)).where(AlphaMetric.passed_all_checks.is_(True)))
         or 0
     )
-    submitted = int(
-        db.scalar(select(func.count(Alpha.id)).where(Alpha.status == AlphaStatus.SUBMITTED.value))
-        or 0
-    )
+    submitted = int(db.scalar(select(func.count(Alpha.id)).where(submitted_alpha_filter())) or 0)
 
     # The headline. Divide by submitted where the operator has recorded any,
     # otherwise by alphas that cleared every check — and say which denominator

@@ -497,7 +497,7 @@ def evaluate(
         if point.alpha_id in verdict_map:
             slice_groups[point.structure].append(verdict_map[point.alpha_id])
 
-    for struct_key, items in slice_groups.items():
+    for _struct_key, items in slice_groups.items():
         survivors = [item for item in items if item[2]]
         if survivors:
             # Rank candidate representatives by:

@@ -396,7 +396,7 @@ def suggest(
     field_ops_tried: dict[str, set[str]] = {}
     submitted_sigs: list[TerritorySignature] = []
 
-    for aid, fkey, feat, status in existing_alphas:
+    for _aid, fkey, feat, status in existing_alphas:
         fcode = family_field_code(str(fkey))
         grid = (feat or {}).get("grid") or {}
         op = grid.get("ts") or "ts_zscore"
@@ -548,7 +548,7 @@ def suggest(
                     continue
 
                 # Check horizons for an unsubmitted, unused territory
-                for h_idx, horizon in enumerate(horizon_options):
+                for _h_idx, horizon in enumerate(horizon_options):
                     tkey = canonical_territory_key(
                         f.field_code, op, horizon, region, universe, delay
                     )
@@ -692,11 +692,9 @@ def plan_budget_allocation(
     if not incomplete_families:
         exploit_share = arm_shares.get("exploit", 0.50) + arm_shares.get("plateau_fill", 0.20)
         random_share = arm_shares.get("random_stratified", 0.30)
-        fill_share = 0.0
     else:
         exploit_share = arm_shares.get("exploit", 0.50)
         random_share = arm_shares.get("random_stratified", 0.30)
-        fill_share = arm_shares.get("plateau_fill", 0.20)
 
     exploit_budget = int(total_simulations * exploit_share)
     random_budget = int(total_simulations * random_share)

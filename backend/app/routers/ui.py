@@ -145,6 +145,7 @@ def summary(db: Session = Depends(get_db)) -> dict:
             "simulated": simulated,
             "passing": passing,
             "submitted": submitted,
+            "unresolved_attempts": unresolved_attempts,
             "families": len(_families(db)),
         },
         # Counts BEFORE the display cap. Returning len(promoted[:25]) as the

@@ -218,7 +218,6 @@ def test_c3_zero_work_distinction_expected_vs_unexpected(db_session, monkeypatch
         wrapper_shape=t0.wrapper_shape,
         horizon_band=horizon_band,
     )
-    fkey = spec.family_key(settings)
 
     # 1. Pre-populate full surface for t0's exact family key with simulated metrics
     candidates = expand(db_session, spec, base_settings=settings, max_candidates=98)

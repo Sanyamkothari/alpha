@@ -36,15 +36,17 @@ depth-1 template cannot reach.
 from __future__ import annotations
 
 import itertools
-from collections.abc import Iterable
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from dataclasses import field as dc_field
+from typing import Any
 
 import structlog
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.models.alphas import Alpha
-from app.models.enums import AlphaStatus, FieldType
+from app.models.alphas import Alpha, submitted_alpha_filter
+from app.models.enums import FieldType
 from app.services.alpha_library import AlphaSettings
 from app.validator import ValidatorKB, validate
 from app.validator.ast_nodes import Field, Node, Number, OperatorCall
@@ -468,9 +470,6 @@ def expand(
     3. **Multi-field** — ``ts_corr(primary, secondary, window)`` when a
        secondary field is specified
     """
-    from sqlalchemy import select
-    from app.models.alphas import submitted_alpha_filter
-
     base_settings = base_settings or AlphaSettings()
     kb = ValidatorKB.from_session(
         db,

@@ -150,7 +150,7 @@ def test_deterministic_seeding(db_session) -> None:
 
 def test_per_field_operator_cap_allows_new_operator(db_session) -> None:
     """A field at its cap under ts_zscore is still suggested for ts_rank (W3 / R1 Mandatory Test)."""
-    ds = _dataset(db_session, "ds_cap_test", n_fields=1, users=25)
+    _dataset(db_session, "ds_cap_test", n_fields=1, users=25)
     field_code = "ds_cap_test_f0"
 
     # Simulate that this field already has 3 territories mined under ts_zscore
@@ -201,7 +201,7 @@ def test_crowding_ceiling_in_exploit_vs_random_arm(db_session) -> None:
 
 def test_self_correlation_exclusion_from_exploit(db_session) -> None:
     """A submitted territory is excluded from exploit suggestions, but the field remains reachable under new operators (F4 / FF1)."""
-    ds = _dataset(db_session, "ds_sub_test", n_fields=1, users=30)
+    _dataset(db_session, "ds_sub_test", n_fields=1, users=30)
     sub_field = "ds_sub_test_f0"
 
     # Build production key using constructor/campaign_runner's own key construction
@@ -257,7 +257,7 @@ def test_self_correlation_exclusion_differential_passed_vs_submitted(db_session)
     settings = AlphaSettings(region="USA", universe="TOP3000", delay=1)
 
     # 1. Test unsubmitted alpha (status='passed') where ts_zscore is the target operator
-    ds_pass = _dataset(db_session, "ds_pass_test", n_fields=1, users=25)
+    _dataset(db_session, "ds_pass_test", n_fields=1, users=25)
     pass_field = "ds_pass_test_f0"
     spec_pass = FamilySpec(
         field_code=pass_field,
@@ -321,7 +321,7 @@ def test_self_correlation_exclusion_differential_passed_vs_submitted(db_session)
     ), "status='submitted' must exclude ts_zscore across all horizon bands"
 
     # 2. Test canonical submitted key with specific horizon band
-    ds_canon = _dataset(db_session, "ds_canon_test", n_fields=1, users=35)
+    _dataset(db_session, "ds_canon_test", n_fields=1, users=35)
     canon_field = "ds_canon_test_f0"
     spec_canon = FamilySpec(
         field_code=canon_field,
