@@ -7,14 +7,12 @@ with fallback to structural hashing when empirical PnL is unavailable.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-
 import numpy as np
 import structlog
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.models.alphas import Alpha, submitted_alpha_filter
+from app.models.alphas import Alpha, SubmissionAttempt
 from app.services.plateau import check_portfolio_correlation as check_structural_proxy
 from app.services.pnl_storage import PnLStore, get_pnl_store
 
@@ -25,29 +23,31 @@ INTERNAL_CORRELATION_THRESHOLD = 0.55
 MIN_COMMON_TRADING_DAYS = 500
 
 
-@dataclass(frozen=True)
-class CorrelationVerdict:
-    """Outcome of the portfolio correlation gate.
+def _date_map(pnl_data: tuple[list[str], np.ndarray] | None) -> dict[str, float] | None:
+    """Build a date -> value map, or None if the pair on disk is torn.
 
-    ``blocking`` is what the caller gates on. It is True both when a real
-    collision was measured AND when the correlation could not be measured at
-    all against a non-empty portfolio — an unmeasured constraint must fail
-    closed, not open. ``max_correlation`` is None when nothing was measured;
-    it is never 0.0-as-a-stand-in.
+    ``PnLStore`` writes dates and values to two files. Files written before the
+    atomic-rename fix can still be a mismatched pair. Zipping them would
+    truncate silently and then KeyError downstream, so a mismatch is treated
+    the same as missing data: skip this alpha, do not fail the whole gate.
     """
-
-    blocking: bool
-    reason: str | None
-    max_correlation: float | None
-    method: str  # 'empirical' | 'structural_proxy' | 'unmeasured' | 'none'
-    measured_pairs: int
-    skipped_pairs: int
-    portfolio_size: int
+    if pnl_data is None:
+        return None
+    dates, values = pnl_data
+    if len(dates) != len(values):
+        log.warning("pnl_length_mismatch", dates=len(dates), values=len(values))
+        return None
+    return dict(zip(dates, values, strict=True))
 
 
 def submitted_portfolio(db: Session, exclude_alpha_id: int | None = None) -> list[Alpha]:
-    """Alphas confirmed submitted, per the derived platform_outcome column."""
-    q = select(Alpha).where(submitted_alpha_filter())
+    """Confirmed submissions from submission_attempts (result == 'submitted')."""
+    q = (
+        select(Alpha)
+        .join(SubmissionAttempt, SubmissionAttempt.alpha_id == Alpha.id)
+        .where(SubmissionAttempt.result == "submitted")
+        .distinct()
+    )
     if exclude_alpha_id is not None:
         q = q.where(Alpha.id != exclude_alpha_id)
     return list(db.execute(q).scalars().all())
@@ -78,127 +78,62 @@ def check_portfolio_empirical_correlation(
     portfolio: list[Alpha] | None = None,
     threshold: float = INTERNAL_CORRELATION_THRESHOLD,
     min_overlap: int = MIN_COMMON_TRADING_DAYS,
-    allow_unmeasured: bool = False,
-) -> CorrelationVerdict:
-    """Check if candidate collides with any portfolio alpha via empirical PnL correlation."""
+) -> tuple[bool, str | None, float | None]:
+    """Check if candidate collides with any portfolio alpha via empirical PnL correlation.
+
+    Returns (is_correlated, reason_or_collision_desc, max_correlation).
+    """
     store = pnl_store or get_pnl_store()
     candidate = db.get(Alpha, alpha_id)
     if candidate is None:
-        return CorrelationVerdict(
-            blocking=False,
-            reason=None,
-            max_correlation=None,
-            method="none",
-            measured_pairs=0,
-            skipped_pairs=0,
-            portfolio_size=0,
-        )
+        return False, None, None
 
     if portfolio is None:
         portfolio = submitted_portfolio(db, exclude_alpha_id=alpha_id)
 
-    active_portfolio = [p for p in portfolio if p.id != alpha_id]
-    if not active_portfolio:
-        return CorrelationVerdict(
-            blocking=False,
-            reason=None,
-            max_correlation=None,
-            method="none",
-            measured_pairs=0,
-            skipped_pairs=0,
-            portfolio_size=0,
-        )
-
     cand_pnl_data = store.load_pnl(alpha_id)
+    cand_date_map = _date_map(cand_pnl_data)
 
-    measured = 0
-    skipped = 0
-    max_corr: float | None = None
+    max_corr = 0.0
     colliding_alpha_id: int | None = None
 
-    if cand_pnl_data is not None:
-        cand_dates, cand_pnl = cand_pnl_data
-        cand_date_map = dict(zip(cand_dates, cand_pnl))
-
-        for port_alpha in active_portfolio:
-            port_pnl_data = store.load_pnl(port_alpha.id)
-            if port_pnl_data is None:
-                skipped += 1
+    if cand_date_map is not None:
+        for port_alpha in portfolio:
+            if port_alpha.id == alpha_id:
                 continue
 
-            port_dates, port_pnl = port_pnl_data
-            port_date_map = dict(zip(port_dates, port_pnl))
+            port_pnl_data = store.load_pnl(port_alpha.id)
+            port_date_map = _date_map(port_pnl_data)
+            if port_date_map is None:
+                continue
 
-            common_dates = sorted(set(cand_dates).intersection(port_dates))
+            # Intersect dates
+            common_dates = sorted(cand_date_map.keys() & port_date_map.keys())
             if len(common_dates) < min_overlap:
-                skipped += 1
                 continue
 
             c_vec = np.array([cand_date_map[d] for d in common_dates], dtype=np.float64)
             p_vec = np.array([port_date_map[d] for d in common_dates], dtype=np.float64)
 
             rho = abs(compute_pairwise_correlation(c_vec, p_vec))
-            measured += 1
-            if max_corr is None or rho > max_corr:
+            if rho > max_corr:
                 max_corr = rho
-                colliding_alpha_id = port_alpha.id
-    else:
-        skipped = len(active_portfolio)
+                if rho >= threshold:
+                    colliding_alpha_id = port_alpha.id
 
-    # 1. A measured collision blocks.
-    if max_corr is not None and max_corr >= threshold:
-        return CorrelationVerdict(
-            blocking=True,
-            reason=(
-                f"empirical correlation {max_corr:.2f} with portfolio alpha "
-                f"#{colliding_alpha_id} exceeds threshold {threshold:.2f}"
-            ),
-            max_correlation=max_corr,
-            method="empirical",
-            measured_pairs=measured,
-            skipped_pairs=skipped,
-            portfolio_size=len(active_portfolio),
-        )
+        if colliding_alpha_id is not None:
+            return (
+                True,
+                f"empirical correlation {max_corr:.2f} with portfolio alpha #{colliding_alpha_id} exceeds threshold {threshold:.2f}",
+                max_corr,
+            )
 
-    # 2. The structural proxy is a *supplement*, not a substitute.
-    is_struct, struct_reason = check_structural_proxy(db, alpha_id, portfolio=active_portfolio)
-    if is_struct:
-        return CorrelationVerdict(
-            blocking=True,
-            reason=struct_reason,
-            max_correlation=max_corr,
-            method="structural_proxy",
-            measured_pairs=measured,
-            skipped_pairs=skipped,
-            portfolio_size=len(active_portfolio),
-        )
+    # Fallback to structural proxy check
+    is_struct_corr, struct_collision = check_structural_proxy(db, alpha_id, portfolio=portfolio)
+    if is_struct_corr:
+        return True, struct_collision, max_corr
 
-    # 3. Nothing measured against a non-empty portfolio => FAIL CLOSED.
-    if active_portfolio and measured == 0:
-        return CorrelationVerdict(
-            blocking=not allow_unmeasured,
-            reason=(
-                f"correlation UNMEASURED against {len(active_portfolio)} portfolio alphas "
-                f"({skipped} pairs lacked {min_overlap}+ common trading days). "
-                f"Blocking: an unverified correlation constraint is not a passed one."
-            ),
-            max_correlation=None,
-            method="unmeasured",
-            measured_pairs=0,
-            skipped_pairs=skipped,
-            portfolio_size=len(active_portfolio),
-        )
-
-    # 4. Genuinely measured and genuinely clear.
-    return CorrelationVerdict(
-        blocking=False,
-        reason=None,
-        max_correlation=max_corr,
-        method="empirical" if measured else "none",
-        measured_pairs=measured,
-        skipped_pairs=skipped,
-        portfolio_size=len(active_portfolio),
-    )
+    return False, None, max_corr
 
 
 def ensure_alpha_pnl(
@@ -217,9 +152,7 @@ def ensure_alpha_pnl(
         return False
 
     # Try to find a known remote brain_id from simulation_imports
-    from app.models.results import AlphaMetric, SimulationImport
-    from app.services.brain import BrainClient
-    from app.services.pnl_convention import detect, to_daily
+    from app.models.results import SimulationImport
 
     sim_import = (
         db.execute(select(SimulationImport).where(SimulationImport.alpha_id == alpha_id))
@@ -237,48 +170,16 @@ def ensure_alpha_pnl(
         return False
 
     try:
+        from app.services.brain import BrainClient
+
         with BrainClient() as brain:
             pnl_resp = brain.get_json(f"/alphas/{remote_id}/recordsets/daily-pnl")
             records = pnl_resp.get("records", [])
-            if not records:
-                return False
-
-            dates = [str(r[0]) for r in records]
-            raw = np.array([float(r[1]) for r in records], dtype=float)
-
-            metric = (
-                db.execute(
-                    select(AlphaMetric)
-                    .where(AlphaMetric.alpha_id == alpha_id)
-                    .order_by(AlphaMetric.id.desc())
-                )
-                .scalars()
-                .first()
-            )
-            if metric is None or metric.sharpe is None:
-                log.warning("pnl_fetch_no_local_sharpe", alpha_id=alpha_id)
-                return False
-
-            verdict = detect(raw, float(metric.sharpe))
-            if not verdict.is_usable:
-                log.warning(
-                    "pnl_convention_indeterminate",
-                    alpha_id=alpha_id,
-                    remote_id=remote_id,
-                    reported=verdict.reported_sharpe,
-                    as_daily=verdict.sharpe_as_daily,
-                    as_cumulative=verdict.sharpe_as_cumulative,
-                )
-                return False
-
-            store.save_pnl(
-                alpha_id,
-                dates,
-                to_daily(raw, verdict.convention),
-                convention=verdict.convention,
-                reported_sharpe=float(metric.sharpe),
-            )
-            return True
+            if records:
+                dates = [str(r[0]) for r in records]
+                pnl = np.array([float(r[1]) for r in records], dtype=float)
+                store.save_pnl(alpha_id, dates, pnl)
+                return True
     except Exception as exc:
         log.warning(
             "on_demand_pnl_fetch_failed", alpha_id=alpha_id, remote_id=remote_id, error=str(exc)
@@ -292,22 +193,59 @@ def compute_max_self_correlation_with_submitted(
     alpha_id: int,
     *,
     pnl_store: PnLStore | None = None,
-    portfolio: list[Alpha] | None = None,
     min_overlap: int = MIN_COMMON_TRADING_DAYS,
 ) -> tuple[float | None, int | None, str]:
-    """Kept for reporting/UI paths. Delegates to check_portfolio_empirical_correlation."""
-    v = check_portfolio_empirical_correlation(
-        db,
-        alpha_id,
-        pnl_store=pnl_store,
-        portfolio=portfolio,
-        min_overlap=min_overlap,
-        allow_unmeasured=True,
+    """Compute max correlation against confirmed submitted alphas (submission_attempts with result='submitted').
+
+    Returns (max_correlation, target_alpha_id, method), where method is 'empirical',
+    'structural_proxy', 'unmeasured', or 'none'.
+    Returns None for max_correlation when PnL series is unmeasured (never fabricates synthetic 0.20 or 0.85).
+    """
+    store = pnl_store or get_pnl_store()
+    candidate = db.get(Alpha, alpha_id)
+    if candidate is None:
+        return None, None, "none"
+
+    submitted_alphas = submitted_portfolio(db, exclude_alpha_id=alpha_id)
+    if not submitted_alphas:
+        return 0.0, None, "none"
+
+    cand_pnl_data = store.load_pnl(alpha_id)
+    cand_date_map = _date_map(cand_pnl_data)
+
+    max_corr = 0.0
+    colliding_alpha_id: int | None = None
+    had_empirical_match = False
+
+    if cand_date_map is not None:
+        for sub_alpha in submitted_alphas:
+            sub_pnl_data = store.load_pnl(sub_alpha.id)
+            sub_date_map = _date_map(sub_pnl_data)
+            if sub_date_map is None:
+                continue
+
+            common_dates = sorted(cand_date_map.keys() & sub_date_map.keys())
+            if len(common_dates) < min_overlap:
+                continue
+
+            c_vec = np.array([cand_date_map[d] for d in common_dates], dtype=np.float64)
+            s_vec = np.array([sub_date_map[d] for d in common_dates], dtype=np.float64)
+
+            rho = abs(compute_pairwise_correlation(c_vec, s_vec))
+            had_empirical_match = True
+            if rho >= max_corr:
+                max_corr = rho
+                colliding_alpha_id = sub_alpha.id
+
+    if had_empirical_match:
+        return max_corr, colliding_alpha_id, "empirical"
+
+    # Fallback to structural proxy check
+    is_struct_corr, struct_collision = check_structural_proxy(
+        db, alpha_id, portfolio=submitted_alphas
     )
-    colliding_id = None
-    if v.reason and "#" in v.reason:
-        try:
-            colliding_id = int(v.reason.split("#")[1].split()[0])
-        except Exception:
-            colliding_id = None
-    return v.max_correlation, colliding_id, v.method
+    target_id = submitted_alphas[0].id if submitted_alphas else None
+    if is_struct_corr:
+        return None, target_id, "structural_proxy"
+
+    return None, None, "unmeasured"

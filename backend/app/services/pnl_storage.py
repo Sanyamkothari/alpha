@@ -7,8 +7,9 @@ with an in-memory cache for fast sub-millisecond matrix intersections.
 from __future__ import annotations
 
 import json
-import threading
+import os
 from pathlib import Path
+import threading
 
 import numpy as np
 import structlog
@@ -28,19 +29,51 @@ class PnLStore:
         self._lock = threading.Lock()
 
     def save_pnl(
-        self, alpha_id: int, dates: list[str], pnl_values: list[float] | np.ndarray
+        self,
+        alpha_id: int,
+        dates: list[str],
+        pnl_values: list[float] | np.ndarray,
+        *,
+        convention: str = "daily",
+        reported_sharpe: float | None = None,
     ) -> None:
-        """Save a daily PnL series for an alpha."""
+        """Save a daily PnL series for an alpha, with provenance metadata."""
         arr = np.asarray(pnl_values, dtype=np.float64)
+        if len(dates) != len(arr):
+            raise ValueError(
+                f"pnl length mismatch for alpha {alpha_id}: {len(dates)} dates vs {len(arr)} values"
+            )
         with self._lock:
             self._cache[alpha_id] = (dates, arr)
             npy_path = self._dir / f"{alpha_id}.npy"
             json_path = self._dir / f"{alpha_id}_dates.json"
+            meta_path = self._dir / f"{alpha_id}_meta.json"
+            tmp_npy = self._dir / f"{alpha_id}.npy.tmp"
+            tmp_json = self._dir / f"{alpha_id}_dates.json.tmp"
+            tmp_meta = self._dir / f"{alpha_id}_meta.json.tmp"
             try:
-                np.save(npy_path, arr)
-                json_path.write_text(json.dumps(dates), encoding="utf-8")
+                with open(tmp_npy, "wb") as fh:
+                    np.save(fh, arr)
+                tmp_json.write_text(json.dumps(dates), encoding="utf-8")
+                meta = {
+                    "convention_at_source": convention,
+                    "reported_sharpe": reported_sharpe,
+                }
+                tmp_meta.write_text(json.dumps(meta), encoding="utf-8")
+
+                os.replace(tmp_npy, npy_path)
+                os.replace(tmp_json, json_path)
+                os.replace(tmp_meta, meta_path)
             except Exception as exc:
+                self._cache.pop(alpha_id, None)
+                for p in (tmp_npy, tmp_json, tmp_meta):
+                    if p.exists():
+                        try:
+                            p.unlink()
+                        except OSError:
+                            pass
                 log.warning("pnl_save_failed", alpha_id=alpha_id, error=str(exc))
+                raise
 
     def load_pnl(self, alpha_id: int) -> tuple[list[str], np.ndarray] | None:
         """Load the daily PnL series for an alpha."""
@@ -54,12 +87,33 @@ class PnLStore:
                 return None
             try:
                 arr = np.load(npy_path)
-                dates = json.loads(json_path.read_text(encoding="utf-8"))
+                raw_dates = json.loads(json_path.read_text(encoding="utf-8"))
+                dates = raw_dates.get("dates", []) if isinstance(raw_dates, dict) else raw_dates
                 self._cache[alpha_id] = (dates, arr)
                 return dates, arr
             except Exception as exc:
                 log.warning("pnl_load_failed", alpha_id=alpha_id, error=str(exc))
                 return None
+
+    def load_meta(self, alpha_id: int) -> dict | None:
+        """Load provenance metadata for an alpha PnL series."""
+        meta_path = self._dir / f"{alpha_id}_meta.json"
+        if not meta_path.exists():
+            return None
+        try:
+            return json.loads(meta_path.read_text(encoding="utf-8"))
+        except Exception as exc:
+            log.warning("pnl_meta_load_failed", alpha_id=alpha_id, error=str(exc))
+            return None
+
+    def iter_alpha_ids(self) -> list[int]:
+        """List all alpha IDs with stored .npy PnL files."""
+        ids = []
+        for npy_file in self._dir.glob("*.npy"):
+            stem = npy_file.stem
+            if stem.isdigit():
+                ids.append(int(stem))
+        return sorted(ids)
 
     def get_aligned_matrix(
         self, alpha_ids: list[int], min_overlap: int = 500
@@ -88,12 +142,12 @@ class PnLStore:
             )
             return [], [], np.empty((0, 0), dtype=np.float64)
 
+        date_indices: dict[str, int] = {d: i for i, d in enumerate(sorted_dates)}
         aligned_rows: list[np.ndarray] = []
         valid_ids: list[int] = []
 
         for aid, dates, arr in loaded:
-            # Map values to common dates
-            orig_map = dict(zip(dates, arr, strict=True))
+            orig_map = dict(zip(dates, arr))
             row = np.array([orig_map[d] for d in sorted_dates], dtype=np.float64)
             aligned_rows.append(row)
             valid_ids.append(aid)
