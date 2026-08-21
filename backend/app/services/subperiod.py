@@ -147,7 +147,9 @@ def evaluate_subperiod_stability(
     else:
         split_ratio = min(sr1, sr2) / max(sr1, sr2)
         if split_ratio < split_ratio_floor:
-            reasons.append(f"split-half ratio {split_ratio:.2f} below floor {split_ratio_floor:.2f}")
+            reasons.append(
+                f"split-half ratio {split_ratio:.2f} below floor {split_ratio_floor:.2f}"
+            )
 
     # 3. Monthly-stepped 6-month (126 trading days) Rolling Window
     win_len = 126
@@ -243,6 +245,9 @@ def verify_pnl_reconciliation(
         reported_sharpe=reported_sharpe,
         sharpe_diff=diff,
         pnl_sum=float(np.sum(arr)),
-        error=None if is_valid else f"recomputed Sharpe {recomputed_sr:.4f} deviates from reported {reported_sharpe:.4f}",
+        error=(
+            None
+            if is_valid
+            else f"recomputed Sharpe {recomputed_sr:.4f} deviates from reported {reported_sharpe:.4f}"
+        ),
     )
-

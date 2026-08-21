@@ -212,9 +212,7 @@ def stamp_alpha_field_snapshots(
         ).scalar_one_or_none()
 
         if df is None:
-            df = db.execute(
-                select(DataField).where(DataField.field_code == code)
-            ).scalars().first()
+            df = db.execute(select(DataField).where(DataField.field_code == code)).scalars().first()
 
         snap = AlphaFieldSnapshot(
             alpha_id=alpha.id,

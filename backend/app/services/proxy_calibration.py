@@ -182,16 +182,13 @@ def calibrate_proxy_rankings(db: Session, sample_size: int = 150) -> Calibration
 
     Uses a mixed batch of historical simulated alphas (including passed, failed, and mediocre).
     """
-    rows = (
-        db.execute(
-            select(Alpha, AlphaMetric)
-            .join(AlphaMetric, AlphaMetric.alpha_id == Alpha.id)
-            .where(AlphaMetric.turnover.is_not(None), AlphaMetric.sharpe.is_not(None))
-            .order_by(AlphaMetric.id.desc())
-            .limit(sample_size)
-        )
-        .all()
-    )
+    rows = db.execute(
+        select(Alpha, AlphaMetric)
+        .join(AlphaMetric, AlphaMetric.alpha_id == Alpha.id)
+        .where(AlphaMetric.turnover.is_not(None), AlphaMetric.sharpe.is_not(None))
+        .order_by(AlphaMetric.id.desc())
+        .limit(sample_size)
+    ).all()
 
     if not rows:
         return CalibrationReport(
@@ -234,9 +231,7 @@ def calibrate_proxy_rankings(db: Session, sample_size: int = 150) -> Calibration
     turnover_corr = _spearman_rank_correlation(
         np.array(proxy_turnovers), np.array(actual_turnovers)
     )
-    complexity_corr = _spearman_rank_correlation(
-        np.array(complexities), np.array(actual_fitnesses)
-    )
+    complexity_corr = _spearman_rank_correlation(np.array(complexities), np.array(actual_fitnesses))
 
     log.info(
         "proxy_calibration_completed",

@@ -39,9 +39,9 @@ def run() -> dict[str, float | int]:
 
     with session_scope() as db:
         for aid in sorted(alpha_ids):
-            metric = db.execute(
-                select(AlphaMetric).where(AlphaMetric.alpha_id == aid)
-            ).scalars().first()
+            metric = (
+                db.execute(select(AlphaMetric).where(AlphaMetric.alpha_id == aid)).scalars().first()
+            )
             if metric and metric.sharpe is not None:
                 r = verify_pnl_reconciliation(aid, metric.sharpe, store)
                 reported.append(metric.sharpe)
@@ -60,13 +60,19 @@ def run() -> dict[str, float | int]:
 
     print(f"Total stored PnL files: {len(alpha_ids)}")
     print(f"Reconciled with AlphaMetric: {len(reported)}")
-    print(f"Passing tolerance (diff <= 0.05): {valid_count}/{len(reported)} ({valid_count/len(reported)*100:.1f}%)")
-    print(f"Sharpe diff distribution: min={np.min(diff_arr):.4f}, median={np.median(diff_arr):.4f}, mean={np.mean(diff_arr):.4f}, max={np.max(diff_arr):.4f}")
+    print(
+        f"Passing tolerance (diff <= 0.05): {valid_count}/{len(reported)} ({valid_count/len(reported)*100:.1f}%)"
+    )
+    print(
+        f"Sharpe diff distribution: min={np.min(diff_arr):.4f}, median={np.median(diff_arr):.4f}, mean={np.mean(diff_arr):.4f}, max={np.max(diff_arr):.4f}"
+    )
     print("Regression of recomputed Sharpe on reported Sharpe:")
     print(f"  Slope: {slope:.6f} (theoretical sqrt(252/250) = {np.sqrt(252/250):.6f})")
     print(f"  Intercept: {intercept:.6f}")
     print(f"  R^2: {r_val**2:.6f}")
-    print(f"  Unexplained residual after sqrt(252/250) correction: mean={np.mean(unexplained):.6f}, max={np.max(unexplained):.6f}")
+    print(
+        f"  Unexplained residual after sqrt(252/250) correction: mean={np.mean(unexplained):.6f}, max={np.max(unexplained):.6f}"
+    )
 
     return {
         "total_pnl_files": len(alpha_ids),

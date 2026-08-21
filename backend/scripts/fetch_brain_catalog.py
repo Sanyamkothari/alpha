@@ -212,7 +212,14 @@ def fetch(
     if operators:
         counts["operators"] = _refresh_operators(operators)
 
-    log.info("catalog_fetch_complete", region=region, delay=delay, universe=universe, as_of_date=str(as_of_date), **counts)
+    log.info(
+        "catalog_fetch_complete",
+        region=region,
+        delay=delay,
+        universe=universe,
+        as_of_date=str(as_of_date),
+        **counts,
+    )
     return counts
 
 

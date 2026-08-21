@@ -390,7 +390,11 @@ def create_submission_attempt(
 
     # If resolved immediately, add status audit row
     if body.result:
-        hist_note = f"attempt:{body.result}" + (f": {body.failed_check}" if body.failed_check else "") + (f": {body.notes}" if body.notes else "")
+        hist_note = (
+            f"attempt:{body.result}"
+            + (f": {body.failed_check}" if body.failed_check else "")
+            + (f": {body.notes}" if body.notes else "")
+        )
         db.add(
             AlphaStatusHistory(
                 alpha_id=alpha.id,
@@ -411,11 +415,15 @@ def create_submission_attempt(
 def list_alpha_attempts(alpha_id: int, db: Session = Depends(get_db)) -> list[AttemptOut]:
     """List all submission attempts for a specific alpha."""
     alpha = _get_alpha(db, alpha_id)
-    attempts = db.execute(
-        select(SubmissionAttempt)
-        .where(SubmissionAttempt.alpha_id == alpha_id)
-        .order_by(SubmissionAttempt.attempted_at.desc())
-    ).scalars().all()
+    attempts = (
+        db.execute(
+            select(SubmissionAttempt)
+            .where(SubmissionAttempt.alpha_id == alpha_id)
+            .order_by(SubmissionAttempt.attempted_at.desc())
+        )
+        .scalars()
+        .all()
+    )
     out: list[AttemptOut] = []
     for att in attempts:
         row = AttemptOut.model_validate(att)
@@ -443,7 +451,11 @@ def resolve_attempt(
     alpha = _get_alpha(db, attempt.alpha_id)
     sync_alpha_platform_outcome(db, alpha.id)
 
-    hist_note = f"attempt:{body.result}" + (f": {body.failed_check}" if body.failed_check else "") + (f": {body.notes}" if body.notes else "")
+    hist_note = (
+        f"attempt:{body.result}"
+        + (f": {body.failed_check}" if body.failed_check else "")
+        + (f": {body.notes}" if body.notes else "")
+    )
     db.add(
         AlphaStatusHistory(
             alpha_id=alpha.id,
@@ -472,7 +484,9 @@ def delete_attempt(attempt_id: int, db: Session = Depends(get_db)) -> None:
     sync_alpha_platform_outcome(db, alpha_id)
 
 
-@router.post("/{alpha_id}/production-snapshots", response_model=ProductionSnapshotOut, status_code=201)
+@router.post(
+    "/{alpha_id}/production-snapshots", response_model=ProductionSnapshotOut, status_code=201
+)
 def add_production_snapshot(
     alpha_id: int, body: ProductionSnapshotIn, db: Session = Depends(get_db)
 ) -> ProductionSnapshotOut:
@@ -518,11 +532,15 @@ def list_production_snapshots(
 ) -> list[ProductionSnapshotOut]:
     """List all production snapshots for an alpha in chronological order."""
     _get_alpha(db, alpha_id)
-    snaps = db.execute(
-        select(AlphaProductionSnapshot)
-        .where(AlphaProductionSnapshot.alpha_id == alpha_id)
-        .order_by(AlphaProductionSnapshot.as_of_date.desc())
-    ).scalars().all()
+    snaps = (
+        db.execute(
+            select(AlphaProductionSnapshot)
+            .where(AlphaProductionSnapshot.alpha_id == alpha_id)
+            .order_by(AlphaProductionSnapshot.as_of_date.desc())
+        )
+        .scalars()
+        .all()
+    )
     return [ProductionSnapshotOut.model_validate(s) for s in snaps]
 
 

@@ -154,4 +154,6 @@ def test_suite_never_touches_production_database(tmp_path) -> None:
         command.upgrade(cfg, "head")
 
         # Production database must remain completely untouched
-        assert prod_db.stat().st_mtime == initial_mtime, "Production wq.db was touched by migration!"
+        assert (
+            prod_db.stat().st_mtime == initial_mtime
+        ), "Production wq.db was touched by migration!"

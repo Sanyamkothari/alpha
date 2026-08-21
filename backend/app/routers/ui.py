@@ -109,7 +109,9 @@ def summary(db: Session = Depends(get_db)) -> dict:
         or 0
     )
     unresolved_attempts = (
-        db.scalar(select(func.count(SubmissionAttempt.id)).where(SubmissionAttempt.result.is_(None)))
+        db.scalar(
+            select(func.count(SubmissionAttempt.id)).where(SubmissionAttempt.result.is_(None))
+        )
         or 0
     )
 
@@ -555,19 +557,21 @@ def ui_unresolved_attempts(db: Session = Depends(get_db)) -> dict:
     ).all()
     out = []
     for att, alpha in attempts:
-        out.append({
-            "id": att.id,
-            "alpha_id": att.alpha_id,
-            "attempted_at": str(att.attempted_at),
-            "expression": alpha.expression,
-            "family_key": alpha.family_key,
-            "region": alpha.region,
-            "universe": alpha.universe,
-            "delay": alpha.delay,
-            "neutralization": alpha.neutralization,
-            "decay": alpha.decay,
-            "notes": att.notes,
-        })
+        out.append(
+            {
+                "id": att.id,
+                "alpha_id": att.alpha_id,
+                "attempted_at": str(att.attempted_at),
+                "expression": alpha.expression,
+                "family_key": alpha.family_key,
+                "region": alpha.region,
+                "universe": alpha.universe,
+                "delay": alpha.delay,
+                "neutralization": alpha.neutralization,
+                "decay": alpha.decay,
+                "notes": att.notes,
+            }
+        )
     return {"unresolved_attempts": out, "count": len(out)}
 
 
@@ -593,7 +597,11 @@ def ui_resolve_attempt(
     alpha = db.get(Alpha, attempt.alpha_id)
     if alpha:
         sync_alpha_platform_outcome(db, alpha.id)
-        hist_note = f"attempt:{res}" + (f": {attempt.failed_check}" if attempt.failed_check else "") + (f": {attempt.notes}" if attempt.notes else "")
+        hist_note = (
+            f"attempt:{res}"
+            + (f": {attempt.failed_check}" if attempt.failed_check else "")
+            + (f": {attempt.notes}" if attempt.notes else "")
+        )
         db.add(
             AlphaStatusHistory(
                 alpha_id=alpha.id,
@@ -732,15 +740,11 @@ def throughput(db: Session = Depends(get_db)) -> dict:
 
     # 1. Simulations metrics
     sims_today = (
-        db.scalar(
-            select(func.count(AlphaMetric.id)).where(AlphaMetric.created_at >= today_start)
-        )
+        db.scalar(select(func.count(AlphaMetric.id)).where(AlphaMetric.created_at >= today_start))
         or 0
     )
     sims_week = (
-        db.scalar(
-            select(func.count(AlphaMetric.id)).where(AlphaMetric.created_at >= week_start)
-        )
+        db.scalar(select(func.count(AlphaMetric.id)).where(AlphaMetric.created_at >= week_start))
         or 0
     )
 
@@ -773,7 +777,16 @@ def throughput(db: Session = Depends(get_db)) -> dict:
     )
 
     # 3. Structural Diversity
-    known_ops = ["ts_zscore", "ts_rank", "ts_delta", "ts_mean", "ts_decay_linear", "ts_std_dev", "ts_quantile", "ts_corr"]
+    known_ops = [
+        "ts_zscore",
+        "ts_rank",
+        "ts_delta",
+        "ts_mean",
+        "ts_decay_linear",
+        "ts_std_dev",
+        "ts_quantile",
+        "ts_corr",
+    ]
     distinct_ops = set()
     distinct_wrappers = set()
     for (expr,) in db.execute(select(Alpha.expression).where(Alpha.expression.is_not(None))).all():
@@ -814,7 +827,13 @@ def throughput(db: Session = Depends(get_db)) -> dict:
     )
 
     active_campaigns = [
-        {"id": c.id, "name": c.name, "status": c.status, "completed": c.budget_completed, "total": c.budget_total}
+        {
+            "id": c.id,
+            "name": c.name,
+            "status": c.status,
+            "completed": c.budget_completed,
+            "total": c.budget_total,
+        }
         for c in db.execute(select(Campaign).order_by(Campaign.id.desc()).limit(5)).scalars().all()
     ]
 
@@ -839,4 +858,3 @@ def throughput(db: Session = Depends(get_db)) -> dict:
         "calibration_alphas_count": calibration_count,
         "active_campaigns": active_campaigns,
     }
-

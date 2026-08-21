@@ -1,7 +1,7 @@
 """Run multi-factor composite families (Phase 1).
 
-    python -m scripts.run_composite --primary liabilities --secondary cap --mode blend
-    python -m scripts.run_composite --primary liabilities --secondary assets --mode spread --simulate 48
+python -m scripts.run_composite --primary liabilities --secondary cap --mode blend
+python -m scripts.run_composite --primary liabilities --secondary assets --mode spread --simulate 48
 """
 
 from __future__ import annotations

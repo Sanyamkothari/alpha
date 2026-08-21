@@ -78,9 +78,13 @@ def test_alpha_creation_stamps_field_snapshots(db_session):
     assert res.created
 
     # Verify alpha_field_snapshot stamped operating_income and excluded sector
-    snaps = db_session.execute(
-        select(AlphaFieldSnapshot).where(AlphaFieldSnapshot.alpha_id == res.alpha.id)
-    ).scalars().all()
+    snaps = (
+        db_session.execute(
+            select(AlphaFieldSnapshot).where(AlphaFieldSnapshot.alpha_id == res.alpha.id)
+        )
+        .scalars()
+        .all()
+    )
 
     assert len(snaps) == 1
     assert snaps[0].field_code == "operating_income"

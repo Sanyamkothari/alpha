@@ -112,7 +112,9 @@ def run(limit: int | None = None, dry_run: bool = False) -> dict[str, int]:
             db.add(alpha)
             db.flush()
 
-            stamp_alpha_field_snapshots(db, alpha, result.features.get("distinct_fields") if result.features else None)
+            stamp_alpha_field_snapshots(
+                db, alpha, result.features.get("distinct_fields") if result.features else None
+            )
 
             import_result(
                 db,

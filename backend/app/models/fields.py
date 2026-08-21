@@ -94,7 +94,12 @@ class DataFieldSnapshot(IdMixin, TimestampMixin, Base):
 
     __table_args__ = (
         UniqueConstraint(
-            "field_code", "region", "delay", "universe", "as_of_date", name="field_snapshot_config_as_of"
+            "field_code",
+            "region",
+            "delay",
+            "universe",
+            "as_of_date",
+            name="field_snapshot_config_as_of",
         ),
         enum_check("category", FieldCategory),
         enum_check("field_type", FieldType),

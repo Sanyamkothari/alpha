@@ -28,6 +28,7 @@ def test_execute_campaign_dry_run(db_session, monkeypatch):
 
     # Mock session_scope to use in-memory db_session
     from contextlib import contextmanager
+
     @contextmanager
     def mock_scope():
         yield db_session
@@ -41,7 +42,9 @@ def test_execute_campaign_dry_run(db_session, monkeypatch):
     assert c.status == "completed"
 
     # Check that alphas were generated with arm and campaign_task_id
-    alphas = db_session.execute(select(Alpha).where(Alpha.campaign_task_id.is_not(None))).scalars().all()
+    alphas = (
+        db_session.execute(select(Alpha).where(Alpha.campaign_task_id.is_not(None))).scalars().all()
+    )
     assert len(alphas) > 0
     for a in alphas:
         assert a.arm in ["exploit", "random_stratified", "plateau_fill"]
@@ -101,11 +104,12 @@ def test_execute_campaign_with_fake_brain_client(db_session, monkeypatch):
     assert c.status == "completed"
     assert c.budget_completed == res["total_simulated"]
 
-    tasks = db_session.execute(
-        select(CampaignTask).where(CampaignTask.campaign_id == cid)
-    ).scalars().all()
+    tasks = (
+        db_session.execute(select(CampaignTask).where(CampaignTask.campaign_id == cid))
+        .scalars()
+        .all()
+    )
     assert len(tasks) >= 2
     for t in tasks:
         assert t.status == "completed"
         assert t.alphas_simulated > 0
-

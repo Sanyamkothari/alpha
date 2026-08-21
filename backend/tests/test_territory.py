@@ -73,7 +73,10 @@ def test_family_field_code_compatibility() -> None:
 
     # Canonical territory formats
     assert family_field_code("liabilities:ts_zscore:short@USA/TOP3000/d1") == "liabilities"
-    assert family_field_code("debt_repayment_year_three:ts_rank:medium@USA/TOP3000/d1") == "debt_repayment_year_three"
+    assert (
+        family_field_code("debt_repayment_year_three:ts_rank:medium@USA/TOP3000/d1")
+        == "debt_repayment_year_three"
+    )
     assert family_field_code("fscore_bfl_total@USA/TOP3000/d1") == "fscore_bfl_total"
 
 
@@ -110,7 +113,7 @@ def test_reproduce_dense_territories_synthetic() -> None:
     """Self-contained verification of the 36 dense territories partitioning (12 fields x 1 op x 3 bands)."""
     fields = [f"field_{i}" for i in range(12)]
     windows = [5, 10, 20, 22, 40, 60, 63, 120, 126, 250, 252]  # spans short, medium, long
-    
+
     dense_territories: dict[tuple[str, str, str], int] = {}
     for f in fields:
         for w in windows:
@@ -126,10 +129,13 @@ def test_reproduce_dense_territories_synthetic() -> None:
 def test_reproduce_dense_territories_from_db() -> None:
     """Verifies that territory derivation reproduces the 36 dense territories documented in INVENTORY.md §A2 against production wq.db."""
     from app.db.session import session_scope
+
     with session_scope() as db:
         alphas = db.execute(select(Alpha)).scalars().all()
         if not alphas:
-            pytest.xfail("Production database wq.db is empty or not present in this test environment (CI / fresh clone)")
+            pytest.xfail(
+                "Production database wq.db is empty or not present in this test environment (CI / fresh clone)"
+            )
 
         dense_territories: dict[tuple[str, str, str], int] = {}
         for a in alphas:
@@ -144,4 +150,6 @@ def test_reproduce_dense_territories_from_db() -> None:
 
         dense_36 = {k: v for k, v in dense_territories.items() if v >= 100}
         # Assert exactly 36 dense territories (12 fields x 1 operator x 3 bands)
-        assert len(dense_36) == 36, f"Expected exactly 36 dense territories in wq.db, found {len(dense_36)}"
+        assert (
+            len(dense_36) == 36
+        ), f"Expected exactly 36 dense territories in wq.db, found {len(dense_36)}"

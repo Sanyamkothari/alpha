@@ -26,17 +26,27 @@ if IS_FROZEN:
         else Path.home() / ".alpha_research"
     )
     DATABASE_DIR: Path = USER_DATA_DIR / "database"
-    OPERATORS_DIR: Path = BUNDLE_DIR / "operators" if (BUNDLE_DIR / "operators").exists() else BUNDLE_DIR / "app" / "operators"
-    FIELDS_DIR: Path = BUNDLE_DIR / "fields" if (BUNDLE_DIR / "fields").exists() else BUNDLE_DIR / "app" / "fields"
-    TEMPLATES_DIR: Path = BUNDLE_DIR / "templates" if (BUNDLE_DIR / "templates").exists() else BUNDLE_DIR / "app" / "templates"
-    ENV_FILE_PATH: Path = USER_DATA_DIR / ".env" if (USER_DATA_DIR / ".env").exists() else REPO_ROOT / ".env"
+    OPERATORS_DIR: Path = (
+        BUNDLE_DIR / "operators"
+        if (BUNDLE_DIR / "operators").exists()
+        else BUNDLE_DIR / "app" / "operators"
+    )
+    FIELDS_DIR: Path = (
+        BUNDLE_DIR / "fields" if (BUNDLE_DIR / "fields").exists() else BUNDLE_DIR / "app" / "fields"
+    )
+    TEMPLATES_DIR: Path = (
+        BUNDLE_DIR / "templates"
+        if (BUNDLE_DIR / "templates").exists()
+        else BUNDLE_DIR / "app" / "templates"
+    )
+    ENV_FILE_PATH: Path = (
+        USER_DATA_DIR / ".env" if (USER_DATA_DIR / ".env").exists() else REPO_ROOT / ".env"
+    )
 else:
     BACKEND_DIR: Path = Path(__file__).resolve().parents[1]  # .../alpha/backend
     REPO_ROOT: Path = BACKEND_DIR.parent  # .../alpha
     USER_DATA_DIR: Path = (
-        Path(os.environ["ALPHA_DATA_DIR"])
-        if "ALPHA_DATA_DIR" in os.environ
-        else REPO_ROOT
+        Path(os.environ["ALPHA_DATA_DIR"]) if "ALPHA_DATA_DIR" in os.environ else REPO_ROOT
     )
     DATABASE_DIR: Path = USER_DATA_DIR / "database"
     OPERATORS_DIR: Path = REPO_ROOT / "operators"

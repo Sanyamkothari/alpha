@@ -76,10 +76,10 @@ DEFAULT_TS_TRANSFORMS: tuple[str, ...] = (
 
 # Depth-2: the outer operator wraps an inner time-series result.
 DEFAULT_DEPTH2_PAIRS: tuple[tuple[str, str], ...] = (
-    ("ts_delta", "ts_rank"),      # acceleration of rank — regime change
-    ("ts_zscore", "ts_delta"),    # z-score of momentum — mean-reversion of changes
-    ("ts_rank", "ts_mean"),       # rank of smoothed signal — robust trend
-    ("ts_delta", "ts_zscore"),    # change in standardised level — breakout
+    ("ts_delta", "ts_rank"),  # acceleration of rank — regime change
+    ("ts_zscore", "ts_delta"),  # z-score of momentum — mean-reversion of changes
+    ("ts_rank", "ts_mean"),  # rank of smoothed signal — robust trend
+    ("ts_delta", "ts_zscore"),  # change in standardised level — breakout
 )
 
 # Inner windows for depth-2 — always shorter to avoid inner >= outer redundancy.
@@ -100,12 +100,12 @@ DEFAULT_UNIVERSES: tuple[str, ...] = ("TOP3000",)
 
 # Map field update frequency → backfill days.
 FREQUENCY_BACKFILL: dict[str, int | None] = {
-    "daily": None,       # no backfill — data arrives every day
+    "daily": None,  # no backfill — data arrives every day
     "weekly": 10,
     "monthly": 30,
-    "quarterly": 120,    # the original hardcoded default
+    "quarterly": 120,  # the original hardcoded default
     "annual": 252,
-    "unknown": 120,      # conservative fallback
+    "unknown": 120,  # conservative fallback
 }
 
 
@@ -423,7 +423,7 @@ def expected_surface_size(horizon_band: str | None = None) -> int:
         return 21  # (20, 40, 60) x 7 decays
     if horizon_band == "long":
         return 14  # (120, 250) x 7 decays
-    return 49      # 7 windows x 7 decays
+    return 49  # 7 windows x 7 decays
 
 
 def _stratified_configs(
@@ -522,16 +522,8 @@ def expand(
             )
 
     # Filter transforms and cross_sections if explicitly set on FamilySpec
-    ts_transforms = (
-        (spec.operator_family,)
-        if spec.operator_family
-        else axes.ts_transforms
-    )
-    cross_sections = (
-        (spec.wrapper_shape,)
-        if spec.wrapper_shape
-        else axes.cross_section
-    )
+    ts_transforms = (spec.operator_family,) if spec.operator_family else axes.ts_transforms
+    cross_sections = (spec.wrapper_shape,) if spec.wrapper_shape else axes.cross_section
 
     groups = _group_fields(db, kb, axes.groups)
     family_key = spec.family_key(base_settings)
@@ -551,8 +543,12 @@ def expand(
     # Layer 1: Depth-1 templates (the original grid)
     # ------------------------------------------------------------------
     configs = _stratified_configs(
-        ts_transforms, cross_sections, groups,
-        axes.neutralizations, axes.truncations, axes.universes,
+        ts_transforms,
+        cross_sections,
+        groups,
+        axes.neutralizations,
+        axes.truncations,
+        axes.universes,
     )
     for ts_op, cs_op, group, neutralization, truncation, universe in configs:
         if (family_key, neutralization, truncation) in submitted_slices:
@@ -565,15 +561,25 @@ def expand(
             return _wrap_cross_section(node, _cs, _grp)
 
         grid_extra = {
-            "ts": ts_op, "cs": cs_op, "group": group, "depth": 1,
-            "neutralization": neutralization, "truncation": truncation,
+            "ts": ts_op,
+            "cs": cs_op,
+            "group": group,
+            "depth": 1,
+            "neutralization": neutralization,
+            "truncation": truncation,
             "universe": universe,
         }
         surface, rej = _emit_surface(
-            spec, kb, family_key, base_settings, axes,
+            spec,
+            kb,
+            family_key,
+            base_settings,
+            axes,
             _depth1_builder,
-            seen, grid_extra,
-            arm=arm, campaign_task_id=campaign_task_id,
+            seen,
+            grid_extra,
+            arm=arm,
+            campaign_task_id=campaign_task_id,
         )
         rejected += rej
         out.extend(surface)
@@ -583,8 +589,12 @@ def expand(
     # ------------------------------------------------------------------
     if not spec.operator_family:  # Only explore depth-2 if operator family is unconstrained
         configs_d2 = _stratified_configs(
-            axes.depth2_pairs, cross_sections, groups,
-            axes.neutralizations, axes.truncations, axes.universes,
+            axes.depth2_pairs,
+            cross_sections,
+            groups,
+            axes.neutralizations,
+            axes.truncations,
+            axes.universes,
         )
         for (outer_op, inner_op), cs_op, group, neutralization, truncation, universe in configs_d2:
             if (family_key, neutralization, truncation) in submitted_slices:
@@ -593,7 +603,11 @@ def expand(
                 break
 
             def _depth2_builder(
-                window, _outer=outer_op, _inner=inner_op, _cs=cs_op, _grp=group,
+                window,
+                _outer=outer_op,
+                _inner=inner_op,
+                _cs=cs_op,
+                _grp=group,
             ):
                 inner_w = None
                 for iw in sorted(axes.inner_windows, reverse=True):
@@ -603,24 +617,30 @@ def expand(
                 if inner_w is None:
                     inner_w = min(axes.inner_windows) if axes.inner_windows else 5
 
-                inner_node = OperatorCall(
-                    _inner, [_base_node(spec), Number(float(inner_w), True)]
-                )
-                outer_node = OperatorCall(
-                    _outer, [inner_node, Number(float(window), True)]
-                )
+                inner_node = OperatorCall(_inner, [_base_node(spec), Number(float(inner_w), True)])
+                outer_node = OperatorCall(_outer, [inner_node, Number(float(window), True)])
                 return _wrap_cross_section(outer_node, _cs, _grp)
 
             grid_extra = {
-                "ts": f"{outer_op}({inner_op})", "cs": cs_op, "group": group,
-                "depth": 2, "neutralization": neutralization, "truncation": truncation,
+                "ts": f"{outer_op}({inner_op})",
+                "cs": cs_op,
+                "group": group,
+                "depth": 2,
+                "neutralization": neutralization,
+                "truncation": truncation,
                 "universe": universe,
             }
             surface, rej = _emit_surface(
-                spec, kb, family_key, base_settings, axes,
+                spec,
+                kb,
+                family_key,
+                base_settings,
+                axes,
                 _depth2_builder,
-                seen, grid_extra,
-                arm=arm, campaign_task_id=campaign_task_id,
+                seen,
+                grid_extra,
+                arm=arm,
+                campaign_task_id=campaign_task_id,
             )
             rejected += rej
             out.extend(surface)
@@ -630,8 +650,12 @@ def expand(
     # ------------------------------------------------------------------
     if spec.secondary_field and not spec.operator_family:
         configs_d3 = _stratified_configs(
-            ["ts_corr"], cross_sections, groups,
-            axes.neutralizations, axes.truncations, axes.universes,
+            ["ts_corr"],
+            cross_sections,
+            groups,
+            axes.neutralizations,
+            axes.truncations,
+            axes.universes,
         )
         for _corr_tag, cs_op, group, neutralization, truncation, universe in configs_d3:
             if (family_key, neutralization, truncation) in submitted_slices:
@@ -640,7 +664,10 @@ def expand(
                 break
 
             def _corr_builder(
-                window, _cs=cs_op, _grp=group, _sec=spec.secondary_field,
+                window,
+                _cs=cs_op,
+                _grp=group,
+                _sec=spec.secondary_field,
             ):
                 node = OperatorCall(
                     "ts_corr",
@@ -664,10 +691,16 @@ def expand(
                 "universe": universe,
             }
             surface, rej = _emit_surface(
-                spec, kb, family_key, base_settings, axes,
+                spec,
+                kb,
+                family_key,
+                base_settings,
+                axes,
                 _corr_builder,
-                seen, grid_extra,
-                arm=arm, campaign_task_id=campaign_task_id,
+                seen,
+                grid_extra,
+                arm=arm,
+                campaign_task_id=campaign_task_id,
             )
             rejected += rej
             out.extend(surface)

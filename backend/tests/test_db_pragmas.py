@@ -45,6 +45,7 @@ def test_concurrent_readers_and_writers_do_not_lock() -> None:
     """The real shape: several threads writing while others read."""
     from app.db import engine
     from app.models import Base
+
     Base.metadata.create_all(engine)
 
     errors: list[str] = []

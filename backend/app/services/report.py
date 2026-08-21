@@ -83,7 +83,9 @@ def build(db: Session, *, region: str = "USA", delay: int = 1, universe: str = "
     valid = db.scalar(select(func.count(Alpha.id)).where(Alpha.is_valid.is_(True))) or 0
     simulated = (
         db.scalar(
-            select(func.count(func.distinct(Alpha.id))).join(AlphaMetric, Alpha.id == AlphaMetric.alpha_id)
+            select(func.count(func.distinct(Alpha.id))).join(
+                AlphaMetric, Alpha.id == AlphaMetric.alpha_id
+            )
         )
         or 0
     )
@@ -115,8 +117,12 @@ def build(db: Session, *, region: str = "USA", delay: int = 1, universe: str = "
     add("|---|---|---|")
     add(f"| 1. Candidates Generated | {total} | 100.0% |")
     add(f"| 2. Valid AST Syntax | {valid} | {((valid / total * 100) if total else 0):.1f}% |")
-    add(f"| 3. Simulated on BRAIN | {simulated} | {((simulated / total * 100) if total else 0):.1f}% |")
-    add(f"| 4. Passed BRAIN Checks | {passing} | {((passing / simulated * 100) if simulated else 0):.1f}% |")
+    add(
+        f"| 3. Simulated on BRAIN | {simulated} | {((simulated / total * 100) if total else 0):.1f}% |"
+    )
+    add(
+        f"| 4. Passed BRAIN Checks | {passing} | {((passing / simulated * 100) if simulated else 0):.1f}% |"
+    )
 
     all_promoted: list = []
     for family in _families(db):
@@ -124,14 +130,18 @@ def build(db: Session, *, region: str = "USA", delay: int = 1, universe: str = "
     promoted = [v for v in all_promoted if v.alpha_id not in submitted_ids]
     promoted.sort(key=lambda v: v.sharpe or 0, reverse=True)
 
-    add(f"| 5. Promoted Shortlist | {len(promoted)} | {((len(promoted) / simulated * 100) if simulated else 0):.1f}% |")
+    add(
+        f"| 5. Promoted Shortlist | {len(promoted)} | {((len(promoted) / simulated * 100) if simulated else 0):.1f}% |"
+    )
     add(f"| 6. Submitted Portfolio | {submitted} | — |")
     add("")
 
     # ---- 1. Per-Family Sequential Gating Telemetry ----
     add("## Per-Family Sequential Gating Breakdown")
     add("")
-    add("| Family | Mode | Simulated | 1. Checks | 2. Plateau | 3. Sub-Period | 4. DSR/Cold-Start | 5. Orthogonal | Promoted |")
+    add(
+        "| Family | Mode | Simulated | 1. Checks | 2. Plateau | 3. Sub-Period | 4. DSR/Cold-Start | 5. Orthogonal | Promoted |"
+    )
     add("|---|---|---|---|---|---|---|---|---|")
     for family in _families(db):
         f_verdicts = evaluate(db, family)
@@ -176,7 +186,9 @@ def build(db: Session, *, region: str = "USA", delay: int = 1, universe: str = "
                 f"{v.neighbour_median_sharpe:.2f}" if v.neighbour_median_sharpe is not None else "—"
             )
             dsr_str = f"{v.dsr:.2f}" if v.dsr is not None else "—"
-            add(f"| {i} | {v.sharpe:.2f} | {dsr_str} | {v.fitness:.2f} | {nb} | {v.gate_mode} | `{v.expression}` |")
+            add(
+                f"| {i} | {v.sharpe:.2f} | {dsr_str} | {v.fitness:.2f} | {nb} | {v.gate_mode} | `{v.expression}` |"
+            )
         add("")
         add("Review, correlation-check, and **submit manually**. Nothing here has been sent.")
     add("")
@@ -251,14 +263,18 @@ def build(db: Session, *, region: str = "USA", delay: int = 1, universe: str = "
     add("")
     add("Standard 7x7 grid yields **49 alphas per territory** (vs 384 for wide grid).")
     add("")
-    add("| Daily Budget | Standard Grid (7x7=49) | Wide Grid (384) | 4-Month Territories (Standard) |")
+    add(
+        "| Daily Budget | Standard Grid (7x7=49) | Wide Grid (384) | 4-Month Territories (Standard) |"
+    )
     add("|---|---|---|---|")
     for b in (50, 100, 200, 500):
         t_day_std = b / 49.0
         t_month_std = t_day_std * 30
         t_4mo_std = t_day_std * 120
         t_month_wide = (b / 384.0) * 30
-        add(f"| {b} sims/day | {t_day_std:.1f} terr/day ({t_month_std:.0f}/mo) | {t_month_wide:.1f} terr/mo | **{t_4mo_std:.0f} territories** |")
+        add(
+            f"| {b} sims/day | {t_day_std:.1f} terr/day ({t_month_std:.0f}/mo) | {t_month_wide:.1f} terr/mo | **{t_4mo_std:.0f} territories** |"
+        )
     add("")
 
     # ---- 7. active portfolio ----
@@ -279,7 +295,9 @@ def build(db: Session, *, region: str = "USA", delay: int = 1, universe: str = "
             sh = f"{m.sharpe:.2f}" if m and m.sharpe is not None else "—"
             ft = f"{m.fitness:.2f}" if m and m.fitness is not None else "—"
             to = f"{m.turnover * 100:.1f}%" if m and m.turnover is not None else "—"
-            sett = f"{a.region}/{a.universe}/d{a.delay}/{a.neutralization or 'NONE'}/n{a.decay or 0}"
+            sett = (
+                f"{a.region}/{a.universe}/d{a.delay}/{a.neutralization or 'NONE'}/n{a.decay or 0}"
+            )
             add(f"| {a.id} | {sh} | {ft} | {to} | `{sett}` | `{a.expression}` |")
         add("")
 

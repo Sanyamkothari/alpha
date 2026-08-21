@@ -30,7 +30,10 @@ class Campaign(Base):
     )
 
     tasks: Mapped[list[CampaignTask]] = relationship(
-        "CampaignTask", back_populates="campaign", cascade="all, delete-orphan", order_by="CampaignTask.id"
+        "CampaignTask",
+        back_populates="campaign",
+        cascade="all, delete-orphan",
+        order_by="CampaignTask.id",
     )
 
     __table_args__ = (

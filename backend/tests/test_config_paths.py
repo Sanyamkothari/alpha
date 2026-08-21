@@ -21,10 +21,12 @@ def test_effective_database_url_frozen_desktop(tmp_path):
     home_dir = tmp_path / "fake_home"
     home_dir.mkdir()
 
-    with patch.object(sys, "frozen", True, create=True), \
-         patch.object(sys, "_MEIPASS", str(tmp_path / "bundle"), create=True), \
-         patch.object(Path, "home", return_value=home_dir), \
-         patch.dict(os.environ, {}, clear=True):
+    with (
+        patch.object(sys, "frozen", True, create=True),
+        patch.object(sys, "_MEIPASS", str(tmp_path / "bundle"), create=True),
+        patch.object(Path, "home", return_value=home_dir),
+        patch.dict(os.environ, {}, clear=True),
+    ):
 
         expected_dir = home_dir / ".alpha_research" / "database"
         settings = Settings(database_url="")

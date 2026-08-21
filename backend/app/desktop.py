@@ -96,7 +96,9 @@ def open_browser_delayed(url: str, delay_sec: float = 1.2) -> None:
 
 def main() -> None:
     """Main desktop application entry point."""
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
+    logging.basicConfig(
+        level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s"
+    )
     logger.info("Starting Alpha Research Desktop Application...")
 
     ensure_user_directories()

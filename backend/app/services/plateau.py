@@ -126,6 +126,7 @@ def check_portfolio_correlation(
 
     if portfolio is None:
         from app.services.correlation import submitted_portfolio
+
         portfolio = submitted_portfolio(db, exclude_alpha_id=alpha_id)
 
     cand_features = candidate.feature_json or {}
@@ -137,7 +138,9 @@ def check_portfolio_correlation(
             continue
         port_features = port_alpha.feature_json or {}
         port_struct = port_features.get("structural_hash")
-        port_field = family_field_code(port_alpha.family_key or "") if port_alpha.family_key else None
+        port_field = (
+            family_field_code(port_alpha.family_key or "") if port_alpha.family_key else None
+        )
 
         # Structural hash match on the same base field => near-certain self-correlation
         if cand_struct and port_struct and cand_struct == port_struct and cand_field == port_field:
@@ -147,8 +150,15 @@ def check_portfolio_correlation(
         # submitted alphas — re-checking status here dropped any row where the
         # status mirror disagreed with platform_outcome, i.e. exactly the rows
         # that most need gating.
-        if candidate.family_key and port_alpha.family_key and candidate.family_key == port_alpha.family_key:
-            return True, f"family collision with submitted alpha #{port_alpha.id} ({port_alpha.family_key})"
+        if (
+            candidate.family_key
+            and port_alpha.family_key
+            and candidate.family_key == port_alpha.family_key
+        ):
+            return (
+                True,
+                f"family collision with submitted alpha #{port_alpha.id} ({port_alpha.family_key})",
+            )
 
     return False, None
 
@@ -230,9 +240,7 @@ def _ladder_neighbours(ladder: list[int] | tuple[int, ...], val: int) -> list[in
     return out
 
 
-def _neighbours(
-    point: SurfacePoint, surface: list[SurfacePoint]
-) -> tuple[list[SurfacePoint], int]:
+def _neighbours(point: SurfacePoint, surface: list[SurfacePoint]) -> tuple[list[SurfacePoint], int]:
     """Adjacent points on the same structural slice. Coordinates derived from surface itself."""
     same_slice = [p for p in surface if p.structure == point.structure]
 
@@ -285,6 +293,7 @@ def evaluate(
 
     if portfolio is None:
         from app.services.correlation import submitted_portfolio
+
         portfolio = submitted_portfolio(db)
 
     pnl_store = pnl_store or get_pnl_store()
@@ -327,9 +336,11 @@ def evaluate(
                 )
                 m_family = float(max(1, len(ids)))
                 shadow_trials = max(n_eff_family, total_simulated * (n_eff_family / m_family))
-                all_sharpes = db.execute(
-                    select(AlphaMetric.sharpe).where(AlphaMetric.sharpe.is_not(None))
-                ).scalars().all()
+                all_sharpes = (
+                    db.execute(select(AlphaMetric.sharpe).where(AlphaMetric.sharpe.is_not(None)))
+                    .scalars()
+                    .all()
+                )
                 global_daily_sharpes = [float(s) / math.sqrt(252) for s in all_sharpes]
 
     verdict_map: dict[int, tuple[SurfacePoint, Verdict, bool]] = {}
@@ -390,8 +401,12 @@ def evaluate(
 
             if use_dsr:
                 alpha_obj = db.get(Alpha, point.alpha_id)
-                is_re_promoting = bool(alpha_obj and "watchlist" in (alpha_obj.comments or "").lower())
-                target_dsr_hurdle = DSR_RE_PROMOTION_THRESHOLD if is_re_promoting else DSR_PROMOTION_THRESHOLD
+                is_re_promoting = bool(
+                    alpha_obj and "watchlist" in (alpha_obj.comments or "").lower()
+                )
+                target_dsr_hurdle = (
+                    DSR_RE_PROMOTION_THRESHOLD if is_re_promoting else DSR_PROMOTION_THRESHOLD
+                )
                 dsr_passed = dsr_val >= target_dsr_hurdle
                 if not dsr_passed:
                     reasons.append(f"DSR {dsr_val:.3f} below {target_dsr_hurdle:.2f} threshold")
@@ -404,7 +419,9 @@ def evaluate(
                     and point.fitness >= 1.0
                 )
                 if not dsr_passed:
-                    reasons.append(f"cold-start Sharpe/Fitness below {COLD_START_SHARPE_BAR:.2f}/1.0")
+                    reasons.append(
+                        f"cold-start Sharpe/Fitness below {COLD_START_SHARPE_BAR:.2f}/1.0"
+                    )
         else:
             if require_pnl:
                 # Hard precondition: daily PnL series is required for statistical gating
@@ -490,7 +507,11 @@ def evaluate(
             # 4. raw sharpe (highest — last tiebreaker)
             survivors.sort(
                 key=lambda item: (
-                    item[1].neighbour_median_sharpe if item[1].neighbour_median_sharpe is not None else -999,
+                    (
+                        item[1].neighbour_median_sharpe
+                        if item[1].neighbour_median_sharpe is not None
+                        else -999
+                    ),
                     item[1].plateau_ratio if item[1].plateau_ratio is not None else -999,
                     -item[0].decay,
                     item[1].sharpe if item[1].sharpe is not None else -999,

@@ -30,7 +30,16 @@ MIN_DIVERSITY_FAMILIES = 3
 
 def check_seed_diversity(parent_alphas: list[Alpha]) -> tuple[bool, set[str]]:
     """Check how many distinct time-series operator families exist in parent pool."""
-    known_ops = {"ts_zscore", "ts_rank", "ts_delta", "ts_mean", "ts_decay_linear", "ts_std_dev", "ts_quantile", "ts_corr"}
+    known_ops = {
+        "ts_zscore",
+        "ts_rank",
+        "ts_delta",
+        "ts_mean",
+        "ts_decay_linear",
+        "ts_std_dev",
+        "ts_quantile",
+        "ts_corr",
+    }
     found = set()
     for a in parent_alphas:
         expr = a.expression or ""
@@ -107,15 +116,21 @@ def main() -> int:
     if not is_diverse and not args.force:
         print("=" * 70)
         print("⚠️  EVOLUTION DIVERSITY GATE BLOCKED:")
-        print(f"   Found only {len(found_ops)} operator families in parent pool: {sorted(found_ops)}")
-        print(f"   Evolution requires at least {MIN_DIVERSITY_FAMILIES} distinct operator families to prevent")
+        print(
+            f"   Found only {len(found_ops)} operator families in parent pool: {sorted(found_ops)}"
+        )
+        print(
+            f"   Evolution requires at least {MIN_DIVERSITY_FAMILIES} distinct operator families to prevent"
+        )
         print("   monoculture loops. Run Stage 3 constructor sweeps (Task 2a/2b) across")
         print("   multiple operator families first, or pass --force to bypass.")
         print("=" * 70)
         return 1
 
     parent_ids = [p.id for p in parent_alphas]
-    print(f"Seeding evolution from {len(parent_ids)} parents ({len(found_ops)} operator families: {sorted(found_ops)})")
+    print(
+        f"Seeding evolution from {len(parent_ids)} parents ({len(found_ops)} operator families: {sorted(found_ops)})"
+    )
 
     cfg = EvolutionConfig(population_size=args.pop_size)
     settings = AlphaSettings(region=args.region, universe=args.universe, delay=args.delay)
@@ -133,7 +148,9 @@ def main() -> int:
     print(f"saved: {counts}")
 
     if args.simulate:
-        ids = pending_alpha_ids(limit=args.simulate, family_key=candidates[0].family_key if candidates else None)
+        ids = pending_alpha_ids(
+            limit=args.simulate, family_key=candidates[0].family_key if candidates else None
+        )
         if ids:
             print(f"simulating {len(ids)} on BRAIN (3 concurrent) ...")
             result = run_batch(ids)

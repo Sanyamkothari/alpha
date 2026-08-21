@@ -142,7 +142,12 @@ def test_portfolio_correlation_gate_threshold(tmp_path, db_session) -> None:
 
     # 1. High correlation candidate -> BLOCKED
     vh = check_portfolio_empirical_correlation(
-        db_session, cand_high.id, pnl_store=store, portfolio=[port_alpha], threshold=0.55, min_overlap=500
+        db_session,
+        cand_high.id,
+        pnl_store=store,
+        portfolio=[port_alpha],
+        threshold=0.55,
+        min_overlap=500,
     )
     assert vh.blocking is True
     assert vh.max_correlation is not None and vh.max_correlation >= 0.55
@@ -151,7 +156,12 @@ def test_portfolio_correlation_gate_threshold(tmp_path, db_session) -> None:
 
     # 2. Low correlation candidate -> PASSED
     vl = check_portfolio_empirical_correlation(
-        db_session, cand_low.id, pnl_store=store, portfolio=[port_alpha], threshold=0.55, min_overlap=500
+        db_session,
+        cand_low.id,
+        pnl_store=store,
+        portfolio=[port_alpha],
+        threshold=0.55,
+        min_overlap=500,
     )
     assert vl.blocking is False
     assert vl.reason is None
@@ -182,7 +192,9 @@ def test_structural_fallback_when_pnl_missing(db_session, tmp_path) -> None:
     db_session.add(SubmissionAttempt(alpha_id=port_alpha.id, result="submitted"))
     db_session.flush()
 
-    v = check_portfolio_empirical_correlation(db_session, cand_alpha.id, pnl_store=store, portfolio=[port_alpha])
+    v = check_portfolio_empirical_correlation(
+        db_session, cand_alpha.id, pnl_store=store, portfolio=[port_alpha]
+    )
     assert v.blocking is True
     assert v.method == "structural_proxy"
     assert "structural correlation collision" in (v.reason or "")
@@ -209,7 +221,9 @@ def test_unmeasured_correlation_blocks(db_session, tmp_path) -> None:
     dates = [f"d_{i:04d}" for i in range(600)]
     store.save_pnl(port.id, dates, np.ones(600))
 
-    v = check_portfolio_empirical_correlation(db_session, cand.id, pnl_store=store, portfolio=[port])
+    v = check_portfolio_empirical_correlation(
+        db_session, cand.id, pnl_store=store, portfolio=[port]
+    )
     assert v.blocking is True
     assert v.method == "unmeasured"
     assert v.max_correlation is None
@@ -237,7 +251,9 @@ def test_insufficient_overlap_blocks(db_session, tmp_path) -> None:
     store.save_pnl(port.id, dates, np.ones(499))
     store.save_pnl(cand.id, dates, np.ones(499))
 
-    v = check_portfolio_empirical_correlation(db_session, cand.id, pnl_store=store, portfolio=[port], min_overlap=500)
+    v = check_portfolio_empirical_correlation(
+        db_session, cand.id, pnl_store=store, portfolio=[port], min_overlap=500
+    )
     assert v.blocking is True
     assert v.method == "unmeasured"
     assert v.skipped_pairs == 1
@@ -266,11 +282,13 @@ def test_allow_unmeasured_escape_hatch_is_not_used_by_the_gate() -> None:
 
 
 def test_correlation_matrix_vectorization() -> None:
-    mat = np.array([
-        [1.0, 2.0, 3.0, 4.0, 5.0] * 10,
-        [5.0, 4.0, 3.0, 2.0, 1.0] * 10,
-        [1.0, 0.0, 1.0, 0.0, 1.0] * 10,
-    ])
+    mat = np.array(
+        [
+            [1.0, 2.0, 3.0, 4.0, 5.0] * 10,
+            [5.0, 4.0, 3.0, 2.0, 1.0] * 10,
+            [1.0, 0.0, 1.0, 0.0, 1.0] * 10,
+        ]
+    )
     res = compute_correlation_matrix(mat)
     assert res.shape == (3, 3)
     assert np.allclose(np.diag(res), 1.0)

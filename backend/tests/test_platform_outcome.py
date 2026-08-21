@@ -37,11 +37,15 @@ def test_set_platform_outcome_via_attempt(client, db_session):
     assert alpha.status == "submitted"
 
     # Verify audit history
-    hist = db_session.execute(
-        select(AlphaStatusHistory)
-        .where(AlphaStatusHistory.alpha_id == alpha_id)
-        .order_by(AlphaStatusHistory.id.desc())
-    ).scalars().first()
+    hist = (
+        db_session.execute(
+            select(AlphaStatusHistory)
+            .where(AlphaStatusHistory.alpha_id == alpha_id)
+            .order_by(AlphaStatusHistory.id.desc())
+        )
+        .scalars()
+        .first()
+    )
     assert "attempt:submitted" in hist.note
 
 

@@ -38,11 +38,15 @@ def _extract_brain_id(alpha: Alpha, db) -> str | None:
             return m.group(1)
 
     # 2. From status history
-    hist = db.execute(
-        select(AlphaStatusHistory)
-        .where(AlphaStatusHistory.alpha_id == alpha.id)
-        .order_by(AlphaStatusHistory.id.desc())
-    ).scalars().all()
+    hist = (
+        db.execute(
+            select(AlphaStatusHistory)
+            .where(AlphaStatusHistory.alpha_id == alpha.id)
+            .order_by(AlphaStatusHistory.id.desc())
+        )
+        .scalars()
+        .all()
+    )
     for h in hist:
         if h.note and "brain sim" in h.note:
             parts = h.note.split()
@@ -50,11 +54,15 @@ def _extract_brain_id(alpha: Alpha, db) -> str | None:
                 return parts[-1]
 
     # 3. From simulation_imports
-    sim = db.execute(
-        select(SimulationImport)
-        .where(SimulationImport.alpha_id == alpha.id)
-        .order_by(SimulationImport.id.desc())
-    ).scalars().first()
+    sim = (
+        db.execute(
+            select(SimulationImport)
+            .where(SimulationImport.alpha_id == alpha.id)
+            .order_by(SimulationImport.id.desc())
+        )
+        .scalars()
+        .first()
+    )
     if sim and sim.raw_payload:
         pid = sim.raw_payload.get("id")
         if pid:
@@ -73,7 +81,9 @@ def run(dry_run: bool = False) -> dict[str, int]:
                     (Alpha.status == AlphaStatus.SUBMITTED.value)
                     | (Alpha.id.in_(select(SubmissionAttempt.alpha_id)))
                 )
-            ).scalars().all()
+            )
+            .scalars()
+            .all()
         )
         counts["submitted_found"] = len(submitted)
         if not submitted:
@@ -91,7 +101,9 @@ def run(dry_run: bool = False) -> dict[str, int]:
                 try:
                     payload = brain.alpha(brain_id)
                 except Exception as e:
-                    log.error("fetch_alpha_failed", alpha_id=alpha.id, brain_id=brain_id, error=str(e))
+                    log.error(
+                        "fetch_alpha_failed", alpha_id=alpha.id, brain_id=brain_id, error=str(e)
+                    )
                     counts["unresolved"] += 1
                     continue
 
@@ -120,9 +132,17 @@ def run(dry_run: bool = False) -> dict[str, int]:
                         )
                         sync_alpha_platform_outcome(db, alpha.id)
                     counts["updated"] += 1
-                    log.info("updated_outcome", alpha_id=alpha.id, brain_id=brain_id, outcome=outcome)
+                    log.info(
+                        "updated_outcome", alpha_id=alpha.id, brain_id=brain_id, outcome=outcome
+                    )
                 else:
-                    log.info("outcome_unchanged", alpha_id=alpha.id, brain_id=brain_id, status=status, stage=stage)
+                    log.info(
+                        "outcome_unchanged",
+                        alpha_id=alpha.id,
+                        brain_id=brain_id,
+                        status=status,
+                        stage=stage,
+                    )
 
     log.info("sync_complete", **counts)
     return counts

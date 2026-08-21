@@ -22,7 +22,14 @@ log = structlog.get_logger("backfill_pnl")
 
 def backfill_all(limit: int | None = None) -> dict[str, int]:
     store = get_pnl_store()
-    stats = {"remote_fetched": 0, "matched": 0, "saved": 0, "reconciled": 0, "failed": 0, "skipped": 0}
+    stats = {
+        "remote_fetched": 0,
+        "matched": 0,
+        "saved": 0,
+        "reconciled": 0,
+        "failed": 0,
+        "skipped": 0,
+    }
 
     from app.services.subperiod import verify_pnl_reconciliation
 
@@ -73,13 +80,17 @@ def backfill_all(limit: int | None = None) -> dict[str, int]:
                         stats["saved"] += 1
 
                         rep_sr = float((ra.get("is") or {}).get("sharpe", 0.0))
-                        rec = verify_pnl_reconciliation(local_alpha.id, rep_sr, store, sharpe_tolerance=0.10)
+                        rec = verify_pnl_reconciliation(
+                            local_alpha.id, rep_sr, store, sharpe_tolerance=0.10
+                        )
                         if rec.is_valid:
                             stats["reconciled"] += 1
                     else:
                         stats["failed"] += 1
                 except Exception as exc:
-                    log.warning("pnl_fetch_failed", alpha_id=local_alpha.id, remote_id=r_id, error=str(exc))
+                    log.warning(
+                        "pnl_fetch_failed", alpha_id=local_alpha.id, remote_id=r_id, error=str(exc)
+                    )
                     stats["failed"] += 1
     except Exception as exc:
         print(f"BRAIN client unavailable: {exc}. No synthetic PnL will be written.")

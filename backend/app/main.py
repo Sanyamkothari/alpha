@@ -23,9 +23,11 @@ async def lifespan(app: FastAPI):
             import threading
 
             from app.services.campaign_runner import auto_resume_interrupted_campaigns
+
             threading.Thread(target=auto_resume_interrupted_campaigns, daemon=True).start()
         except Exception as exc:
             import structlog
+
             structlog.get_logger("main").error("auto_resume_startup_failed", error=str(exc))
     yield
 

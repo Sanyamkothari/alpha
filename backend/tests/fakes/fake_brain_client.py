@@ -35,11 +35,13 @@ class FakeBrainClient:
     ) -> str:
         """Simulate an alpha expression and return its remote alpha id."""
         alpha_id = f"fake_{uuid.uuid4().hex[:8]}"
-        self.simulations_called.append({
-            "expression": expression,
-            "settings": sim_settings,
-            "alpha_id": alpha_id,
-        })
+        self.simulations_called.append(
+            {
+                "expression": expression,
+                "settings": sim_settings,
+                "alpha_id": alpha_id,
+            }
+        )
         if timing is not None:
             timing["seconds"] = 1.25
         return alpha_id
@@ -47,7 +49,7 @@ class FakeBrainClient:
     def alpha(self, brain_id: str) -> dict[str, Any]:
         """Return detail payload for an alpha."""
         val = sum(ord(c) for c in brain_id)
-        is_pass = (val % 3 != 0)
+        is_pass = val % 3 != 0
         sharpe = 1.65 if is_pass else 0.45
         fitness = 1.20 if is_pass else 0.30
         turnover = 0.25 if is_pass else 0.85
@@ -64,9 +66,24 @@ class FakeBrainClient:
                 "margin": 0.00045 if is_pass else 0.00005,
                 "drawdown": 0.08,
                 "checks": [
-                    {"name": "LOW_SHARPE", "result": "PASS" if is_pass else "FAIL", "value": sharpe, "limit": 1.25},
-                    {"name": "LOW_FITNESS", "result": "PASS" if is_pass else "FAIL", "value": fitness, "limit": 1.0},
-                    {"name": "HIGH_TURNOVER", "result": "PASS" if is_pass else "FAIL", "value": turnover, "limit": 0.70},
+                    {
+                        "name": "LOW_SHARPE",
+                        "result": "PASS" if is_pass else "FAIL",
+                        "value": sharpe,
+                        "limit": 1.25,
+                    },
+                    {
+                        "name": "LOW_FITNESS",
+                        "result": "PASS" if is_pass else "FAIL",
+                        "value": fitness,
+                        "limit": 1.0,
+                    },
+                    {
+                        "name": "HIGH_TURNOVER",
+                        "result": "PASS" if is_pass else "FAIL",
+                        "value": turnover,
+                        "limit": 0.70,
+                    },
                 ],
             },
         }
@@ -74,5 +91,9 @@ class FakeBrainClient:
     def get_json(self, path: str, *args: Any, **kwargs: Any) -> Any:
         """Mock GET JSON for recordsets and endpoints."""
         if "daily-pnl" in path:
-            return {"records": [[f"2026-01-{i+1:02d}", 100.0 * (1 if i % 2 == 0 else -0.5)] for i in range(30)]}
+            return {
+                "records": [
+                    [f"2026-01-{i+1:02d}", 100.0 * (1 if i % 2 == 0 else -0.5)] for i in range(30)
+                ]
+            }
         return {}

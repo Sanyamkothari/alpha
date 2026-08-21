@@ -68,7 +68,9 @@ def test_50_cycle_bloat_control_invariant(db_session) -> None:
             next_ast = mutate_operators(cur_ast, kb)
 
         assert _depth(next_ast) <= cfg.max_depth, f"Depth exceeded at gen {gen}: {_depth(next_ast)}"
-        assert _operator_count(next_ast) <= cfg.max_nodes, f"Nodes exceeded at gen {gen}: {_operator_count(next_ast)}"
+        assert (
+            _operator_count(next_ast) <= cfg.max_nodes
+        ), f"Nodes exceeded at gen {gen}: {_operator_count(next_ast)}"
         cur_ast = next_ast
 
 

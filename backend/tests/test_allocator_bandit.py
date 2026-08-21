@@ -86,7 +86,9 @@ def test_simulation_budget_orchestrator_lifecycle() -> None:
     assert alloc_mature.explore_slots == 1
     assert alloc_mature.confirm_slots == 1
     assert alloc_mature.evolution_slots == 1
-    assert alloc_mature.explore_slots + alloc_mature.confirm_slots + alloc_mature.evolution_slots == 3
+    assert (
+        alloc_mature.explore_slots + alloc_mature.confirm_slots + alloc_mature.evolution_slots == 3
+    )
 
 
 def test_multi_arm_posterior_sampling() -> None:

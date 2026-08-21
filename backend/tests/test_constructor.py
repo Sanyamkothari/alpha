@@ -218,9 +218,9 @@ def test_daily_frequency_skips_backfill_in_expression(db_session) -> None:
     cands = expand(db_session, spec, base_settings=AlphaSettings(), max_candidates=24)
     assert cands
     for c in cands:
-        assert "ts_backfill" not in c.expression, (
-            f"daily field should not have ts_backfill: {c.expression}"
-        )
+        assert (
+            "ts_backfill" not in c.expression
+        ), f"daily field should not have ts_backfill: {c.expression}"
 
 
 def test_quarterly_frequency_includes_backfill(db_session) -> None:
@@ -229,9 +229,9 @@ def test_quarterly_frequency_includes_backfill(db_session) -> None:
     cands = expand(db_session, spec, base_settings=AlphaSettings(), max_candidates=24)
     assert cands
     for c in cands:
-        assert "ts_backfill" in c.expression, (
-            f"quarterly field should have ts_backfill: {c.expression}"
-        )
+        assert (
+            "ts_backfill" in c.expression
+        ), f"quarterly field should have ts_backfill: {c.expression}"
         assert "120" in c.expression
 
 
@@ -253,7 +253,9 @@ def test_universe_axis_creates_distinct_settings(db_session) -> None:
         truncations=(0.08,),
         universes=("TOP3000", "TOP3000"),  # same universe to avoid catalog issues
     )
-    spec = FamilySpec(field_code="close", mechanism="test", axes=multi_univ_axes, backfill_days=None)
+    spec = FamilySpec(
+        field_code="close", mechanism="test", axes=multi_univ_axes, backfill_days=None
+    )
     cands = expand(db_session, spec, base_settings=AlphaSettings(), max_candidates=100)
     # Should emit at least 1 candidate (the universe is the same so dedup will merge)
     assert cands

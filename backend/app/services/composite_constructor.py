@@ -161,12 +161,14 @@ def expand_composite(
     family_key = spec.family_key(base_settings)
     axes = spec.axes
 
-    prim_base = _build_field_node(spec.primary_field, spec.primary_denominator, spec.primary_backfill)
-    sec_base = _build_field_node(spec.secondary_field, spec.secondary_denominator, spec.secondary_backfill)
-
-    trigger_base = (
-        _build_field_node(spec.trigger_field, None, None) if spec.trigger_field else None
+    prim_base = _build_field_node(
+        spec.primary_field, spec.primary_denominator, spec.primary_backfill
     )
+    sec_base = _build_field_node(
+        spec.secondary_field, spec.secondary_denominator, spec.secondary_backfill
+    )
+
+    trigger_base = _build_field_node(spec.trigger_field, None, None) if spec.trigger_field else None
 
     candidates: list[Candidate] = []
     seen: set[str] = set()
@@ -263,7 +265,11 @@ def expand_composite(
                             candidates.extend(surface)
 
                         if len(candidates) >= max_candidates:
-                            log.info("composite_candidates_capped", count=len(candidates), family=family_key)
+                            log.info(
+                                "composite_candidates_capped",
+                                count=len(candidates),
+                                family=family_key,
+                            )
                             return candidates[:max_candidates]
 
     log.info("composite_expansion_complete", candidates=len(candidates), family=family_key)

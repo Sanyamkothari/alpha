@@ -73,14 +73,14 @@ def test_dsr_exact_analytical_benchmark() -> None:
     sr_star = comp_std * ((1.0 - gamma_em) * q1 + gamma_em * q2)
 
     sr_hat = float(np.mean(pnl)) / float(np.std(pnl, ddof=1))
-    var_sr = (1.0 + 0.5 * (sr_hat ** 2)) / (t - 1)
+    var_sr = (1.0 + 0.5 * (sr_hat**2)) / (t - 1)
     expected_z = (sr_hat - sr_star) / math.sqrt(var_sr)
     expected_dsr = float(norm.cdf(expected_z))
 
     actual_dsr = compute_dsr(pnl, competitors)
-    assert abs(actual_dsr - expected_dsr) < 1e-3, (
-        f"actual DSR {actual_dsr:.5f} deviates from expected analytical {expected_dsr:.5f}"
-    )
+    assert (
+        abs(actual_dsr - expected_dsr) < 1e-3
+    ), f"actual DSR {actual_dsr:.5f} deviates from expected analytical {expected_dsr:.5f}"
 
 
 def test_pnl_reconciliation_audit(tmp_path) -> None:
@@ -149,10 +149,12 @@ def test_subperiod_split_half_sign_guard() -> None:
     np.random.seed(42)
 
     # Case A: Positive in H1, negative in H2
-    bad_pnl = np.concatenate([
-        np.random.normal(loc=0.001, scale=0.01, size=t // 2),
-        np.random.normal(loc=-0.0005, scale=0.01, size=t // 2),
-    ])
+    bad_pnl = np.concatenate(
+        [
+            np.random.normal(loc=0.001, scale=0.01, size=t // 2),
+            np.random.normal(loc=-0.0005, scale=0.01, size=t // 2),
+        ]
+    )
     verdict_bad = evaluate_subperiod_stability(bad_pnl)
     assert not verdict_bad.passed
     assert any("non-positive split-half" in r for r in verdict_bad.reasons)
@@ -171,10 +173,12 @@ def test_subperiod_split_ratio_floor() -> None:
     np.random.seed(42)
 
     # H1 mean is 4x higher than H2 mean -> ratio = 0.25 < 0.50
-    imbalanced_pnl = np.concatenate([
-        np.random.normal(loc=0.0020, scale=0.01, size=t // 2),
-        np.random.normal(loc=0.0004, scale=0.01, size=t // 2),
-    ])
+    imbalanced_pnl = np.concatenate(
+        [
+            np.random.normal(loc=0.0020, scale=0.01, size=t // 2),
+            np.random.normal(loc=0.0004, scale=0.01, size=t // 2),
+        ]
+    )
     verdict = evaluate_subperiod_stability(imbalanced_pnl, split_ratio_floor=0.50)
     assert not verdict.passed
     assert any("split-half ratio" in r for r in verdict.reasons)
@@ -186,11 +190,13 @@ def test_subperiod_rolling_window_consistency() -> None:
     np.random.seed(42)
 
     # Signal that decays heavily across 3 out of 5 years -> < 75% positive rolling windows
-    failing_rolling_pnl = np.concatenate([
-        np.random.normal(loc=0.001, scale=0.01, size=252 * 1),
-        np.random.normal(loc=-0.001, scale=0.01, size=252 * 3),
-        np.random.normal(loc=0.001, scale=0.01, size=252 * 1),
-    ])
+    failing_rolling_pnl = np.concatenate(
+        [
+            np.random.normal(loc=0.001, scale=0.01, size=252 * 1),
+            np.random.normal(loc=-0.001, scale=0.01, size=252 * 3),
+            np.random.normal(loc=0.001, scale=0.01, size=252 * 1),
+        ]
+    )
     verdict = evaluate_subperiod_stability(failing_rolling_pnl, rolling_pos_floor=0.75)
     assert not verdict.passed
     assert any("rolling 6-month positive ratio" in r for r in verdict.reasons)
@@ -202,10 +208,12 @@ def test_subperiod_recent_regime_decay() -> None:
     np.random.seed(42)
 
     # Strong performance years 1-4, but flat in recent 252 days
-    decayed_pnl = np.concatenate([
-        np.random.normal(loc=0.0015, scale=0.01, size=t - 252),
-        np.random.normal(loc=0.0001, scale=0.01, size=252),
-    ])
+    decayed_pnl = np.concatenate(
+        [
+            np.random.normal(loc=0.0015, scale=0.01, size=t - 252),
+            np.random.normal(loc=0.0001, scale=0.01, size=252),
+        ]
+    )
     verdict = evaluate_subperiod_stability(decayed_pnl, recent_decay_floor=0.65)
     assert not verdict.passed
     assert any("decayed below 65%" in r for r in verdict.reasons)
@@ -240,6 +248,8 @@ def test_pnl_store_thread_safety(tmp_path) -> None:
     assert all(results), "all concurrent PnL loads must succeed"
 
     # Aligned matrix extraction
-    valid_ids, m_dates, mat = store.get_aligned_matrix(list(range(1, n_alphas + 1)), min_overlap=300)
+    valid_ids, m_dates, mat = store.get_aligned_matrix(
+        list(range(1, n_alphas + 1)), min_overlap=300
+    )
     assert len(valid_ids) == n_alphas
     assert mat.shape == (n_alphas, 500)

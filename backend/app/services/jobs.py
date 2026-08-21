@@ -133,6 +133,7 @@ class JobRegistry:
     def _ensure_sim_worker(self) -> None:
         with self._lock:
             if not self._sim_worker_started:
+
                 def worker_loop() -> None:
                     while True:
                         task = self._sim_queue.get()
@@ -400,7 +401,11 @@ def run_family_job(*, job_id: str, params: RunFamilyParams) -> dict[str, Any]:
 
         with session_scope() as db:
             for aid in ids:
-                m = db.execute(select(AlphaMetric).where(AlphaMetric.alpha_id == aid)).scalars().first()
+                m = (
+                    db.execute(select(AlphaMetric).where(AlphaMetric.alpha_id == aid))
+                    .scalars()
+                    .first()
+                )
                 if m and m.passed_all_checks:
                     try:
                         ensure_alpha_pnl(db, aid, allow_remote_fetch=True)

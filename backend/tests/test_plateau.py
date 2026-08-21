@@ -141,13 +141,17 @@ def test_portfolio_correlation_blocks_promotion(db_session) -> None:
         truncation=0.08,
         is_valid=True,
         generation=0,
-        feature_json={"structural_hash": "shash-close_sub_test-zscore", "grid": {"window": 22, "decay": 4}},
+        feature_json={
+            "structural_hash": "shash-close_sub_test-zscore",
+            "grid": {"window": 22, "decay": 4},
+        },
     )
     db_session.add(submitted_alpha)
     db_session.flush()
     db_session.add(SubmissionAttempt(alpha_id=submitted_alpha.id, result="submitted"))
     db_session.flush()
     from app.models.alphas import sync_alpha_platform_outcome
+
     sync_alpha_platform_outcome(db_session, submitted_alpha.id)
 
     for w in WINDOW_LADDER:
@@ -155,7 +159,13 @@ def test_portfolio_correlation_blocks_promotion(db_session) -> None:
             a = _point(db_session, fam, w, d, 2.5, passes=True)
             a.feature_json = {
                 "structural_hash": "shash-close_sub_test-zscore",
-                "grid": dict(_STRUCTURE, window=w, decay=d, neutralization="SUBINDUSTRY", field="close_sub_test"),
+                "grid": dict(
+                    _STRUCTURE,
+                    window=w,
+                    decay=d,
+                    neutralization="SUBINDUSTRY",
+                    field="close_sub_test",
+                ),
             }
     db_session.flush()
 
@@ -186,9 +196,7 @@ def test_neighbours_derives_ladders_from_surface_points() -> None:
             passed_all_checks=True,
             structure=("ts_zscore", "rank", None, 0.08, "SUBINDUSTRY"),
         )
-        for i, (w, d) in enumerate(
-            (w, d) for w in custom_windows for d in custom_decays
-        )
+        for i, (w, d) in enumerate((w, d) for w in custom_windows for d in custom_decays)
     ]
 
     # Target point: (window=40, decay=4)
@@ -202,10 +210,10 @@ def test_neighbours_derives_ladders_from_surface_points() -> None:
     assert neigh_coords == expected_coords
 
 
-
 def test_shadow_dsr_is_not_gated() -> None:
     """Phase 1 freeze: the shadow statistic must never reach the survives expression."""
     from pathlib import Path
+
     src = (Path(__file__).parents[1] / "app/services/plateau.py").read_text(encoding="utf-8")
     survives_line = next(l for l in src.splitlines() if l.strip().startswith("survives ="))
     for banned in ("dsr_shadow", "dsr_global_shadow", "n_eff", "shadow_trials"):

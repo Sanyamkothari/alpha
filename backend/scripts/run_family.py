@@ -58,9 +58,17 @@ def main() -> int:
     ap.add_argument("--field", required=True)
     ap.add_argument("--denominator", default=None)
     ap.add_argument("--mechanism", default="")
-    ap.add_argument("--grid", choices=["standard", "wide"], default="standard", help="standard (7x7=49) or wide")
-    ap.add_argument("--operators", nargs="*", help="specific operator families to sweep (e.g. ts_zscore ts_rank ts_delta)")
-    ap.add_argument("--wrappers", nargs="*", help="specific wrapper shapes (e.g. rank zscore normalize)")
+    ap.add_argument(
+        "--grid", choices=["standard", "wide"], default="standard", help="standard (7x7=49) or wide"
+    )
+    ap.add_argument(
+        "--operators",
+        nargs="*",
+        help="specific operator families to sweep (e.g. ts_zscore ts_rank ts_delta)",
+    )
+    ap.add_argument(
+        "--wrappers", nargs="*", help="specific wrapper shapes (e.g. rank zscore normalize)"
+    )
     ap.add_argument("--windows", nargs="*", type=int, help="custom lookback windows")
     ap.add_argument("--decays", nargs="*", type=int, help="custom decays")
     ap.add_argument("--arm", choices=["exploit", "random_stratified", "plateau_fill"], default=None)
@@ -80,8 +88,16 @@ def main() -> int:
         GridAxes,
     )
 
-    windows = tuple(args.windows) if args.windows else (WIDE_WINDOWS if args.grid == "wide" else STANDARD_WINDOWS)
-    decays = tuple(args.decays) if args.decays else (WIDE_DECAYS if args.grid == "wide" else STANDARD_DECAYS)
+    windows = (
+        tuple(args.windows)
+        if args.windows
+        else (WIDE_WINDOWS if args.grid == "wide" else STANDARD_WINDOWS)
+    )
+    decays = (
+        tuple(args.decays)
+        if args.decays
+        else (WIDE_DECAYS if args.grid == "wide" else STANDARD_DECAYS)
+    )
     ts_transforms = tuple(args.operators) if args.operators else None
     cross_section = tuple(args.wrappers) if args.wrappers else None
 
@@ -124,7 +140,9 @@ def main() -> int:
         candidates = expand(
             db, spec, base_settings=settings, max_candidates=max_cands, arm=args.arm
         )
-    print(f"expanded: {len(candidates)} candidates for family {family_key!r} (grid={args.grid}, arm={args.arm})")
+    print(
+        f"expanded: {len(candidates)} candidates for family {family_key!r} (grid={args.grid}, arm={args.arm})"
+    )
     if not candidates:
         print("nothing emitted — check the field code exists for this region/delay/universe")
         return 1

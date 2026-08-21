@@ -44,9 +44,11 @@ def interactive_prompt() -> None:
             if query.isdigit():
                 target_alpha = db.get(Alpha, int(query))
             else:
-                matches = db.execute(
-                    select(Alpha).where(Alpha.expression.like(f"%{query}%")).limit(5)
-                ).scalars().all()
+                matches = (
+                    db.execute(select(Alpha).where(Alpha.expression.like(f"%{query}%")).limit(5))
+                    .scalars()
+                    .all()
+                )
                 if not matches:
                     print(f"No alphas found matching {query!r}.\n")
                     continue
@@ -55,7 +57,9 @@ def interactive_prompt() -> None:
                 else:
                     print("\nMultiple matches found:")
                     for idx, a in enumerate(matches, 1):
-                        print(f"  [{idx}] #{a.id} ({a.family_key or 'no family'}): {a.expression[:60]}...")
+                        print(
+                            f"  [{idx}] #{a.id} ({a.family_key or 'no family'}): {a.expression[:60]}..."
+                        )
                     sel = input("Select number [1-N]: ").strip()
                     if sel.isdigit() and 1 <= int(sel) <= len(matches):
                         target_alpha = matches[int(sel) - 1]
@@ -69,8 +73,12 @@ def interactive_prompt() -> None:
 
             print(f"\nSelected Alpha #{target_alpha.id}:")
             print(f"  Expression: {target_alpha.expression}")
-            print(f"  Settings:   {target_alpha.region} / {target_alpha.universe} / delay {target_alpha.delay} / {target_alpha.neutralization or 'NONE'} / decay {target_alpha.decay or 0}")
-            print(f"  Status:     {target_alpha.status} (platform_outcome: {target_alpha.platform_outcome or 'none'})")
+            print(
+                f"  Settings:   {target_alpha.region} / {target_alpha.universe} / delay {target_alpha.delay} / {target_alpha.neutralization or 'NONE'} / decay {target_alpha.decay or 0}"
+            )
+            print(
+                f"  Status:     {target_alpha.status} (platform_outcome: {target_alpha.platform_outcome or 'none'})"
+            )
 
             # Prompt date
             raw_date = input("Attempt Date (YYYY-MM-DD or Enter for today): ").strip()
@@ -84,7 +92,11 @@ def interactive_prompt() -> None:
 
             # Prompt result
             res_input = input("Submission Result [1=rejected (default), 2=submitted]: ").strip()
-            result_val = SubmissionResult.SUBMITTED.value if res_input in ("2", "submitted", "s") else SubmissionResult.REJECTED.value
+            result_val = (
+                SubmissionResult.SUBMITTED.value
+                if res_input in ("2", "submitted", "s")
+                else SubmissionResult.REJECTED.value
+            )
 
             failed_check = None
             check_detail = None
@@ -100,7 +112,10 @@ def interactive_prompt() -> None:
                 else:
                     failed_check = SubmissionCheckName.OTHER.value
 
-                check_detail = input("Check Detail / Threshold (e.g. '0.74 vs max 0.70', or Enter): ").strip() or None
+                check_detail = (
+                    input("Check Detail / Threshold (e.g. '0.74 vs max 0.70', or Enter): ").strip()
+                    or None
+                )
 
             notes = input("Notes / Recollection Context: ").strip() or None
 
@@ -119,7 +134,11 @@ def interactive_prompt() -> None:
 
             sync_alpha_platform_outcome(db, target_alpha.id)
 
-            hist_note = f"recalled_attempt:{result_val}" + (f": {failed_check}" if failed_check else "") + (f": {notes}" if notes else "")
+            hist_note = (
+                f"recalled_attempt:{result_val}"
+                + (f": {failed_check}" if failed_check else "")
+                + (f": {notes}" if notes else "")
+            )
             db.add(
                 AlphaStatusHistory(
                     alpha_id=target_alpha.id,
@@ -130,14 +149,20 @@ def interactive_prompt() -> None:
             )
             db.flush()
 
-            print(f"✓ Recorded {result_val} attempt for Alpha #{target_alpha.id} (is_recalled=TRUE).\n")
+            print(
+                f"✓ Recorded {result_val} attempt for Alpha #{target_alpha.id} (is_recalled=TRUE).\n"
+            )
 
 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--alpha-id", type=int, help="Target alpha ID")
-    ap.add_argument("--result", choices=["submitted", "rejected"], default="rejected", help="Attempt result")
-    ap.add_argument("--check", help="Failed check name (e.g. SELF_CORRELATION, PROD_CORRELATION, LOW_SHARPE)")
+    ap.add_argument(
+        "--result", choices=["submitted", "rejected"], default="rejected", help="Attempt result"
+    )
+    ap.add_argument(
+        "--check", help="Failed check name (e.g. SELF_CORRELATION, PROD_CORRELATION, LOW_SHARPE)"
+    )
     ap.add_argument("--detail", help="Check detail (value vs threshold)")
     ap.add_argument("--notes", help="Notes or recollection context")
     ap.add_argument("--date", help="Date in YYYY-MM-DD format")

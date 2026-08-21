@@ -36,17 +36,21 @@ def get_field_crowding(
 ) -> FieldCrowding | None:
     """Fetch field crowding metrics as of a specific date (or latest current state)."""
     if as_of_date is not None:
-        snap = db.execute(
-            select(DataFieldSnapshot)
-            .where(
-                DataFieldSnapshot.field_code == field_code,
-                DataFieldSnapshot.region == region,
-                DataFieldSnapshot.delay == delay,
-                DataFieldSnapshot.universe == universe,
-                DataFieldSnapshot.as_of_date <= as_of_date,
+        snap = (
+            db.execute(
+                select(DataFieldSnapshot)
+                .where(
+                    DataFieldSnapshot.field_code == field_code,
+                    DataFieldSnapshot.region == region,
+                    DataFieldSnapshot.delay == delay,
+                    DataFieldSnapshot.universe == universe,
+                    DataFieldSnapshot.as_of_date <= as_of_date,
+                )
+                .order_by(DataFieldSnapshot.as_of_date.desc())
             )
-            .order_by(DataFieldSnapshot.as_of_date.desc())
-        ).scalars().first()
+            .scalars()
+            .first()
+        )
 
         if snap is not None:
             return FieldCrowding(
@@ -63,14 +67,18 @@ def get_field_crowding(
             )
 
     # Fallback to current state
-    curr = db.execute(
-        select(DataField).where(
-            DataField.field_code == field_code,
-            DataField.region == region,
-            DataField.delay == delay,
-            DataField.universe == universe,
+    curr = (
+        db.execute(
+            select(DataField).where(
+                DataField.field_code == field_code,
+                DataField.region == region,
+                DataField.delay == delay,
+                DataField.universe == universe,
+            )
         )
-    ).scalars().first()
+        .scalars()
+        .first()
+    )
 
     if curr is not None:
         return FieldCrowding(

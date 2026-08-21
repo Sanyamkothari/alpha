@@ -108,43 +108,90 @@ def _seed(test_session_factory: sessionmaker[Session]) -> None:
                 _op("subtract", "arithmetic", _matrix("x", 0), _matrix("y", 1)),
                 _op("multiply", "arithmetic", _matrix("x", 0), _matrix("y", 1)),
                 _op("greater", "logical", _matrix("x", 0), _matrix("y", 1), returns="boolean"),
-                _op("trade_when", "transformational", _bool("trigger", 0), _matrix("alpha", 1), _matrix("exit", 2)),
+                _op(
+                    "trade_when",
+                    "transformational",
+                    _bool("trigger", 0),
+                    _matrix("alpha", 1),
+                    _matrix("exit", 2),
+                ),
                 _op("group_neutralize", "group", _matrix("x", 0), _group("group", 1)),
                 _op("group_rank", "group", _matrix("x", 0), _group("group", 1)),
                 _op("group_zscore", "group", _matrix("x", 0), _group("group", 1)),
             ]
         )
-        ds = Dataset(dataset_code="pv1", name="Price/Volume", region="USA", universe="TOP3000", delay=1)
+        ds = Dataset(
+            dataset_code="pv1", name="Price/Volume", region="USA", universe="TOP3000", delay=1
+        )
         s.add(ds)
         s.flush()
         s.add_all(
             [
                 DataField(
-                    field_code="close", dataset_id=ds.id, category="price", field_type="MATRIX",
-                    region="USA", universe="TOP3000", delay=1, coverage=1.0, user_count=50,
+                    field_code="close",
+                    dataset_id=ds.id,
+                    category="price",
+                    field_type="MATRIX",
+                    region="USA",
+                    universe="TOP3000",
+                    delay=1,
+                    coverage=1.0,
+                    user_count=50,
                 ),
                 DataField(
-                    field_code="returns", dataset_id=ds.id, category="price", field_type="MATRIX",
-                    region="USA", universe="TOP3000", delay=1, coverage=1.0, user_count=50,
+                    field_code="returns",
+                    dataset_id=ds.id,
+                    category="price",
+                    field_type="MATRIX",
+                    region="USA",
+                    universe="TOP3000",
+                    delay=1,
+                    coverage=1.0,
+                    user_count=50,
                 ),
                 DataField(
-                    field_code="volume", dataset_id=ds.id, category="price", field_type="MATRIX",
-                    region="USA", universe="TOP3000", delay=1, coverage=1.0, user_count=50,
+                    field_code="volume",
+                    dataset_id=ds.id,
+                    category="price",
+                    field_type="MATRIX",
+                    region="USA",
+                    universe="TOP3000",
+                    delay=1,
+                    coverage=1.0,
+                    user_count=50,
                 ),
                 DataField(
-                    field_code="vwap", dataset_id=ds.id, category="price", field_type="MATRIX",
-                    region="USA", universe="TOP3000", delay=1, coverage=1.0, user_count=50,
+                    field_code="vwap",
+                    dataset_id=ds.id,
+                    category="price",
+                    field_type="MATRIX",
+                    region="USA",
+                    universe="TOP3000",
+                    delay=1,
+                    coverage=1.0,
+                    user_count=50,
                 ),
                 DataField(
-                    field_code="cap", dataset_id=ds.id, category="fundamentals", field_type="MATRIX",
-                    region="USA", universe="TOP3000", delay=1, coverage=1.0, user_count=50,
+                    field_code="cap",
+                    dataset_id=ds.id,
+                    category="fundamentals",
+                    field_type="MATRIX",
+                    region="USA",
+                    universe="TOP3000",
+                    delay=1,
+                    coverage=1.0,
+                    user_count=50,
                 ),
                 DataField(
                     field_code="sector",
                     dataset_id=ds.id,
                     category="fundamentals",
                     field_type="GROUP",
-                    region="USA", universe="TOP3000", delay=1, coverage=1.0, user_count=50,
+                    region="USA",
+                    universe="TOP3000",
+                    delay=1,
+                    coverage=1.0,
+                    user_count=50,
                 ),
             ]
         )

@@ -246,11 +246,15 @@ def ensure_alpha_pnl(
             dates = [str(r[0]) for r in records]
             raw = np.array([float(r[1]) for r in records], dtype=float)
 
-            metric = db.execute(
-                select(AlphaMetric)
-                .where(AlphaMetric.alpha_id == alpha_id)
-                .order_by(AlphaMetric.id.desc())
-            ).scalars().first()
+            metric = (
+                db.execute(
+                    select(AlphaMetric)
+                    .where(AlphaMetric.alpha_id == alpha_id)
+                    .order_by(AlphaMetric.id.desc())
+                )
+                .scalars()
+                .first()
+            )
             if metric is None or metric.sharpe is None:
                 log.warning("pnl_fetch_no_local_sharpe", alpha_id=alpha_id)
                 return False
@@ -276,7 +280,9 @@ def ensure_alpha_pnl(
             )
             return True
     except Exception as exc:
-        log.warning("on_demand_pnl_fetch_failed", alpha_id=alpha_id, remote_id=remote_id, error=str(exc))
+        log.warning(
+            "on_demand_pnl_fetch_failed", alpha_id=alpha_id, remote_id=remote_id, error=str(exc)
+        )
 
     return False
 

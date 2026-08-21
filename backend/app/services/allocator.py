@@ -147,6 +147,7 @@ class BudgetPlan:
 # Backward Compatibility: DiscountedThompsonSampler & SimulationBudgetOrchestrator
 # ----------------------------------------------------------------------
 
+
 @dataclass
 class BanditArm:
     dataset_code: str
@@ -262,6 +263,7 @@ class SimulationBudgetOrchestrator:
 # Dataset Statistics & Ranking
 # ----------------------------------------------------------------------
 
+
 def dataset_stats(
     db: Session,
     *,
@@ -348,6 +350,7 @@ def _dataset_priority(stat: DatasetStat) -> float:
 # Suggestion & Gated Exploitation (W3, W4, F4, F5, F9)
 # ----------------------------------------------------------------------
 
+
 def suggest(
     db: Session,
     *,
@@ -380,8 +383,7 @@ def suggest(
 
     # Query existing alpha territory distribution and submitted alphas
     existing_alphas = db.execute(
-        select(Alpha.id, Alpha.family_key, Alpha.feature_json, Alpha.status)
-        .where(
+        select(Alpha.id, Alpha.family_key, Alpha.feature_json, Alpha.status).where(
             Alpha.family_key.is_not(None),
             Alpha.region == region,
             Alpha.delay == delay,
@@ -434,7 +436,12 @@ def suggest(
         - Canonical key (horizon_band set): excludes specifically that horizon.
         """
         for s in submitted_sigs:
-            if s.field_code != sig_field or s.region != region or s.universe != universe or s.delay != delay:
+            if (
+                s.field_code != sig_field
+                or s.region != region
+                or s.universe != universe
+                or s.delay != delay
+            ):
                 continue
             if s.operator_family == sig_op:
                 if s.horizon_band is None:
@@ -521,14 +528,16 @@ def suggest(
             # Find an eligible (operator, horizon) pair not submitted and not capped
             # Invariant (F4 / FF1): Exclusion is keyed on territory (field, op, horizon), never the whole field
             tried_for_field = field_ops_tried.get(f.field_code, set())
-            
+
             chosen_op: str | None = None
             chosen_horizon: str | None = None
             chosen_tkey: str | None = None
 
             # Try candidate operators ordered by: rotated untried on this field first, then rotated standard transforms
             op_idx = len(out) % len(DEFAULT_TS_TRANSFORMS)
-            rotated_ops = list(DEFAULT_TS_TRANSFORMS[op_idx:]) + list(DEFAULT_TS_TRANSFORMS[:op_idx])
+            rotated_ops = list(DEFAULT_TS_TRANSFORMS[op_idx:]) + list(
+                DEFAULT_TS_TRANSFORMS[:op_idx]
+            )
             candidate_ops = [op for op in rotated_ops if op not in tried_for_field] + [
                 op for op in rotated_ops if op in tried_for_field
             ]
@@ -537,20 +546,22 @@ def suggest(
                 # Check per-(field, op) saturation cap
                 if field_op_counts.get((f.field_code, op), 0) >= MAX_TERRITORIES_PER_FIELD_OP:
                     continue
-                
+
                 # Check horizons for an unsubmitted, unused territory
                 for h_idx, horizon in enumerate(horizon_options):
                     tkey = canonical_territory_key(
                         f.field_code, op, horizon, region, universe, delay
                     )
-                    if tkey in used_territory_keys or is_territory_submitted(f.field_code, op, horizon):
+                    if tkey in used_territory_keys or is_territory_submitted(
+                        f.field_code, op, horizon
+                    ):
                         continue
-                    
+
                     chosen_op = op
                     chosen_horizon = horizon
                     chosen_tkey = tkey
                     break
-                
+
                 if chosen_op is not None:
                     break
 
@@ -560,7 +571,9 @@ def suggest(
 
             chosen_wrap = wrapper_options[len(out) % len(wrapper_options)]
             used_territory_keys.add(chosen_tkey)
-            dataset_suggest_count[stat.dataset_code] = dataset_suggest_count.get(stat.dataset_code, 0) + 1
+            dataset_suggest_count[stat.dataset_code] = (
+                dataset_suggest_count.get(stat.dataset_code, 0) + 1
+            )
 
             hit = stat.hit_rate
             reason = (
@@ -581,7 +594,11 @@ def suggest(
                     user_count=f.user_count,
                     coverage=f.coverage,
                     posterior_score=None,
-                    binding_constraint=f"dataset_cap({per_dataset_cap})" if dataset_suggest_count[stat.dataset_code] >= per_dataset_cap else None,
+                    binding_constraint=(
+                        f"dataset_cap({per_dataset_cap})"
+                        if dataset_suggest_count[stat.dataset_code] >= per_dataset_cap
+                        else None
+                    ),
                     self_corr_headroom=None,
                 )
             )
@@ -593,6 +610,7 @@ def suggest(
 # ----------------------------------------------------------------------
 # 3-Arm Budget Allocation & Arithmetic Closure (W1, W2, W4)
 # ----------------------------------------------------------------------
+
 
 def plan_budget_allocation(
     db: Session,
@@ -628,7 +646,9 @@ def plan_budget_allocation(
     has_cap = (
         db.execute(
             select(DataField.id).where(DataField.field_code == "cap", DataField.region == region)
-        ).scalars().first()
+        )
+        .scalars()
+        .first()
         is not None
     )
     default_denom = "cap" if has_cap else None
@@ -649,16 +669,18 @@ def plan_budget_allocation(
     )
     valid_matrix_fields = set(
         db.execute(
-            select(DataField.field_code)
-            .where(
+            select(DataField.field_code).where(
                 DataField.region == region,
                 DataField.delay == delay,
                 DataField.field_type == "MATRIX",
             )
-        ).scalars().all()
+        )
+        .scalars()
+        .all()
     )
     incomplete_families = [
-        fkey for fkey, count in sim_counts.items()
+        fkey
+        for fkey, count in sim_counts.items()
         if 0 < count < sims_per_territory and family_field_code(str(fkey)) in valid_matrix_fields
     ]
 
@@ -687,7 +709,11 @@ def plan_budget_allocation(
     # 1. Exploit Arm
     # ------------------------------------------------------------------
     suggestions: list[Suggestion] = []
-    n_exploit_territories = max(1, exploit_budget // sims_per_territory) if total_simulations >= (2 * sims_per_territory) else 1
+    n_exploit_territories = (
+        max(1, exploit_budget // sims_per_territory)
+        if total_simulations >= (2 * sims_per_territory)
+        else 1
+    )
     suggestions = suggest(
         db,
         region=region,
@@ -764,7 +790,7 @@ def plan_budget_allocation(
         for i in range(n_rand_territories):
             quartile_idx = (i % 4) + 1
             pool = q_fields[quartile_idx] or all_fields
-            
+
             # Re-draw on collision with exploit territories
             chosen_field, chosen_uc, chosen_ds = rng.choice(pool)
             op = rng.choice(DEFAULT_TS_TRANSFORMS)

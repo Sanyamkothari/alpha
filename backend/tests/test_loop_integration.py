@@ -64,6 +64,7 @@ def _seed_campaign_dataset(db: Session, n_fields: int = 5) -> Dataset:
 # C1: End-to-End Campaign Execution with FakeBrainClient
 # ----------------------------------------------------------------------
 
+
 def test_c1_end_to_end_campaign_with_fake_brain_client(db_session, monkeypatch, tmp_path):
     """C1: End-to-end campaign with FakeBrainClient generates alphas, simulates, imports PnL, and evaluates."""
     _seed_campaign_dataset(db_session, n_fields=5)
@@ -93,9 +94,11 @@ def test_c1_end_to_end_campaign_with_fake_brain_client(db_session, monkeypatch, 
     assert c.status == "completed"
     assert c.budget_completed == 100
 
-    tasks = db_session.execute(
-        select(CampaignTask).where(CampaignTask.campaign_id == cid)
-    ).scalars().all()
+    tasks = (
+        db_session.execute(select(CampaignTask).where(CampaignTask.campaign_id == cid))
+        .scalars()
+        .all()
+    )
     assert len(tasks) >= 1
     assert sum(t.alphas_simulated for t in tasks) == 100
     assert sum(t.alphas_passed for t in tasks) > 0
@@ -104,24 +107,33 @@ def test_c1_end_to_end_campaign_with_fake_brain_client(db_session, monkeypatch, 
         assert t.alphas_simulated > 0
 
     # Verify PnL was fetched and saved for passing alphas belonging to this campaign
-    passing_alphas = db_session.execute(
-        select(AlphaMetric.alpha_id)
-        .join(Alpha, Alpha.id == AlphaMetric.alpha_id)
-        .where(
-            Alpha.campaign_task_id.in_([t.id for t in tasks]),
-            AlphaMetric.passed_all_checks.is_(True),
+    passing_alphas = (
+        db_session.execute(
+            select(AlphaMetric.alpha_id)
+            .join(Alpha, Alpha.id == AlphaMetric.alpha_id)
+            .where(
+                Alpha.campaign_task_id.in_([t.id for t in tasks]),
+                AlphaMetric.passed_all_checks.is_(True),
+            )
         )
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
     assert len(passing_alphas) > 0
     for aid in passing_alphas:
         pnl_data = store.load_pnl(aid)
         assert pnl_data is not None, f"PnL vector missing for passing alpha #{aid}"
 
     # Verify evaluate works on the resulting families for this campaign
-    campaign_families = db_session.execute(
-        select(distinct(Alpha.family_key))
-        .where(Alpha.campaign_task_id.in_([t.id for t in tasks]))
-    ).scalars().all()
+    campaign_families = (
+        db_session.execute(
+            select(distinct(Alpha.family_key)).where(
+                Alpha.campaign_task_id.in_([t.id for t in tasks])
+            )
+        )
+        .scalars()
+        .all()
+    )
     assert len(campaign_families) > 0
     for fkey in campaign_families:
         verdicts = P.evaluate(db_session, fkey, pnl_store=store, require_pnl=False)
@@ -132,15 +144,18 @@ def test_c1_end_to_end_campaign_with_fake_brain_client(db_session, monkeypatch, 
 # C2: Budget Conservation and Resumption Accounting
 # ----------------------------------------------------------------------
 
+
 def test_c2_budget_conservation_and_resume(db_session, monkeypatch):
     """C2: Budget completed tracks the SUM of task simulations, preserved across interruptions."""
     _seed_campaign_dataset(db_session, n_fields=5)
     camp = create_nightly_campaign(db_session, budget=100)
     cid = camp.id
 
-    tasks = db_session.execute(
-        select(CampaignTask).where(CampaignTask.campaign_id == cid)
-    ).scalars().all()
+    tasks = (
+        db_session.execute(select(CampaignTask).where(CampaignTask.campaign_id == cid))
+        .scalars()
+        .all()
+    )
     assert len(tasks) >= 1
 
     # Simulate Task 1 completed with target simulations
@@ -167,12 +182,15 @@ def test_c2_budget_conservation_and_resume(db_session, monkeypatch):
     db_session.flush()
 
     c = db_session.get(Campaign, cid)
-    assert c.budget_completed == sim_count_t0, f"budget_completed must equal {sim_count_t0} (sum of task simulations)"
+    assert (
+        c.budget_completed == sim_count_t0
+    ), f"budget_completed must equal {sim_count_t0} (sum of task simulations)"
 
 
 # ----------------------------------------------------------------------
 # C3: Zero-Work Distinction (Expected vs Unexpected)
 # ----------------------------------------------------------------------
+
 
 def test_c3_zero_work_distinction_expected_vs_unexpected(db_session, monkeypatch):
     """C3: Distinguish expected no-work (surface complete -> skipped) from unexpected (expansion failed -> failed)."""
@@ -182,7 +200,11 @@ def test_c3_zero_work_distinction_expected_vs_unexpected(db_session, monkeypatch
     camp = create_nightly_campaign(db_session, budget=50)
     cid = camp.id
 
-    t0 = db_session.execute(select(CampaignTask).where(CampaignTask.campaign_id == cid)).scalars().first()
+    t0 = (
+        db_session.execute(select(CampaignTask).where(CampaignTask.campaign_id == cid))
+        .scalars()
+        .first()
+    )
     horizon_band = None
     if t0.territory_key and ":" in t0.territory_key.split("@")[0]:
         h_cand = t0.territory_key.split("@")[0].split(":")[-1]
@@ -201,12 +223,25 @@ def test_c3_zero_work_distinction_expected_vs_unexpected(db_session, monkeypatch
     # 1. Pre-populate full surface for t0's exact family key with simulated metrics
     candidates = expand(db_session, spec, base_settings=settings, max_candidates=98)
     for c in candidates:
-        r = create_alpha(db_session, c.expression, c.settings, family_key=c.family_key, grid=c.grid, source="test")
+        r = create_alpha(
+            db_session,
+            c.expression,
+            c.settings,
+            family_key=c.family_key,
+            grid=c.grid,
+            source="test",
+        )
         r.alpha.status = AlphaStatus.PASSED.value
-        si = SimulationImport(alpha_id=r.alpha.id, source="brain_api", raw_payload={}, is_latest=True)
+        si = SimulationImport(
+            alpha_id=r.alpha.id, source="brain_api", raw_payload={}, is_latest=True
+        )
         db_session.add(si)
         db_session.flush()
-        db_session.add(AlphaMetric(simulation_import_id=si.id, alpha_id=r.alpha.id, sharpe=1.5, passed_all_checks=True))
+        db_session.add(
+            AlphaMetric(
+                simulation_import_id=si.id, alpha_id=r.alpha.id, sharpe=1.5, passed_all_checks=True
+            )
+        )
     db_session.flush()
 
     @contextmanager
@@ -227,7 +262,11 @@ def test_c3_zero_work_distinction_expected_vs_unexpected(db_session, monkeypatch
     # 2. Test unexpected zero-work (expansion produced no candidates -> failed)
     camp2 = create_nightly_campaign(db_session, budget=50)
     cid2 = camp2.id
-    t_unexp = db_session.execute(select(CampaignTask).where(CampaignTask.campaign_id == cid2)).scalars().first()
+    t_unexp = (
+        db_session.execute(select(CampaignTask).where(CampaignTask.campaign_id == cid2))
+        .scalars()
+        .first()
+    )
     # Mock expand to return empty candidates
     monkeypatch.setattr("app.services.campaign_runner.expand", lambda *args, **kwargs: [])
 
@@ -241,6 +280,7 @@ def test_c3_zero_work_distinction_expected_vs_unexpected(db_session, monkeypatch
 # ----------------------------------------------------------------------
 # C4: Module-level Semaphore and config_available Concurrency
 # ----------------------------------------------------------------------
+
 
 def test_c4_account_slots_semaphore_and_config_available():
     """C4: Module-level _ACCOUNT_SLOTS caps concurrency at 3 across multiple BrainClient instances."""
@@ -273,7 +313,9 @@ def test_c4_account_slots_semaphore_and_config_available():
 
     # Test concurrent simulations across distinct client instances
     def worker():
-        client = BrainClient(email="user@example.com", password="pw", base_url="https://api.worldquantbrain.com")
+        client = BrainClient(
+            email="user@example.com", password="pw", base_url="https://api.worldquantbrain.com"
+        )
         client._client = httpx.Client(base_url=client.base_url, transport=MockHTTPTransport())
         try:
             client.simulate("rank(close)", poll_seconds=0.01, max_wait_seconds=1.0)
@@ -286,19 +328,24 @@ def test_c4_account_slots_semaphore_and_config_available():
     for t in threads:
         t.join()
 
-    assert max_active <= MAX_CONCURRENT_SIMULATIONS, f"Max concurrent simulations {max_active} exceeded {MAX_CONCURRENT_SIMULATIONS}"
+    assert (
+        max_active <= MAX_CONCURRENT_SIMULATIONS
+    ), f"Max concurrent simulations {max_active} exceeded {MAX_CONCURRENT_SIMULATIONS}"
 
 
 # ----------------------------------------------------------------------
 # C5: Invariant 8 — Spike vs Ridge Selection
 # ----------------------------------------------------------------------
 
+
 def test_c5_invariant8_spike_vs_ridge_selection(db_session, tmp_path):
     """C5: Invariant 8 — Representative is selected by neighbourhood strength, never raw Sharpe."""
     ds = _seed_campaign_dataset(db_session, n_fields=1)
     fcode = f"{ds.dataset_code}_f0"
     settings = AlphaSettings(region="USA", universe="TOP3000", delay=1)
-    spec = FamilySpec(field_code=fcode, denominator="cap", operator_family="ts_zscore", wrapper_shape="rank")
+    spec = FamilySpec(
+        field_code=fcode, denominator="cap", operator_family="ts_zscore", wrapper_shape="rank"
+    )
     fkey = spec.family_key(settings)
 
     candidates = expand(db_session, spec, base_settings=settings, max_candidates=49)
@@ -308,7 +355,14 @@ def test_c5_invariant8_spike_vs_ridge_selection(db_session, tmp_path):
     grid_map: dict[tuple[int, int], int] = {}
 
     for c in candidates:
-        r = create_alpha(db_session, c.expression, c.settings, family_key=c.family_key, grid=c.grid, source="test")
+        r = create_alpha(
+            db_session,
+            c.expression,
+            c.settings,
+            family_key=c.family_key,
+            grid=c.grid,
+            source="test",
+        )
         alpha_ids.append(r.alpha.id)
         w = c.grid["window"]
         d = c.grid["decay"]
@@ -325,9 +379,9 @@ def test_c5_invariant8_spike_vs_ridge_selection(db_session, tmp_path):
     # Point A: (w=22, d=4) - Isolated spike (Sharpe 2.8, neighbours Sharpe 0.5)
     # Point B: (w=120, d=15) - Broad ridge (Sharpe 1.9, neighbours Sharpe 1.85)
     # Point C: (w=120, d=25) - High point on ridge (Sharpe 2.1, but neighbours Sharpe 1.70)
-    spike_coord = (windows[2], decays[2])   # (22, 4)
-    ridge_rep = (windows[4], decays[4])     # (120, 15)
-    ridge_high = (windows[4], decays[5])    # (120, 25)
+    spike_coord = (windows[2], decays[2])  # (22, 4)
+    ridge_rep = (windows[4], decays[4])  # (120, 15)
+    ridge_high = (windows[4], decays[5])  # (120, 25)
 
     for (w, d), aid in grid_map.items():
         if (w, d) == spike_coord:

@@ -54,10 +54,14 @@ class Alpha(IdMixin, TimestampMixin, Base):
     # ---- Identity & Expression ----
     expression: Mapped[str] = mapped_column(Text, nullable=False)
     normalized_expression: Mapped[str | None] = mapped_column(Text)
-    expression_hash: Mapped[str] = mapped_column(String(64), nullable=False, unique=True, index=True)
+    expression_hash: Mapped[str] = mapped_column(
+        String(64), nullable=False, unique=True, index=True
+    )
 
     # ---- Lifecycle & Lineage ----
-    status: Mapped[str] = mapped_column(String(16), default=AlphaStatus.UNTESTED.value, nullable=False)
+    status: Mapped[str] = mapped_column(
+        String(16), default=AlphaStatus.UNTESTED.value, nullable=False
+    )
     family_key: Mapped[str | None] = mapped_column(String(256), index=True)
     parent_id: Mapped[int | None] = mapped_column(ForeignKey("alphas.id", ondelete="SET NULL"))
     generation: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
@@ -96,7 +100,9 @@ class Alpha(IdMixin, TimestampMixin, Base):
 
     # ---- Relationships ----
     parent: Mapped[Alpha | None] = relationship(remote_side="Alpha.id", backref="children")
-    campaign_task: Mapped[CampaignTask | None] = relationship("CampaignTask", back_populates="alphas")
+    campaign_task: Mapped[CampaignTask | None] = relationship(
+        "CampaignTask", back_populates="alphas"
+    )
     status_history: Mapped[list[AlphaStatusHistory]] = relationship(
         back_populates="alpha", cascade="all, delete-orphan"
     )
@@ -104,10 +110,14 @@ class Alpha(IdMixin, TimestampMixin, Base):
         back_populates="alpha", cascade="all, delete-orphan"
     )
     attempts: Mapped[list[SubmissionAttempt]] = relationship(
-        back_populates="alpha", cascade="all, delete-orphan", order_by="SubmissionAttempt.attempted_at.desc()"
+        back_populates="alpha",
+        cascade="all, delete-orphan",
+        order_by="SubmissionAttempt.attempted_at.desc()",
     )
     production_snapshots: Mapped[list[AlphaProductionSnapshot]] = relationship(
-        back_populates="alpha", cascade="all, delete-orphan", order_by="AlphaProductionSnapshot.as_of_date.desc()"
+        back_populates="alpha",
+        cascade="all, delete-orphan",
+        order_by="AlphaProductionSnapshot.as_of_date.desc()",
     )
 
     __table_args__ = (
@@ -167,9 +177,7 @@ class AlphaFieldSnapshot(IdMixin, TimestampMixin, Base):
 
     alpha: Mapped[Alpha] = relationship(back_populates="field_snapshots")
 
-    __table_args__ = (
-        UniqueConstraint("alpha_id", "field_code", name="alpha_field_unique"),
-    )
+    __table_args__ = (UniqueConstraint("alpha_id", "field_code", name="alpha_field_unique"),)
 
 
 class SubmissionAttempt(IdMixin, TimestampMixin, Base):
@@ -183,7 +191,9 @@ class SubmissionAttempt(IdMixin, TimestampMixin, Base):
     attempted_at: Mapped[datetime] = mapped_column(
         DateTime, server_default=func.now(), nullable=False
     )
-    result: Mapped[str | None] = mapped_column(String(16), nullable=True)  # 'submitted' | 'rejected' | NULL
+    result: Mapped[str | None] = mapped_column(
+        String(16), nullable=True
+    )  # 'submitted' | 'rejected' | NULL
     failed_check: Mapped[str | None] = mapped_column(String(64), nullable=True)
     check_detail: Mapped[str | None] = mapped_column(Text, nullable=True)
     notes: Mapped[str | None] = mapped_column(Text, nullable=True)
@@ -191,9 +201,7 @@ class SubmissionAttempt(IdMixin, TimestampMixin, Base):
 
     alpha: Mapped[Alpha] = relationship(back_populates="attempts")
 
-    __table_args__ = (
-        enum_check("result", SubmissionResult),
-    )
+    __table_args__ = (enum_check("result", SubmissionResult),)
 
 
 class AlphaProductionSnapshot(IdMixin, TimestampMixin, Base):
@@ -205,7 +213,9 @@ class AlphaProductionSnapshot(IdMixin, TimestampMixin, Base):
         ForeignKey("alphas.id", ondelete="CASCADE"), nullable=False, index=True
     )
     as_of_date: Mapped[date] = mapped_column(Date, nullable=False, index=True)
-    status: Mapped[str] = mapped_column(String(32), nullable=False)  # 'in_production' | 'decommissioned'
+    status: Mapped[str] = mapped_column(
+        String(32), nullable=False
+    )  # 'in_production' | 'decommissioned'
     pnl: Mapped[float | None] = mapped_column(Float, nullable=True)
     sharpe: Mapped[float | None] = mapped_column(Float, nullable=True)
     returns: Mapped[float | None] = mapped_column(Float, nullable=True)
@@ -240,18 +250,29 @@ def sync_alpha_platform_outcome(db, alpha_id: int) -> str | None:
     if alpha is None:
         return None
 
-    attempts = db.execute(
-        select(SubmissionAttempt)
-        .where(SubmissionAttempt.alpha_id == alpha_id)
-        .order_by(SubmissionAttempt.attempted_at.desc())
-    ).scalars().all()
+    attempts = (
+        db.execute(
+            select(SubmissionAttempt)
+            .where(SubmissionAttempt.alpha_id == alpha_id)
+            .order_by(SubmissionAttempt.attempted_at.desc())
+        )
+        .scalars()
+        .all()
+    )
 
     # Check for API sync history (platform verified outcomes)
-    api_history = db.execute(
-        select(AlphaStatusHistory)
-        .where(AlphaStatusHistory.alpha_id == alpha_id, AlphaStatusHistory.note.like("outcome:%(api sync%"))
-        .order_by(AlphaStatusHistory.id.desc())
-    ).scalars().first()
+    api_history = (
+        db.execute(
+            select(AlphaStatusHistory)
+            .where(
+                AlphaStatusHistory.alpha_id == alpha_id,
+                AlphaStatusHistory.note.like("outcome:%(api sync%"),
+            )
+            .order_by(AlphaStatusHistory.id.desc())
+        )
+        .scalars()
+        .first()
+    )
 
     outcome = None
     outcome_dt = None
@@ -280,7 +301,9 @@ def sync_alpha_platform_outcome(db, alpha_id: int) -> str | None:
             outcome = PlatformOutcome.REJECTED.value
             latest = attempts[0]
             outcome_dt = latest.attempted_at.date() if latest.attempted_at else None
-            outcome_note = f"{latest.failed_check or 'REJECTED'}: {latest.check_detail or ''}".strip(": ")
+            outcome_note = (
+                f"{latest.failed_check or 'REJECTED'}: {latest.check_detail or ''}".strip(": ")
+            )
             outcome_src = OutcomeSource.MANUAL.value
         elif any(a.result is None for a in attempts):
             outcome = PlatformOutcome.PENDING.value

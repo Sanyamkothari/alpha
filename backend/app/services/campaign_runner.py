@@ -41,6 +41,7 @@ def create_nightly_campaign(
 ) -> Campaign:
     """Creates a new database-persisted campaign with 3-arm budget allocation."""
     import random as py_random
+
     effective_seed = seed if seed is not None else py_random.randint(1, 2**31 - 1)
 
     plan = plan_budget_allocation(
@@ -74,7 +75,9 @@ def create_nightly_campaign(
     db.flush()
 
     for t in plan.tasks:
-        territory_key = f"{t.field_code}:{t.operator_family}:{t.horizon_band}@{region}/{universe}/d{delay}"
+        territory_key = (
+            f"{t.field_code}:{t.operator_family}:{t.horizon_band}@{region}/{universe}/d{delay}"
+        )
 
         ctask = CampaignTask(
             campaign_id=campaign.id,
@@ -95,7 +98,13 @@ def create_nightly_campaign(
 
     db.commit()
     db.refresh(campaign)
-    log.info("campaign_created", campaign_id=campaign.id, tasks=len(plan.tasks), budget=budget, seed=effective_seed)
+    log.info(
+        "campaign_created",
+        campaign_id=campaign.id,
+        tasks=len(plan.tasks),
+        budget=budget,
+        seed=effective_seed,
+    )
     return campaign
 
 
@@ -149,7 +158,9 @@ def execute_campaign(
             task.status = "running"
             db.commit()
 
-        log.info("campaign_task_started", task_id=task_id, arm=task_arm, field=task_field, op=task_op)
+        log.info(
+            "campaign_task_started", task_id=task_id, arm=task_arm, field=task_field, op=task_op
+        )
 
         try:
             horizon_band = None
@@ -172,7 +183,9 @@ def execute_campaign(
 
             # 1. Expand Candidates (always round max_candidates UP to whole surface size)
             surface_size = 49
-            expansion_candidates = math.ceil((task_budget or surface_size) / surface_size) * surface_size
+            expansion_candidates = (
+                math.ceil((task_budget or surface_size) / surface_size) * surface_size
+            )
             with session_scope() as db:
                 candidates = expand(
                     db,
@@ -242,7 +255,11 @@ def execute_campaign(
                     # Post-batch PnL fetch for passing alphas
                     with session_scope() as db:
                         for aid in ids:
-                            m = db.execute(select(AlphaMetric).where(AlphaMetric.alpha_id == aid)).scalars().first()
+                            m = (
+                                db.execute(select(AlphaMetric).where(AlphaMetric.alpha_id == aid))
+                                .scalars()
+                                .first()
+                            )
                             if m and m.passed_all_checks:
                                 try:
                                     ensure_alpha_pnl(db, aid, allow_remote_fetch=True)
@@ -350,9 +367,7 @@ def auto_resume_interrupted_campaigns() -> int:
     with session_scope() as db:
         active_ids = [
             c.id
-            for c in db.execute(
-                select(Campaign).where(Campaign.status.in_(["running", "queued"]))
-            )
+            for c in db.execute(select(Campaign).where(Campaign.status.in_(["running", "queued"])))
             .scalars()
             .all()
         ]

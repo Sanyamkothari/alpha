@@ -131,9 +131,18 @@ def test_deterministic_seeding(db_session) -> None:
     plan_a2 = plan_budget_allocation(db_session, total_simulations=200, seed=12345)
     plan_b = plan_budget_allocation(db_session, total_simulations=200, seed=99999)
 
-    tasks_a1 = [(t.arm, t.field_code, t.operator_family, t.horizon_band, t.target_simulations) for t in plan_a1.tasks]
-    tasks_a2 = [(t.arm, t.field_code, t.operator_family, t.horizon_band, t.target_simulations) for t in plan_a2.tasks]
-    tasks_b = [(t.arm, t.field_code, t.operator_family, t.horizon_band, t.target_simulations) for t in plan_b.tasks]
+    tasks_a1 = [
+        (t.arm, t.field_code, t.operator_family, t.horizon_band, t.target_simulations)
+        for t in plan_a1.tasks
+    ]
+    tasks_a2 = [
+        (t.arm, t.field_code, t.operator_family, t.horizon_band, t.target_simulations)
+        for t in plan_a2.tasks
+    ]
+    tasks_b = [
+        (t.arm, t.field_code, t.operator_family, t.horizon_band, t.target_simulations)
+        for t in plan_b.tasks
+    ]
 
     assert tasks_a1 == tasks_a2
     assert tasks_a1 != tasks_b
@@ -178,12 +187,16 @@ def test_crowding_ceiling_in_exploit_vs_random_arm(db_session) -> None:
     # Exploit suggestions must not include crowded fields (>2000)
     sugs = suggest(db_session, n=5)
     for s in sugs:
-        assert (s.user_count or 0) <= CROWDED_USER_COUNT, f"Exploit suggested crowded field with {s.user_count} users"
+        assert (
+            s.user_count or 0
+        ) <= CROWDED_USER_COUNT, f"Exploit suggested crowded field with {s.user_count} users"
 
     # Random stratified arm must include Q4 tasks when budget spans quartiles
     plan = plan_budget_allocation(db_session, total_simulations=1000, seed=42)
     rand_tasks = [t for t in plan.tasks if t.arm == "random_stratified"]
-    assert any(t.quartile == 4 for t in rand_tasks), "Random stratified arm must sample from Q4 (crowded)"
+    assert any(
+        t.quartile == 4 for t in rand_tasks
+    ), "Random stratified arm must sample from Q4 (crowded)"
 
 
 def test_self_correlation_exclusion_from_exploit(db_session) -> None:
@@ -220,12 +233,18 @@ def test_self_correlation_exclusion_from_exploit(db_session) -> None:
 
     sugs = suggest(db_session, n=5)
     field_sugs = [s for s in sugs if s.field_code == sub_field]
-    assert len(field_sugs) > 0, f"Field {sub_field} must remain reachable under untried operators (F4)"
-    
+    assert (
+        len(field_sugs) > 0
+    ), f"Field {sub_field} must remain reachable under untried operators (F4)"
+
     # Excluded from submitted operator ts_zscore (all horizon bands for legacy key), but recommended under untried ops
     for s in field_sugs:
-        assert s.operator_family != "ts_zscore", f"Submitted operator ts_zscore must be excluded from exploit suggestions for {sub_field}"
-        assert s.self_corr_headroom is None, "self_corr_headroom must be None (unmeasured) without fabricated proxies (F5)"
+        assert (
+            s.operator_family != "ts_zscore"
+        ), f"Submitted operator ts_zscore must be excluded from exploit suggestions for {sub_field}"
+        assert (
+            s.self_corr_headroom is None
+        ), "self_corr_headroom must be None (unmeasured) without fabricated proxies (F5)"
 
 
 def test_self_correlation_exclusion_differential_passed_vs_submitted(db_session) -> None:
@@ -247,24 +266,36 @@ def test_self_correlation_exclusion_differential_passed_vs_submitted(db_session)
         wrapper_shape="rank",
     )
     # Populate all alternative operators as tried so ts_zscore is next in line
-    for op in ["ts_rank", "ts_mean", "ts_delta", "ts_std_dev", "ts_quantile", "ts_decay_linear", "ts_backfill"]:
-        db_session.add(Alpha(
-            expression=f"rank({op}({pass_field}, 10))",
-            expression_hash=f"hash_pass_{op}_{pass_field}",
-            family_key=f"{pass_field}/cap:{op}:rank@USA/TOP3000/d1",
-            region="USA",
-            universe="TOP3000",
-            delay=1,
-            status="passed",
-            feature_json={"grid": {"ts": op, "window": 10}},
-        ))
+    for op in [
+        "ts_rank",
+        "ts_mean",
+        "ts_delta",
+        "ts_std_dev",
+        "ts_quantile",
+        "ts_decay_linear",
+        "ts_backfill",
+    ]:
+        db_session.add(
+            Alpha(
+                expression=f"rank({op}({pass_field}, 10))",
+                expression_hash=f"hash_pass_{op}_{pass_field}",
+                family_key=f"{pass_field}/cap:{op}:rank@USA/TOP3000/d1",
+                region="USA",
+                universe="TOP3000",
+                delay=1,
+                status="passed",
+                feature_json={"grid": {"ts": op, "window": 10}},
+            )
+        )
     db_session.flush()
 
     sugs_pass = suggest(db_session, n=5)
     field_sugs_pass = [s for s in sugs_pass if s.field_code == pass_field]
     assert len(field_sugs_pass) > 0
     # Since status is 'passed' (not submitted), ts_zscore is NOT excluded by self-correlation
-    assert any(s.operator_family == "ts_zscore" for s in field_sugs_pass), "status='passed' must not trigger self-correlation exclusion"
+    assert any(
+        s.operator_family == "ts_zscore" for s in field_sugs_pass
+    ), "status='passed' must not trigger self-correlation exclusion"
 
     # Now verify that marking ts_zscore as submitted immediately excludes ts_zscore on the identical setup
     alpha_sub_legacy = Alpha(
@@ -285,7 +316,9 @@ def test_self_correlation_exclusion_differential_passed_vs_submitted(db_session)
     sugs_now_sub = suggest(db_session, n=5)
     field_sugs_now_sub = [s for s in sugs_now_sub if s.field_code == pass_field]
     # Now ts_zscore must be excluded for all horizon bands
-    assert not any(s.operator_family == "ts_zscore" for s in field_sugs_now_sub), "status='submitted' must exclude ts_zscore across all horizon bands"
+    assert not any(
+        s.operator_family == "ts_zscore" for s in field_sugs_now_sub
+    ), "status='submitted' must exclude ts_zscore across all horizon bands"
 
     # 2. Test canonical submitted key with specific horizon band
     ds_canon = _dataset(db_session, "ds_canon_test", n_fields=1, users=35)

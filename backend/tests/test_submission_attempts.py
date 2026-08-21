@@ -98,7 +98,11 @@ def test_multiple_attempts_derived_outcome(client, db_session):
     # Attempt 2: rejected again
     res2 = client.post(
         f"/api/alphas/{alpha_id}/attempts",
-        json={"result": "rejected", "failed_check": "HIGH_TURNOVER", "check_detail": "0.78 vs 0.70"},
+        json={
+            "result": "rejected",
+            "failed_check": "HIGH_TURNOVER",
+            "check_detail": "0.78 vs 0.70",
+        },
     )
     assert res2.status_code == 201
     alpha_get2 = client.get(f"/api/alphas/{alpha_id}").json()

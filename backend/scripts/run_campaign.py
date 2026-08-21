@@ -50,23 +50,33 @@ def inspect_campaign(campaign_id: int) -> None:
             print(f"Campaign #{campaign_id} not found.")
             return
 
-        print(f"Campaign #{c.id}: {c.name} (Status: {c.status}, Completed: {c.budget_completed}/{c.budget_total})")
+        print(
+            f"Campaign #{c.id}: {c.name} (Status: {c.status}, Completed: {c.budget_completed}/{c.budget_total})"
+        )
         print("\nTasks:")
-        print(f"{'ID':<4} {'Arm':<18} {'Territory':<40} {'Status':<10} {'Sim/Total':<10} {'Passed'}")
+        print(
+            f"{'ID':<4} {'Arm':<18} {'Territory':<40} {'Status':<10} {'Sim/Total':<10} {'Passed'}"
+        )
         print("-" * 90)
         for t in c.tasks:
             prog = f"{t.alphas_simulated}/{t.alphas_total}"
-            print(f"{t.id:<4} {t.arm:<18} {t.territory_key[:38]:<40} {t.status:<10} {prog:<10} {t.alphas_passed}")
+            print(
+                f"{t.id:<4} {t.arm:<18} {t.territory_key[:38]:<40} {t.status:<10} {prog:<10} {t.alphas_passed}"
+            )
 
 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("--nightly", action="store_true", help="create and launch standard 200-sim nightly campaign")
+    ap.add_argument(
+        "--nightly", action="store_true", help="create and launch standard 200-sim nightly campaign"
+    )
     ap.add_argument("--budget", type=int, default=200, help="simulation budget")
     ap.add_argument("--resume", type=int, default=None, help="campaign ID to resume")
     ap.add_argument("--inspect", type=int, default=None, help="inspect campaign tasks")
     ap.add_argument("--list", action="store_true", help="list campaigns")
-    ap.add_argument("--no-simulate", action="store_true", help="expand only, skip remote simulations")
+    ap.add_argument(
+        "--no-simulate", action="store_true", help="expand only, skip remote simulations"
+    )
     ap.add_argument("--region", default="USA")
     ap.add_argument("--universe", default="TOP3000")
     ap.add_argument("--delay", type=int, default=1)
@@ -87,7 +97,9 @@ def main() -> int:
         return 0
 
     # Create new campaign
-    print(f"Creating campaign (budget: {args.budget} sims, region: {args.region}/{args.universe}/d{args.delay}) ...")
+    print(
+        f"Creating campaign (budget: {args.budget} sims, region: {args.region}/{args.universe}/d{args.delay}) ..."
+    )
     with session_scope() as db:
         c = create_nightly_campaign(
             db, budget=args.budget, region=args.region, universe=args.universe, delay=args.delay
