@@ -162,3 +162,13 @@ def test_full_alpha_mining_e2e_pipeline(client: TestClient, db_session, tmp_path
     assert "# Alpha research — daily report" in report_md
     assert "## Funnel Telemetry" in report_md
     assert "## Currently submitted on BRAIN" in report_md
+
+    # `client`'s /mark call at Stage 6 commits through its own request-scoped
+    # session, so top_alpha_id's submitted outcome is durable in the shared
+    # test DB, not rolled back by db_session's teardown. It has to stay alive
+    # (and submitted) through every stage above, so clean it up only here, at
+    # the true end -- a leaked SUBMITTED alpha would make correlation.py's
+    # fail-closed unmeasured gate wrongly block promotion in later tests that
+    # run the correlation gate with its default (unspecified) portfolio.
+    db_session.delete(db_session.get(Alpha, top_alpha_id))
+    db_session.commit()

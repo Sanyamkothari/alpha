@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from app.models.alphas import Alpha
 from app.models.enums import AlphaStatus, PlatformOutcome, SubmissionCheckName
 from app.services.alpha_library import AlphaSettings, create_alpha
 
@@ -49,6 +50,15 @@ def test_pending_attempt_and_unresolved_queue(client, db_session):
     # Unresolved list should now be empty of this attempt
     unres2 = client.get("/api/alphas/attempts/unresolved")
     assert not any(r["id"] == att_data["id"] for r in unres2.json())
+
+    # `client` commits through its own request-scoped session, so this alpha's
+    # submitted outcome is durable in the shared test DB, not rolled back by
+    # db_session's teardown. Undo it explicitly -- correlation.py's fail-closed
+    # unmeasured gate treats every SUBMITTED alpha as a real portfolio member,
+    # so a leaked one here would wrongly block promotion in every later test
+    # that runs the correlation gate with its default (unspecified) portfolio.
+    db_session.delete(db_session.get(Alpha, alpha_id))
+    db_session.commit()
 
 
 def test_rejected_attempt_and_failed_checks(client, db_session):
@@ -116,6 +126,11 @@ def test_multiple_attempts_derived_outcome(client, db_session):
     assert res3.status_code == 201
     alpha_get3 = client.get(f"/api/alphas/{alpha_id}").json()
     assert alpha_get3["platform_outcome"] == "submitted"
+
+    # See the comment at the end of test_pending_attempt_and_unresolved_queue:
+    # this alpha's submitted outcome is durable via `client`'s own commits.
+    db_session.delete(db_session.get(Alpha, alpha_id))
+    db_session.commit()
 
 
 def test_ui_attempt_endpoints(client, db_session):

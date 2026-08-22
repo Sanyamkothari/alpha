@@ -48,6 +48,15 @@ def test_set_platform_outcome_via_attempt(client, db_session):
     )
     assert "attempt:submitted" in hist.note
 
+    # `client` commits through its own request-scoped session, so this alpha's
+    # submitted outcome is durable in the shared test DB, not rolled back by
+    # db_session's teardown. Undo it explicitly -- correlation.py's fail-closed
+    # unmeasured gate treats every SUBMITTED alpha as a real portfolio member,
+    # so a leaked one here would wrongly block promotion in every later test
+    # that runs the correlation gate with its default (unspecified) portfolio.
+    db_session.delete(alpha)
+    db_session.commit()
+
 
 def test_direct_outcome_post_dropped(client, db_session):
     res = create_alpha(db_session, "rank(volume)", AlphaSettings())

@@ -8,6 +8,7 @@ with fallback to structural hashing when empirical PnL is unavailable.
 from __future__ import annotations
 
 from dataclasses import dataclass
+
 import numpy as np
 import structlog
 from sqlalchemy import select
@@ -45,12 +46,20 @@ class CorrelationVerdict:
 
 
 def _date_map(pnl_tuple: tuple[list[str], np.ndarray] | None) -> dict[str, float] | None:
+    """Build a date -> value map, or None if the pair on disk is torn.
+
+    ``PnLStore`` writes dates and values to two files. Files written before the
+    atomic-rename fix can still be a mismatched pair. Zipping them would
+    truncate silently and then KeyError downstream, so a mismatch is treated
+    the same as missing data: skip this alpha, do not fail the whole gate.
+    """
     if pnl_tuple is None:
         return None
     dates, values = pnl_tuple
     if len(dates) != len(values):
+        log.warning("pnl_length_mismatch", dates=len(dates), values=len(values))
         return None
-    return dict(zip(dates, values))
+    return dict(zip(dates, values, strict=True))
 
 
 def submitted_portfolio(db: Session, exclude_alpha_id: int | None = None) -> list[Alpha]:
@@ -205,11 +214,16 @@ def check_portfolio_empirical_correlation(
             portfolio_size=port_size,
         )
 
+    # Reached only when port_size > 0 (the empty-portfolio case returns above).
+    # allow_unmeasured=True lets the caller not block on this, but the fact that
+    # nothing was actually measured is real and must still be reported as such —
+    # conflating it with the genuine "none" (no portfolio) case would hide from
+    # reporting/UI callers exactly the gap allow_unmeasured was granted for.
     return CorrelationVerdict(
         blocking=False,
         reason=None,
         max_correlation=max_corr,
-        method="empirical" if measured_pairs > 0 else "none",
+        method="empirical" if measured_pairs > 0 else "unmeasured",
         measured_pairs=measured_pairs,
         skipped_pairs=skipped_pairs,
         portfolio_size=port_size,

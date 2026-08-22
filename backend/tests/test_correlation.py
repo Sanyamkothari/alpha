@@ -18,13 +18,16 @@ import numpy as np
 
 from app.models.alphas import Alpha, SubmissionAttempt
 from app.models.enums import AlphaStatus, PlatformOutcome
+from app.services.alpha_library import AlphaSettings, create_alpha
 from app.services.correlation import (
     CorrelationVerdict,
     check_portfolio_empirical_correlation,
     compute_correlation_matrix,
     compute_pairwise_correlation,
+    ensure_alpha_pnl,
 )
 from app.services.pnl_storage import PnLStore
+from app.services.result_import import import_result
 
 
 def test_pairwise_correlation_math() -> None:
@@ -293,3 +296,57 @@ def test_correlation_matrix_vectorization() -> None:
     assert res.shape == (3, 3)
     assert np.allclose(np.diag(res), 1.0)
     assert abs(res[0, 1] - (-1.0)) < 1e-4
+
+
+def test_ensure_alpha_pnl_remote_fetch_stores_reconciled_daily_series(
+    db_session, tmp_path, monkeypatch
+) -> None:
+    """Regression: the remote-fetch path imports app.services.pnl_convention at
+    call time. That module was once missing from a commit entirely, but every
+    caller (campaign_runner.py, jobs.py) swallows the resulting ImportError as
+    a bare ``except Exception`` and just logs a warning -- so PnL silently
+    never got fetched for any newly-passing alpha, and no test caught it,
+    because nothing exercised this function against a real BrainClient.
+    """
+    from tests.fakes.fake_brain_client import FakeBrainClient, _outcome_for
+
+    monkeypatch.setattr("app.services.brain.BrainClient", FakeBrainClient)
+
+    res = create_alpha(db_session, "rank(ts_delta(close, 5))", AlphaSettings())
+    alpha = res.alpha
+    remote_id = "fake_regression0001"
+    _, sharpe, _, _ = _outcome_for(remote_id)
+    import_result(db_session, alpha, {"id": remote_id, "sharpe": sharpe, "checks": []})
+
+    store = PnLStore(tmp_path / "pnl")
+    ok = ensure_alpha_pnl(db_session, alpha.id, allow_remote_fetch=True, pnl_store=store)
+    assert ok is True, "ensure_alpha_pnl must succeed against a well-formed BrainClient response"
+
+    loaded = store.load_pnl(alpha.id)
+    assert loaded is not None
+    dates, values = loaded
+    assert len(dates) == len(values) > 0
+
+
+def test_ensure_alpha_pnl_remote_fetch_rejects_indeterminate_series(
+    db_session, tmp_path, monkeypatch
+) -> None:
+    """A raw series that reconciles with neither the daily nor the cumulative
+    reading of the reported Sharpe must not be stored -- a wrong guess here
+    would silently poison DSR, plateau, and every correlation check downstream.
+    """
+    from tests.fakes.fake_brain_client import FakeBrainClient
+
+    monkeypatch.setattr("app.services.brain.BrainClient", FakeBrainClient)
+
+    res = create_alpha(db_session, "rank(ts_delta(volume, 5))", AlphaSettings())
+    alpha = res.alpha
+    remote_id = "fake_regression0002"
+    # Reported Sharpe deliberately unrelated to what the fixture's generated
+    # series reconciles to under either the daily or the cumulative reading.
+    import_result(db_session, alpha, {"id": remote_id, "sharpe": 99.0, "checks": []})
+
+    store = PnLStore(tmp_path / "pnl")
+    ok = ensure_alpha_pnl(db_session, alpha.id, allow_remote_fetch=True, pnl_store=store)
+    assert ok is False
+    assert store.load_pnl(alpha.id) is None
