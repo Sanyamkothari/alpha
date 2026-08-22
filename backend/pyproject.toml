@@ -25,13 +25,13 @@ alpha-desktop = "app.desktop:main"
 
 [project.optional-dependencies]
 dev = [
-    "pytest>=8.0",
-    "pytest-asyncio>=0.23",
-    "ruff>=0.4",
-    "black>=24.3",
-    "mypy>=1.9",
+    "pytest>=8.0,<10.0",
+    "pytest-asyncio>=0.23,<2.0",
+    "ruff>=0.4,<1.0",
+    "black>=24.3,<27.0",
+    "mypy>=1.9,<3.0",
     "types-PyYAML>=6.0",
-    "pyinstaller>=6.5",
+    "pyinstaller>=6.5,<7.0",
 ]
 
 [build-system]

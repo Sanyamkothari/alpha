@@ -1,0 +1,56 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+      - "claude/**"
+  pull_request:
+    branches:
+      - main
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Test & Quality Checks
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          version: "latest"
+
+      - name: Install backend dependencies
+        run: |
+          uv pip install --system -e ".[dev]"
+
+      - name: Run Ruff Lint
+        run: |
+          ruff check app scripts tests
+
+      - name: Run Black Format Check
+        run: |
+          black --check app scripts tests
+
+      - name: Run Mypy Type Check
+        run: |
+          mypy app
+
+      - name: Run Pytest Test Suite
+        run: |
+          pytest -q
