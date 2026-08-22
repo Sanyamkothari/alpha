@@ -32,14 +32,20 @@ def run_study(sample_size: int = 500) -> dict[str, Any]:
                 is_deg, reason = is_degenerate_signal(ast)
                 if is_deg:
                     degenerate_count += 1
-                    degenerate_reasons[reason or "unknown"] = degenerate_reasons.get(reason or "unknown", 0) + 1
+                    degenerate_reasons[reason or "unknown"] = (
+                        degenerate_reasons.get(reason or "unknown", 0) + 1
+                    )
             except Exception:
                 pass
 
     print("================ PROXY CALIBRATION REPORT ================")
     print(f"Sample Size:                                    {report.sample_size}")
-    print(f"Turnover Proxy vs Actual Turnover Spearman Rho: {report.turnover_proxy_correlation:.4f}")
-    print(f"Complexity vs Fitness Spearman Rho:             {report.complexity_vs_fitness_correlation:.4f}")
+    print(
+        f"Turnover Proxy vs Actual Turnover Spearman Rho: {report.turnover_proxy_correlation:.4f}"
+    )
+    print(
+        f"Complexity vs Fitness Spearman Rho:             {report.complexity_vs_fitness_correlation:.4f}"
+    )
     print(f"Proxy System Viable (Rho > 0.40):               {report.is_proxy_viable}")
     print("================ AST DEGENERACY AUDIT ====================")
     print(f"Total Alphas Audited:                           {total_alphas}")

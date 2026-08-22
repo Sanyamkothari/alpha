@@ -51,17 +51,21 @@ def run_study(min_points: int = 5) -> dict[str, Any]:
         corr_matrix = np.nan_to_num(corr_matrix, nan=0.0)
 
         n_eff = compute_effective_trials(corr_matrix)
-        family_results.append({
-            "family_key": fam,
-            "n_members": len(fam_alphas),
-            "pnl_members": len(pnl_vectors),
-            "n_eff": n_eff,
-            "ratio": n_eff / max(1, len(pnl_vectors)),
-        })
+        family_results.append(
+            {
+                "family_key": fam,
+                "n_members": len(fam_alphas),
+                "pnl_members": len(pnl_vectors),
+                "n_eff": n_eff,
+                "ratio": n_eff / max(1, len(pnl_vectors)),
+            }
+        )
 
     print(f"Evaluated Families with PnL >= {min_points}:             {len(family_results)}")
     for r in sorted(family_results, key=lambda x: -x["n_members"])[:10]:
-        print(f"  - {r['family_key']}: N={r['pnl_members']}, N_eff={r['n_eff']:.2f} (ratio {r['ratio']:.2f})")
+        print(
+            f"  - {r['family_key']}: N={r['pnl_members']}, N_eff={r['n_eff']:.2f} (ratio {r['ratio']:.2f})"
+        )
     print("===============================================================")
 
     return {"families_evaluated": len(family_results), "results": family_results}

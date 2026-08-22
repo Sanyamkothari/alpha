@@ -94,9 +94,8 @@ def check_alpha_stopping_bound(db: Session, alpha_id: int) -> AlphaStoppingVerdi
     attempt_count = len(attempts)
 
     # 1. Check if already successfully submitted
-    if (
-        alpha.platform_outcome == PlatformOutcome.SUBMITTED.value
-        or any(a.result == SubmissionResult.SUBMITTED.value for a in attempts)
+    if alpha.platform_outcome == PlatformOutcome.SUBMITTED.value or any(
+        a.result == SubmissionResult.SUBMITTED.value for a in attempts
     ):
         return AlphaStoppingVerdict(
             can_submit=False,
@@ -153,8 +152,7 @@ def check_family_stopping_bound(db: Session, family_key: str | None) -> FamilySt
             .join(Alpha, SubmissionAttempt.alpha_id == Alpha.id)
             .where(Alpha.family_key == family_key)
             .order_by(SubmissionAttempt.id.asc())
-        )
-        .all()
+        ).all()
     )
 
     total_attempts = len(attempts)

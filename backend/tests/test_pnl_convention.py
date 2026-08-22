@@ -29,8 +29,8 @@ def test_detect_cumulative_pnl() -> None:
     assert verdict.convention == "cumulative"
     assert verdict.is_usable is True
     norm = to_daily(cum_pnl, verdict.convention)
-    assert len(norm) == len(cum_pnl) - 1
-    assert np.allclose(norm, daily_rets[1:], atol=1e-6)
+    assert len(norm) == len(cum_pnl)
+    assert np.allclose(norm, daily_rets, atol=1e-6)
 
 
 def test_detect_indeterminate_on_garbage() -> None:
