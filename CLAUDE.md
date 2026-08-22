@@ -19,33 +19,32 @@ A local research system that generates candidate trading alphas for the WorldQua
 
 ---
 
-## Actual state — verified 15 Aug 2026
+## Actual state — verified August 2026
 
-The README describes intended capability. These are measured numbers. Trust these.
+The README describes intended capability. These are measured numbers from `database/wq.db`. Trust these.
 
 | | |
 |---|---|
-| Project age | ~6 weeks (first alpha 2026-07-08) |
-| Alphas in DB | 4,857 |
-| Actually simulated | 486 |
-| Passed BRAIN checks | 28 |
-| Passed DSR | 11 |
-| Promoted | 16 |
-| **Submitted to BRAIN** | **6** (`zqNXMEZE`, `N1bkwYGw`, `VkGeJGrM`, `xANpg6OW`, `O0GKYG0R`, `QPGpqGbG`) |
+| Project age | ~7 weeks (first alpha 2026-07-08) |
+| Alphas in DB | 6,506 |
+| Actually simulated | 829 (874 runs) |
+| Passed BRAIN checks | 281 |
+| Stored daily PnL vectors | 402 |
+| **Submitted to BRAIN** | **27** |
 | **Accepted / paid** | **0 known** |
-| Fields touched | 32 of 6,583 (0.49%) |
-| Operator families used | 1 (`ts_zscore`) before Phase 1 |
-| Throughput | ~13 sims/day against a 200–500/day design target |
+| Catalog data fields | 6,583 across 33 datasets |
+| Operator families used | `ts_zscore`, `ts_rank`, `ts_delta`, `ts_mean`, `ts_std_dev` |
+| Dense territories | 39 (holding ≥ 100 alphas each) |
 
-**The premise "this system produces good alphas" is unproven.** Six submissions cleared BRAIN's gate, which proves the loop closes. It does not establish a rate.
+**The premise "this system produces good alphas" is unproven.** Submissions clear BRAIN's gate, which proves the loop closes. It does not establish a long-term acceptance rate.
 
 ### The single-template problem
 
-4,608 of 5,177 alphas share one shape: `rank(ts_zscore(divide(ts_backfill(FIELD,120), cap), W))`. Because BRAIN rejects submissions correlating >0.70 with the user's own alphas, the practical yield is roughly **one submittable alpha per field**, not per alpha generated. Phase 1 exists largely to break this monoculture.
+Early alphas shared one shape: `rank(ts_zscore(divide(ts_backfill(FIELD,120), cap), W))`. Because BRAIN rejects submissions correlating >0.70 with the user's own alphas, the practical yield is roughly **one submittable alpha per field**, not per alpha generated. Phase 1 multi-armed allocator and composite constructors exist to break this monoculture.
 
 ### The drift incident — why single-source-of-truth matters here
 
-For two weeks the local DB marked three alphas as submitted whose BRAIN IDs did not correspond to anything actually submitted, while the two genuinely submitted alphas were unrecorded. Cause: the `s` keystroke wrote local state with no platform verification.
+For two weeks the local DB marked three alphas as submitted whose BRAIN IDs did not correspond to anything actually submitted, while the genuinely submitted alphas were unrecorded. Cause: the `s` keystroke wrote local state with no platform verification.
 
 Consequences now baked into the design, do not undo them:
 
@@ -79,11 +78,11 @@ No billing, accounts, multi-user features, crowding map, network layer, fertilit
 
 ## Open questions needing a human
 
-| Question | Why it matters |
-|---|---|
-| **BRAIN submission quota per week** | Determines whether 40 attempts in 4 months is feasible at all |
-| Past submission attempts and which check failed | Run `scripts/record_past_attempts.py`. 2-of-2 vs 2-of-15 are different businesses |
-| Does BRAIN check `PROD_CORRELATION` against the platform pool, separate from self-correlation? | Suspected yes but unverified firsthand. Decides whether research ground is shared between users — the premise of the entire product plan |
+| Question | Why it matters | Status |
+|---|---|---|
+| **BRAIN submission quota per week** | Determines whether 40 attempts in 4 months is feasible at all | **RESOLVED**: Confirmed 4 submissions/day (28/week); not a binding constraint (see `docs/PHASE1_OPERATING_GUIDE.md` §1). |
+| Past submission attempts and which check failed | Run `scripts/record_past_attempts.py`. 2-of-2 vs 2-of-15 are different businesses | Open |
+| Does BRAIN check `PROD_CORRELATION` against the platform pool, separate from self-correlation? | Suspected yes but unverified firsthand. Decides whether research ground is shared between users — the premise of the entire product plan | Open |
 
 ---
 

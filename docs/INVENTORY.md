@@ -1,18 +1,18 @@
-# Project Inventory — 2026-08-16 (Post-Review Follow-up)
+# Project Inventory — August 2026 (Remediation Reconciled)
 
 ## Headline numbers (Comparative Audit)
 
-| Metric | Baseline (2026-08-15) | Current (2026-08-16) | Status / Delta Source |
+| Metric | Baseline (2026-08-15) | Current (August 2026) | Status / Delta Source |
 |---|---|---|---|
-| **Total alphas** | 4,857 | 5,176 | +319 alphas generated in alpha library |
-| **Simulated alphas** | 486 (531 runs) | 531 | Distinct simulations in `simulation_imports` |
-| **Passed BRAIN checks** | 28 | 34 | `alpha_metrics.passed_all_checks = 1` |
+| **Total alphas** | 4,857 | 6,506 | Alphas in `alphas` table |
+| **Simulated alphas** | 486 (531 runs) | 829 (874 runs) | Distinct simulations in `simulation_imports` |
+| **Passed BRAIN checks** | 28 | 281 | `alpha_metrics.passed_all_checks = 1` |
 | **Catalog data fields** | 6,583 | 6,583 | 6,583 fields across 33 datasets |
-| **Point-in-time field snapshots** | 0 (overwritten) | 5,187 | Stamped at creation in `alpha_field_snapshot` |
-| **Stored daily PnL vectors** | 369 | 369 | 1,236-day `.npy` files in `database/pnl/` |
-| **Submission attempts** | 0 (untracked) | 2 | Recorded in `submission_attempts` table |
-| **Platform outcomes derived** | 0 (schema absent) | 2 (`submitted`) | Single-writer 3-state lifecycle (`alphas.platform_outcome`) |
-| **Test suite (passed / runtime)** | 176 / 1.25s | 218 / ~2.2s | 100% passing within frozen $\le 6.0\text{s}$ ceiling |
+| **Point-in-time field snapshots** | 0 (overwritten) | 6,270 | Stamped at creation in `alpha_field_snapshot` |
+| **Stored daily PnL vectors** | 369 | 402 | 1,236-day `.npy` files in `database/pnl/` |
+| **Submission attempts** | 0 (untracked) | 27 | Recorded in `submission_attempts` table |
+| **Platform outcomes derived** | 0 (schema absent) | 27 (`submitted`) | Single-writer 3-state lifecycle (`alphas.platform_outcome`) |
+| **Test suite (passed / runtime)** | 176 / 1.25s | 258 / ~1.5s | 100% passing within frozen $\le 6.0\text{s}$ ceiling |
 
 > [!NOTE]
 > **Key Infrastructure Updates since Baseline:**
@@ -29,21 +29,21 @@ Per `CLAUDE.md` and Finding F13:
 | Module / Component | Code Exists | Code Runs | Has Produced Rows | Row Count Query & Evidence |
 |---|---|---|---|---|
 | **`app/validator` (Lexer/Parser/KB)** | YES | YES | YES | `SELECT COUNT(*) FROM operators;` -> 105 rows; `SELECT COUNT(*) FROM operator_arguments;` -> 213 rows |
-| **`app/services/alpha_library.py`** | YES | YES | YES | `SELECT COUNT(*) FROM alphas;` -> 5,176 rows; `SELECT COUNT(*) FROM alpha_status_history;` -> 5,468 rows |
-| **`app/services/result_import.py`** | YES | YES | YES | `SELECT COUNT(*) FROM simulation_imports;` -> 531 rows; `SELECT COUNT(*) FROM alpha_metrics;` -> 531 rows |
-| **`app/models/fields.py` (Snapshots)** | YES | YES | YES | `SELECT COUNT(*) FROM alpha_field_snapshot;` -> 5,187 rows |
+| **`app/services/alpha_library.py`** | YES | YES | YES | `SELECT COUNT(*) FROM alphas;` -> 6,506 rows; `SELECT COUNT(*) FROM alpha_status_history;` -> 6,996 rows |
+| **`app/services/result_import.py`** | YES | YES | YES | `SELECT COUNT(*) FROM simulation_imports;` -> 874 rows; `SELECT COUNT(*) FROM alpha_metrics;` -> 874 rows |
+| **`app/models/fields.py` (Snapshots)** | YES | YES | YES | `SELECT COUNT(*) FROM alpha_field_snapshot;` -> 6,270 rows |
 | **`scripts/fetch_brain_catalog.py`** | YES | YES | YES | `SELECT COUNT(*) FROM data_fields;` -> 6,583 rows across 33 datasets |
-| **`app/services/simulation_runner.py`** | YES | YES | YES | `SELECT COUNT(*) FROM simulation_imports;` -> 531 rows (486 distinct alphas) |
-| **`app/services/constructor.py`** | YES | YES | YES | `SELECT COUNT(*) FROM alphas WHERE family_key IS NOT NULL;` -> 4,927 rows across 13 families |
-| **`app/services/composite_constructor.py`** | YES | YES (CLI) | YES | `SELECT COUNT(*) FROM alphas WHERE family_key LIKE '%+%';` -> 8 rows (close+volume, 0 simulated) |
+| **`app/services/simulation_runner.py`** | YES | YES | YES | `SELECT COUNT(*) FROM simulation_imports;` -> 874 rows (829 distinct alphas) |
+| **`app/services/constructor.py`** | YES | YES | YES | `SELECT COUNT(*) FROM alphas WHERE family_key IS NOT NULL;` -> 6,197 rows |
+| **`app/services/composite_constructor.py`** | YES | YES (CLI) | YES | `SELECT COUNT(*) FROM alphas WHERE family_key LIKE '%+%';` -> composite family alphas |
 | **`app/services/evolution.py`** | YES | YES (CLI) | NO (0 rows) | `SELECT COUNT(*) FROM alphas WHERE generation > 0;` -> 0 rows (staged for later phases) |
-| **`app/services/plateau.py`** | YES | YES | YES | Evaluates 2D surfaces; 208 candidate alphas pass plateau median filter |
-| **`app/services/subperiod.py`** | YES | YES | YES | Evaluates DSR (11 pass) and subperiod split-half/decay (58 pass) |
-| **`app/services/correlation.py`** | YES | YES | YES | Vectorized correlation matrix across 369 daily PnL vectors in `database/pnl/` |
+| **`app/services/plateau.py`** | YES | YES | YES | Evaluates 2D surfaces; candidate alphas pass plateau median filter |
+| **`app/services/subperiod.py`** | YES | YES | YES | Evaluates DSR and subperiod split-half/decay |
+| **`app/services/correlation.py`** | YES | YES | YES | Correlation matrix across daily PnL vectors in `database/pnl/` |
 | **`app/services/allocator.py`** | YES | YES | YES | Unified allocator with hierarchical bandit, territory coordinates, and exact budget closure |
 | **`app/services/field_crowding.py`** | YES | NO (Tests only) | NO (0 rows) | Uncalled by production routes (staged) |
 | **`app/services/field_triage.py`** | YES | YES (CLI) | YES | `SELECT COUNT(*) FROM llm_runs;` -> 64 rows |
-| **`app/models/alphas.py` (Submissions)** | YES | YES | YES | `SELECT COUNT(*) FROM submission_attempts;` -> 2 rows |
+| **`app/models/alphas.py` (Submissions)** | YES | YES | YES | `SELECT COUNT(*) FROM submission_attempts;` -> 27 rows |
 | **`app/services/campaign_runner.py`** | YES | YES | YES | `SELECT COUNT(*) FROM campaigns;` -> persistent campaign execution |
 
 ---
@@ -57,7 +57,7 @@ Database path queried: `/Users/sanya/Projects/alpha/database/wq.db`
 Query executed:
 ```sql
 SELECT COUNT(*) FROM alphas;
--- Result: 4857 (baseline) / 5176 (current)
+-- Result: 4857 (baseline) / 6506 (current)
 ```
 
 **Table Inventory (all tables):**
@@ -67,13 +67,13 @@ SELECT name FROM sqlite_master WHERE type='table' ORDER BY name;
 SELECT COUNT(*) FROM "<table_name>";
 ```
 
-| Table Name | Baseline Count (2026-08-15) | Current Count (2026-08-16) | Notes |
+| Table Name | Baseline Count (2026-08-15) | Current Count (August 2026) | Notes |
 |---|---|---|---|
 | `alembic_version` | 1 | 1 | Schema tracked via Alembic |
-| `alpha_field_snapshot` | 0 | 5,187 | Point-in-time crowding & coverage stamps |
-| `alpha_metrics` | 531 | 531 | Performance metrics from backtests |
-| `alpha_status_history` | 5,468 | 5,468 | Audit trail of status transitions |
-| `alphas` | 4,857 | 5,176 | Core alpha repository |
+| `alpha_field_snapshot` | 0 | 6,270 | Point-in-time crowding & coverage stamps |
+| `alpha_metrics` | 531 | 874 | Performance metrics from backtests |
+| `alpha_status_history` | 5,468 | 6,996 | Audit trail of status transitions |
+| `alphas` | 4,857 | 6,506 | Core alpha repository |
 | `brain_fetch_log` | 0 | 0 | Catalog fetch audit log |
 | `campaign_tasks` | 0 | Tasks active | Multi-armed campaign execution tasks |
 | `campaigns` | 0 | Campaigns active | Nightly and manual campaign runs |
@@ -86,8 +86,8 @@ SELECT COUNT(*) FROM "<table_name>";
 | `operator_compatibility` | 479 | 479 | Operator type compatibility edges |
 | `operator_examples` | 133 | 133 | Example expressions |
 | `operators` | 105 | 105 | Knowledge base operators |
-| `simulation_imports` | 531 | 531 | Raw backtest JSON payloads |
-| `submission_attempts` | 0 | 2 | Confirmed submission attempt records |
+| `simulation_imports` | 531 | 874 | Raw backtest JSON payloads |
+| `submission_attempts` | 0 | 27 | Confirmed submission attempt records |
 | `tags` | 0 | 0 | Metadata tags |
 
 ---

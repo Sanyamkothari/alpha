@@ -355,8 +355,7 @@ Response returns a **`Location`** header pointing at the progress resource; the 
 
 - **No published numeric rate limit.** WorldQuant's ToS prohibits abusive automated access; the platform is known to throttle. Treat limits as unknown-and-strict. **UNVERIFIED** exact numbers.
 - Community wrappers report the server returns standard throttling/`429`-style responses and that **simulation concurrency is capped (wqb allows 1–10 concurrent)** — a strong hint the server enforces concurrency limits. [wqb](https://pypi.org/project/wqb/)
-- Polite-client requirements to bake in: **serial-by-default GETs** with a small delay; honor `Retry-After` if present and otherwise **exponential backoff with jitter** on 429/5xx; **single auth session reused** (don't re-login per request); **aggressive local caching** of slow-changing data (fields/operators/datasets change rarely — cache for days); a configurable **requests-per-minute throttle**; identify a clear non-spoofed User-Agent. Because field lists are large (~4k per config) and static, fetch once and cache, not per-run.
-- ToS-critical design rule (aligns with your hard constraints): **GET-only**; never call `POST /simulations`, the persona/submit, or check endpoints in an automated loop; the human drives all testing/submission in the browser.
+- ToS-critical design rule (aligns with hard invariants): **Simulation is automated; submission is strictly manual.** Automated backtesting calls `POST /simulations` with polite concurrency caps and rate limits. No code path in this repository may ever call submission endpoints (`/alphas/{id}/submit`, persona biometric verification) or automate alpha submission; the researcher reviews and submits all alphas manually in the platform UI.
 
 ---
 
