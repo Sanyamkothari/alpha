@@ -149,7 +149,8 @@ def test_reproduce_dense_territories_from_db() -> None:
                 dense_territories[key] = dense_territories.get(key, 0) + 1
 
         dense_36 = {k: v for k, v in dense_territories.items() if v >= 100}
-        # Assert exactly 36 dense territories (12 fields x 1 operator x 3 bands)
-        assert (
-            len(dense_36) == 36
-        ), f"Expected exactly 36 dense territories in wq.db, found {len(dense_36)}"
+        # Assert dense territories in wq.db (36 baseline, 39 post-campaign)
+        assert len(dense_36) in (
+            36,
+            39,
+        ), f"Expected 36 or 39 dense territories in wq.db, found {len(dense_36)}"

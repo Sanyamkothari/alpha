@@ -146,3 +146,33 @@ The Next-Up allocator was rebuilt to operate at whole-surface territory granular
    - Canonical keys (`horizon_band` set) exclude **specifically** that horizon band.
    - Fields remain reachable under untried operator families.
 3. **Absences Reported as Absences**: Unmeasured metrics (such as `self_corr_headroom`) return `None` rather than fabricating synthetic proxy numbers.
+
+
+## D8 — Two Frozen Filter Defects, Deferred to Phase 2 (2026-08-22)
+
+**Status:** accepted (statistical filters frozen in Phase 1 per CLAUDE.md invariant 3).
+
+### Context & Defects Identified
+
+Two defects were discovered in the Phase 1 statistical gating implementations during code review:
+
+1. **DSR Multiple-Testing Trial Denominator Defect** (`app/services/subperiod.py` / `app/services/plateau.py`):
+   - **Mechanism**: The Deflated Sharpe Ratio (DSR) multiple-testing correction computes trial count $N$ from the local family/slice size ($N = M_{\text{family}} \approx 49\text{--}98$) rather than the cumulative evaluated trials across the entire research campaign ($N = M_{\text{total}} \ge 700$).
+   - **Impact**: The expected maximum Sharpe under the null hypothesis $E[\max(S)]$ is computed against a small local trial set, making the DSR threshold artificially permissive ($\sim 0.95$ vs required $\sim 1.4\text{--}1.8$). It discounts intra-family multiple testing but ignores global search selection bias.
+
+2. **Plateau Neighbour Window / Non-Uniform Step Defect** (`app/services/plateau.py`):
+   - **Mechanism**: The 2D plateau neighbour evaluation calculates topology across window ladder indexes `[5, 10, 20, 22, 60, 63, 126, 252]` and decay ladder `[1, 2, 4, 8, 15, 25, 40]` treating coordinate index adjacency equally, despite non-uniform physical step sizes (e.g. $\Delta W = 2$ between 20 and 22 vs $\Delta W = 126$ between 126 and 252).
+   - **Impact**: Step-size distortion in ladder space allows closely spaced redundant points (e.g., $W=20$ and $W=22$) to artificially inflate neighbour support for narrow parameter spikes.
+
+### Why Deferred (Not Fixed in Phase 1)
+
+Per **CLAUDE.md Hard Invariant 3**: *"The statistical filters are frozen during Phase 1 (plateau, DSR, subperiod, correlation). They are themselves unvalidated and the current phase exists partly to test them. Do not tune, improve, or 'fix' them."*
+
+Fixing or tuning filter thresholds during Phase 1 would:
+1. Invalidate historical comparability across all 829+ simulated alphas and 27 submissions.
+2. Violate the pre-registered protocol in `docs/strategy/VALIDATION_PROTOCOL.md`.
+3. Shift the goalposts mid-campaign while gathering the 40 ground-truth platform submission attempts.
+
+### Remediation Staged for Phase 2
+- Phase 2 will implement global $N_{\text{eff}}$ multiple-testing trial aggregation using the daily PnL correlation matrix across all campaign trials.
+- Phase 2 will re-normalize plateau coordinate distance in log-parameter space $(\log W, \log D)$.

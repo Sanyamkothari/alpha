@@ -162,3 +162,15 @@ def test_full_alpha_mining_e2e_pipeline(client: TestClient, db_session, tmp_path
     assert "# Alpha research — daily report" in report_md
     assert "## Funnel Telemetry" in report_md
     assert "## Currently submitted on BRAIN" in report_md
+
+    # Clean up rows committed to session-scoped test.db
+    from sqlalchemy import delete
+
+    from app.models.alphas import SubmissionAttempt
+    from app.models.results import AlphaMetric, SimulationImport
+
+    db_session.execute(delete(SubmissionAttempt))
+    db_session.execute(delete(AlphaMetric))
+    db_session.execute(delete(SimulationImport))
+    db_session.execute(delete(Alpha))
+    db_session.commit()

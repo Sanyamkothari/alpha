@@ -20,6 +20,50 @@ from app.services.pnl_storage import get_pnl_store
 log = structlog.get_logger("backfill_pnl")
 
 
+def backfill_pnl_from_brain(db, store, brain_client=None) -> int:
+    """Backfill PnL vectors from a brain client into store, matching local DB alphas."""
+    db_alphas = db.query(Alpha).all()
+    expr_to_alpha = {}
+    for a in db_alphas:
+        expr_to_alpha[(a.expression.strip(), a.neutralization, a.decay)] = a
+        expr_to_alpha[a.expression.strip()] = a
+
+    matched_count = 0
+    client = brain_client or BrainClient()
+    if hasattr(client, "get_my_alphas"):
+        remote_alphas = client.get_my_alphas()
+    else:
+        remote_alphas = list(client.iter_paginated("/users/self/alphas", page_size=50))
+
+    for ra in remote_alphas:
+        code = ra.get("regular", {}).get("code", "").strip()
+        settings = ra.get("settings", {})
+        neutr = settings.get("neutralization")
+        decay = settings.get("decay", 0)
+
+        local_alpha = expr_to_alpha.get((code, neutr, decay)) or expr_to_alpha.get(code)
+        if not local_alpha:
+            continue
+
+        r_id = ra.get("id")
+        if not r_id:
+            continue
+
+        if hasattr(client, "get_alpha_daily_pnl"):
+            records = client.get_alpha_daily_pnl(r_id)
+        else:
+            pnl_resp = client.get_json(f"/alphas/{r_id}/recordsets/daily-pnl")
+            records = pnl_resp.get("records", [])
+
+        if records:
+            dates = [str(r[0]) for r in records]
+            pnl = np.array([float(r[1]) for r in records], dtype=float)
+            store.save_pnl(local_alpha.id, dates, pnl)
+            matched_count += 1
+
+    return matched_count
+
+
 def backfill_all(limit: int | None = None) -> dict[str, int]:
     store = get_pnl_store()
     stats = {

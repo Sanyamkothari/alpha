@@ -86,7 +86,5 @@ def test_torn_pair_on_disk_is_skipped_not_crashed(tmp_path: Path, db_session) ->
     store.save_pnl(port_alpha.id, port_dates, port_values)
 
     # Must complete without exception
-    v = check_portfolio_empirical_correlation(
-        db_session, cand.id, pnl_store=store
-    )
+    v = check_portfolio_empirical_correlation(db_session, cand.id, pnl_store=store)
     assert isinstance(v.blocking, bool)

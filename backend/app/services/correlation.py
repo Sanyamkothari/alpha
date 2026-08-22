@@ -8,6 +8,7 @@ with fallback to structural hashing when empirical PnL is unavailable.
 from __future__ import annotations
 
 from dataclasses import dataclass
+
 import numpy as np
 import structlog
 from sqlalchemy import select
@@ -50,7 +51,7 @@ def _date_map(pnl_tuple: tuple[list[str], np.ndarray] | None) -> dict[str, float
     dates, values = pnl_tuple
     if len(dates) != len(values):
         return None
-    return dict(zip(dates, values))
+    return dict(zip(dates, values, strict=True))
 
 
 def submitted_portfolio(db: Session, exclude_alpha_id: int | None = None) -> list[Alpha]:
@@ -208,8 +209,8 @@ def check_portfolio_empirical_correlation(
     return CorrelationVerdict(
         blocking=False,
         reason=None,
-        max_correlation=max_corr,
-        method="empirical" if measured_pairs > 0 else "none",
+        max_correlation=max_corr if measured_pairs > 0 else None,
+        method="empirical" if measured_pairs > 0 else ("unmeasured" if port_size > 0 else "none"),
         measured_pairs=measured_pairs,
         skipped_pairs=skipped_pairs,
         portfolio_size=port_size,
@@ -219,11 +220,11 @@ def check_portfolio_empirical_correlation(
 def ensure_alpha_pnl(
     db: Session,
     alpha_id: int,
+    pnl_store: PnLStore | None = None,
     *,
     allow_remote_fetch: bool = False,
-    pnl_store: PnLStore | None = None,
 ) -> bool:
-    """Ensure an alpha's daily PnL series is stored locally, fetching on-demand if allowed."""
+    """Check if daily PnL vector is stored locally, optionally fetching from BRAIN if missing."""
     store = pnl_store or get_pnl_store()
     if store.load_pnl(alpha_id) is not None:
         return True
@@ -231,9 +232,8 @@ def ensure_alpha_pnl(
     if not allow_remote_fetch:
         return False
 
-    from app.models.results import AlphaMetric, SimulationImport
-    from app.services.brain import BrainClient
-    from app.services.pnl_convention import detect, to_daily
+    # Try to find a known remote brain_id from simulation_imports
+    from app.models.results import SimulationImport
 
     sim_import = (
         db.execute(select(SimulationImport).where(SimulationImport.alpha_id == alpha_id))
@@ -251,48 +251,16 @@ def ensure_alpha_pnl(
         return False
 
     try:
+        from app.services.brain import BrainClient
+
         with BrainClient() as brain:
             pnl_resp = brain.get_json(f"/alphas/{remote_id}/recordsets/daily-pnl")
             records = pnl_resp.get("records", [])
-            if not records:
-                return False
-
-            dates = [str(r[0]) for r in records]
-            raw = np.array([float(r[1]) for r in records], dtype=float)
-
-            metric = (
-                db.execute(
-                    select(AlphaMetric)
-                    .where(AlphaMetric.alpha_id == alpha_id)
-                    .order_by(AlphaMetric.id.desc())
-                )
-                .scalars()
-                .first()
-            )
-            if metric is None or metric.sharpe is None:
-                log.warning("pnl_fetch_no_local_sharpe", alpha_id=alpha_id)
-                return False
-
-            verdict = detect(raw, float(metric.sharpe))
-            if not verdict.is_usable:
-                log.warning(
-                    "pnl_convention_indeterminate",
-                    alpha_id=alpha_id,
-                    remote_id=remote_id,
-                    reported=verdict.reported_sharpe,
-                    as_daily=verdict.sharpe_as_daily,
-                    as_cumulative=verdict.sharpe_as_cumulative,
-                )
-                return False
-
-            store.save_pnl(
-                alpha_id,
-                dates,
-                to_daily(raw, verdict.convention),
-                convention=verdict.convention,
-                reported_sharpe=float(metric.sharpe),
-            )
-            return True
+            if records:
+                dates = [str(r[0]) for r in records]
+                pnl = np.array([float(r[1]) for r in records], dtype=float)
+                store.save_pnl(alpha_id, dates, pnl)
+                return True
     except Exception as exc:
         log.warning(
             "on_demand_pnl_fetch_failed", alpha_id=alpha_id, remote_id=remote_id, error=str(exc)

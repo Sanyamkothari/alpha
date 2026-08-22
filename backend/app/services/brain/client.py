@@ -155,14 +155,42 @@ class BrainClient:
     def close(self) -> None:
         self._client.close()
 
-    def authenticate(self) -> dict[str, Any]:
-        """Establish the session cookie. Safe to call repeatedly."""
+    def authenticate(self, force: bool = False) -> dict[str, Any]:
+        """Establish the session cookie. Safe to call repeatedly with disk caching."""
+        import json
+        from pathlib import Path
+
+        cookie_file = Path("/tmp/.brain_cookies.json")
         with self._auth_lock:
+            if not force and cookie_file.exists():
+                try:
+                    data = json.loads(cookie_file.read_text(encoding="utf-8"))
+                    age = time.time() - data.get("saved_at", 0)
+                    if age < 10800:  # 3 hours
+                        for k, v in data.get("cookies", {}).items():
+                            self._client.cookies.set(k, v)
+                        resp = self._client.get("/users/self")
+                        if resp.status_code == 200:
+                            self._authed_at = time.monotonic()
+                            body = resp.json()
+                            log.info("brain_authenticated_from_cache", user=body.get("id"))
+                            return {"user": body}
+                except Exception as e:
+                    log.debug("brain_cookie_cache_failed", error=str(e))
+
             resp = self._client.post("/authentication", auth=(self.email, self.password))
             if resp.status_code not in (200, 201):
                 raise BrainAuthError(f"authentication failed: {resp.status_code} {resp.text[:200]}")
             self._authed_at = time.monotonic()
             body = resp.json()
+            try:
+                cookie_dict = dict(self._client.cookies)
+                cookie_file.write_text(
+                    json.dumps({"saved_at": time.time(), "cookies": cookie_dict}), encoding="utf-8"
+                )
+            except Exception:
+                pass
+
             log.info(
                 "brain_authenticated",
                 user=body.get("user", {}).get("id"),

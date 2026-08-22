@@ -95,6 +95,8 @@ def test_execute_campaign_with_fake_brain_client(db_session, monkeypatch):
     monkeypatch.setattr("app.services.campaign_runner.session_scope", mock_scope)
     monkeypatch.setattr("app.services.simulation_runner.session_scope", mock_scope)
     monkeypatch.setattr("app.services.simulation_runner.BrainClient", FakeBrainClient)
+    monkeypatch.setattr("app.services.brain.BrainClient", FakeBrainClient)
+    monkeypatch.setattr("app.services.brain.client.BrainClient", FakeBrainClient)
 
     res = execute_campaign(cid, simulate=True)
     assert res["status"] == "completed"

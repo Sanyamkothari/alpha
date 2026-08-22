@@ -273,3 +273,23 @@ def import_result(
     transition_status(db, alpha, new_status, note=note)
 
     return ImportResult(simulation_import=sim, metrics=metric, parsed=parsed, new_status=new_status)
+
+
+def extract_brain_alpha_id(raw: dict | str | None) -> str | None:
+    """Extract BRAIN alpha id from raw imported dictionary or JSON string."""
+    if not raw:
+        return None
+    if isinstance(raw, str):
+        try:
+            raw = json.loads(raw)
+        except Exception:
+            return None
+    if not isinstance(raw, dict):
+        return None
+    if "id" in raw and isinstance(raw["id"], str):
+        return raw["id"]
+    if "alpha" in raw and isinstance(raw["alpha"], dict) and "id" in raw["alpha"]:
+        return str(raw["alpha"]["id"])
+    if "alpha_id" in raw and isinstance(raw["alpha_id"], str):
+        return raw["alpha_id"]
+    return None

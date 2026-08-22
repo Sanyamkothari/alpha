@@ -65,6 +65,10 @@ def compute_effective_trials(correlation_matrix: np.ndarray) -> float:
     return float(m)
 
 
+# WARNING [Defect D8.1 — Frozen in Phase 1 per CLAUDE.md / docs/DECISIONS.md #D8]:
+# The trials count `n` defaults to `len(family_daily_sharpes)` (local family/slice size),
+# which discounts intra-family multiple testing but under-haircuts global search trials.
+# Deferred to Phase 2 for cross-campaign global N_eff aggregation.
 def compute_dsr(
     daily_pnl: np.ndarray,
     family_daily_sharpes: Sequence[float],

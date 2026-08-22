@@ -222,9 +222,10 @@ def load_surface(
     return points
 
 
-MIN_NEIGHBOURS_TO_JUDGE = 2
-
-
+# WARNING [Defect D8.2 — Frozen in Phase 1 per CLAUDE.md / docs/DECISIONS.md #D8]:
+# Neighbour adjacency is computed in index space across WINDOW_LADDER and DECAY_LADDER
+# without accounting for non-uniform delta steps (e.g. delta W = 2 vs delta W = 126).
+# Deferred to Phase 2 for log-parameter space normalization.
 def _neighbours(point: SurfacePoint, surface: list[SurfacePoint]) -> tuple[list[SurfacePoint], int]:
     """Simulated neighbours one step away, and how many COULD exist."""
     # Dynamically resolve coordinate ladders from the surface points

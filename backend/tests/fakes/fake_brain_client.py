@@ -96,4 +96,28 @@ class FakeBrainClient:
                     [f"2026-01-{i+1:02d}", 100.0 * (1 if i % 2 == 0 else -0.5)] for i in range(30)
                 ]
             }
+        if "check" in path:
+            return {
+                "checks": [
+                    {
+                        "name": "REGULAR_SUBMISSION",
+                        "result": "PASS",
+                        "value": 1.0,
+                        "limit": 4.0,
+                    }
+                ]
+            }
         return {}
+
+    def get_submission_check(self, alpha_id: str | None = None) -> dict[str, Any]:
+        """Mock platform submission check."""
+        return {
+            "checks": [
+                {
+                    "name": "REGULAR_SUBMISSION",
+                    "result": "PASS",
+                    "value": 1.0,
+                    "limit": 4.0,
+                }
+            ]
+        }
