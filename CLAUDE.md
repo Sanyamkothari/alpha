@@ -113,6 +113,6 @@ docs/
 - **Report absences as absences.** `NOT PRESENT` and `CANNOT DETERMINE` are acceptable answers. Inventing a plausible number is not.
 - Distinguish *code exists* from *code runs* from *code has been used*. Several modules had full implementations and zero rows of output.
 - **For any new constraint, exclusion, or scoring path: prove it fires on data written by the production writer, not by the test fixture.** Where a test constructs an identifier, it must construct it using the same function production uses.
-- Migrations via Alembic only. Test both upgrade and downgrade.
-- Keep the test suite green and under ~5 seconds (194 tests at last count).
+- Migrations via Alembic only. Test both upgrade and downgrade (note: revision `b7c1d2e3f4a5` is the irreversible floor that raises `NotImplementedError` on downgrade; all migrations above it must downgrade cleanly).
+- Keep the test suite green and under ~5 seconds (258+ tests at last count).
 - If a task is larger than described, or the design looks wrong, **stop and report** rather than improvising.

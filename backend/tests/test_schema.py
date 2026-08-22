@@ -134,6 +134,37 @@ def test_alembic_migrations_roundtrip(tmp_path) -> None:
     command.upgrade(cfg, "head")
 
 
+def test_alembic_downgrade_chain_to_irreversible_floor(tmp_path) -> None:
+    """Walk Alembic downgrade chain down to the irreversible floor b7c1d2e3f4a5.
+
+    b7c1d2e3f4a5 (add_submitted_status) is the irreversible floor that raises
+    NotImplementedError on downgrade because narrowing the CHECK constraint could
+    orphan existing rows. All migrations above it must downgrade cleanly.
+    """
+    from pathlib import Path
+
+    from alembic import command
+    from alembic.config import Config
+
+    alembic_ini = Path(__file__).resolve().parents[1] / "alembic.ini"
+    cfg = Config(str(alembic_ini))
+    db_file = tmp_path / "floor_test.db"
+    cfg.set_main_option("sqlalchemy.url", f"sqlite:///{db_file}")
+
+    # 1. Upgrade fully to head
+    command.upgrade(cfg, "head")
+
+    # 2. Downgrade step-by-step down to irreversible floor
+    command.downgrade(cfg, "b7c1d2e3f4a5")
+
+    # 3. Attempting to downgrade past b7c1d2e3f4a5 must raise NotImplementedError
+    with pytest.raises(NotImplementedError):
+        command.downgrade(cfg, "f0be3fc3cdad")
+
+    # 4. Re-upgrade back to head succeeds
+    command.upgrade(cfg, "head")
+
+
 def test_suite_never_touches_production_database(tmp_path) -> None:
     """Regression test: assert that tests never mutate or write to the production database."""
     from pathlib import Path
