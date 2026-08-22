@@ -3,9 +3,8 @@
 from __future__ import annotations
 
 import argparse
-from collections import defaultdict
-import math
 import sys
+from collections import defaultdict
 from typing import Any
 
 import numpy as np
@@ -13,7 +12,6 @@ from sqlalchemy import select
 
 from app.db.session import session_scope
 from app.models.alphas import Alpha
-from app.services.correlation import _date_map, compute_pairwise_correlation
 from app.services.pnl_storage import get_pnl_store
 from app.services.subperiod import compute_effective_trials
 

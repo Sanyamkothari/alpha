@@ -6,14 +6,11 @@ import argparse
 import sys
 from typing import Any
 
-import numpy as np
 from sqlalchemy import select
 
 from app.db.session import session_scope
 from app.models.alphas import Alpha
-from app.models.results import AlphaMetric
 from app.services.proxy_calibration import (
-    _spearman_rank_correlation,
     calibrate_proxy_rankings,
     is_degenerate_signal,
 )
@@ -44,8 +41,7 @@ def run_study(sample_size: int = 500) -> dict[str, Any]:
     print(f"Turnover Proxy vs Actual Turnover Spearman Rho: {report.turnover_proxy_correlation:.4f}")
     print(f"Complexity vs Fitness Spearman Rho:             {report.complexity_vs_fitness_correlation:.4f}")
     print(f"Proxy System Viable (Rho > 0.40):               {report.is_proxy_viable}")
-    print("
-================ AST DEGENERACY AUDIT ====================")
+    print("================ AST DEGENERACY AUDIT ====================")
     print(f"Total Alphas Audited:                           {total_alphas}")
     pct = (degenerate_count / max(1, total_alphas)) * 100
     print(f"Degenerate Alphas Detected:                     {degenerate_count} ({pct:.2f}%)")

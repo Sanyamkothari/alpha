@@ -163,7 +163,9 @@ def test_full_alpha_mining_e2e_pipeline(client: TestClient, db_session, tmp_path
     assert "## Funnel Telemetry" in report_md
     assert "## Currently submitted on BRAIN" in report_md
 
-    # Clean up rows committed to session-scoped test.db
+    # `client`'s /mark call at Stage 6 commits through its own request-scoped
+    # session, so top_alpha_id's submitted outcome is durable in the shared
+    # test DB, not rolled back by db_session's teardown. Clean up committed rows.
     from sqlalchemy import delete
 
     from app.models.alphas import SubmissionAttempt

@@ -1,4 +1,19 @@
-"""PnL Convention Detector and Daily Returns Normalizer (W1)."""
+"""Detect whether a raw PnL series from BRAIN is daily or a cumulative curve.
+
+``/alphas/{id}/recordsets/daily-pnl`` is named for a discrete daily series, but
+``scripts/verify_pnl_reconciliation.py`` exists because that has not been taken
+on faith: BRAIN dashboard PnL exports are commonly cumulative curves, and this
+project has not verified firsthand which shape the endpoint returns in every
+case. Storing a cumulative curve as if it were daily silently poisons every
+downstream consumer -- DSR, plateau, and the correlation gate all treat each
+array entry as one day's PnL.
+
+This module answers the question once, at ingest, by reconciling the raw
+series against the alpha's own reported Sharpe under both interpretations and
+keeping only the one that actually reconciles. An alpha whose series matches
+neither interpretation is reported ``indeterminate`` and must not be stored --
+a wrong guess here is worse than no data, because it fails silently.
+"""
 
 from __future__ import annotations
 
@@ -7,86 +22,75 @@ from dataclasses import dataclass
 
 import numpy as np
 
+# Matches subperiod.verify_pnl_reconciliation's post-hoc acceptance check, so a
+# series classified here as "daily" also passes that check downstream.
+ANNUALIZATION_DAYS = 252
+SHARPE_TOLERANCE = 0.05
+
 
 @dataclass(frozen=True)
 class ConventionVerdict:
+    """Outcome of reconciling a raw PnL series against its reported Sharpe."""
+
+    is_usable: bool
     convention: str  # "daily" | "cumulative" | "indeterminate"
     reported_sharpe: float
     sharpe_as_daily: float
-    sharpe_as_cumulative: float
-    rel_error_daily: float
-    rel_error_cumulative: float
-    is_usable: bool
+    sharpe_as_cumulative: float | None
 
 
-def _calc_annualized_sharpe(series: np.ndarray) -> float:
-    """Compute annualized Sharpe from a 1D daily returns array."""
-    if len(series) < 10:
+def _annualized_sharpe(series: np.ndarray) -> float:
+    if len(series) < 2:
         return 0.0
-    mean = float(np.mean(series))
     std = float(np.std(series, ddof=1))
-    if std < 1e-15:
+    if std <= 1e-12:
         return 0.0
-    return (mean / std) * math.sqrt(252)
+    return float(np.mean(series)) / std * math.sqrt(ANNUALIZATION_DAYS)
 
 
 def detect(
-    raw_series: np.ndarray, reported_sharpe: float, tolerance: float = 0.25
+    raw: np.ndarray, reported_sharpe: float, *, tolerance: float = SHARPE_TOLERANCE
 ) -> ConventionVerdict:
-    """Detect whether raw_series is daily or cumulative PnL by matching reported Sharpe."""
-    arr = np.asarray(raw_series, dtype=np.float64)
+    """Reconcile ``raw`` against ``reported_sharpe`` under both conventions.
 
-    if len(arr) < 20:
-        return ConventionVerdict(
-            convention="indeterminate",
-            reported_sharpe=reported_sharpe,
-            sharpe_as_daily=0.0,
-            sharpe_as_cumulative=0.0,
-            rel_error_daily=float("inf"),
-            rel_error_cumulative=float("inf"),
-            is_usable=False,
-        )
+    Tries the series as-is (daily) first, then differenced (cumulative). Picks
+    whichever reconciles within ``tolerance``; if both do, prefers daily, since
+    that is the endpoint's documented contract. If neither reconciles, the
+    series is indeterminate.
+    """
+    arr = np.asarray(raw, dtype=np.float64)
+    sr_daily = _annualized_sharpe(arr)
+    sr_cumulative = _annualized_sharpe(np.diff(arr)) if len(arr) >= 2 else None
 
-    # Treat as daily returns directly
-    sharpe_daily = _calc_annualized_sharpe(arr)
+    daily_ok = abs(sr_daily - reported_sharpe) <= tolerance
+    cumulative_ok = sr_cumulative is not None and abs(sr_cumulative - reported_sharpe) <= tolerance
 
-    # Treat as cumulative PnL → diff to get daily
-    daily_from_cum = np.diff(arr)
-    sharpe_cumulative = _calc_annualized_sharpe(daily_from_cum)
-
-    abs_reported = abs(reported_sharpe) if reported_sharpe != 0 else 1e-10
-    rel_error_daily = abs(sharpe_daily - reported_sharpe) / abs_reported
-    rel_error_cumulative = abs(sharpe_cumulative - reported_sharpe) / abs_reported
-
-    if rel_error_daily <= tolerance and rel_error_daily < rel_error_cumulative:
+    if daily_ok:
         convention = "daily"
-        is_usable = True
-    elif rel_error_cumulative <= tolerance and rel_error_cumulative < rel_error_daily:
+    elif cumulative_ok:
         convention = "cumulative"
-        is_usable = True
     else:
         convention = "indeterminate"
-        is_usable = False
 
     return ConventionVerdict(
+        is_usable=convention != "indeterminate",
         convention=convention,
         reported_sharpe=reported_sharpe,
-        sharpe_as_daily=sharpe_daily,
-        sharpe_as_cumulative=sharpe_cumulative,
-        rel_error_daily=rel_error_daily,
-        rel_error_cumulative=rel_error_cumulative,
-        is_usable=is_usable,
+        sharpe_as_daily=sr_daily,
+        sharpe_as_cumulative=sr_cumulative,
     )
 
 
-def to_daily(raw_series: np.ndarray, convention: str) -> np.ndarray:
-    """Convert raw PnL series to 1D daily returns array based on detected convention."""
-    arr = np.asarray(raw_series, dtype=np.float64)
+def to_daily(raw: np.ndarray, convention: str) -> np.ndarray:
+    """Convert ``raw`` to a discrete daily series of the same length as ``raw``.
+
+    A cumulative curve is differenced with an implicit zero baseline before the
+    first recorded day, so the output stays aligned with the caller's date
+    array -- ``PnLStore.save_pnl`` requires dates and values to match in length.
+    """
+    arr = np.asarray(raw, dtype=np.float64)
     if convention == "daily":
         return arr
-    elif convention == "cumulative":
-        return np.diff(arr)
-    elif convention == "indeterminate":
-        raise ValueError("Cannot normalize PnL series with indeterminate convention")
-    else:
-        raise ValueError(f"Unknown PnL convention: {convention}")
+    if convention == "cumulative":
+        return np.diff(arr, prepend=0.0)
+    raise ValueError(f"cannot convert an indeterminate series to daily (convention={convention!r})")

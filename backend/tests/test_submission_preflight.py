@@ -3,11 +3,10 @@
 from __future__ import annotations
 
 from typing import Any
-import pytest
 
 from app.models.enums import SubmissionCheckName
 from app.services.brain.client import BrainError
-from app.services.submission_preflight import PreflightVerdict, check_submission_preflight
+from app.services.submission_preflight import check_submission_preflight
 from tests.fakes.fake_brain_client import FakeBrainClient
 
 

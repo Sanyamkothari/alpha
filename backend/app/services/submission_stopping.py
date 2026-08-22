@@ -12,11 +12,10 @@ Enforces stopping boundaries across three levels:
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any
 
+import structlog
 from sqlalchemy import select
 from sqlalchemy.orm import Session
-import structlog
 
 from app.models.alphas import Alpha, SubmissionAttempt
 from app.models.enums import PlatformOutcome, SubmissionCheckName, SubmissionResult

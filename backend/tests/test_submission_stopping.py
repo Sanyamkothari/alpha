@@ -2,13 +2,11 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta
-import pytest
+from typing import Any
 
 from app.models.alphas import Alpha, SubmissionAttempt
 from app.models.enums import AlphaStatus, PlatformOutcome, SubmissionCheckName, SubmissionResult
 from app.services.submission_stopping import (
-    MAX_ATTEMPTS_PER_ALPHA,
     MAX_CONSECUTIVE_FAMILY_REJECTIONS,
     MAX_UNPRODUCTIVE_FAMILY_REJECTIONS,
     check_alpha_stopping_bound,
