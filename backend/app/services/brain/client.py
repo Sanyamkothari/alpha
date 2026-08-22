@@ -419,3 +419,8 @@ class BrainClient:
 
     def operators(self) -> list[dict]:
         return self.get_json("/operators")
+
+    def get_submission_check(self, alpha_id: str | None = None) -> dict[str, Any]:
+        """GET /check or /alphas/{alpha_id}/check (read-only verification of submission gate status)."""
+        path = f"/alphas/{alpha_id}/check" if alpha_id else "/check"
+        return self.get_json(path)
